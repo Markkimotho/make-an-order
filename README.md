@@ -23,11 +23,12 @@ make-an-order is a RESTful service project for managing customers and orders; wh
 ## Tech Stack Used and Why:
 
 * **Backend**: Python
-* **Database**: PostgreSQL/MySQL/SQLiteAPI: REST/GraphQL
+* **Database**: MySQL/SQLite
+* **API**: REST
 * **Authentication**: OpenID Connect
 * **SMS Gateway**: Africa's Talking
-* **Deployment**: PAAS/FAAS/IAAS (e.g., Heroku, AWS Lambda, Google Cloud Functions)
-* **CI/CD:** GitHub Actions (or other preferred CI/CD services)
+* **Deployment**: PAAS/FAAS/IAAS (e.g., Heroku, Google Cloud Functions)
+* **CI/CD:** GitHub Actions (or other preferred CI/CD service TBD)
 
 ## How to Install
 
