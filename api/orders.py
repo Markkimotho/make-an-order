@@ -1,13 +1,15 @@
 from flask import Blueprint, request, jsonify # type: ignore
-from models import db, Order
+from models import db, Order, Customer
+from services.sms_service import SendSMS
 from sqlalchemy.exc import IntegrityError
+
 
 orders_bp = Blueprint('orders', __name__)
 
 @orders_bp.route('/place_order', methods=['POST'])
 def place_order():
     """
-    Function for creating a new order for a customer on the route `/orders/place_order`
+    Endpoint for creating a new order for a customer on the route `/orders/place_order`
     """
     data = request.json
     customer_id = data.get("customer_id")
@@ -18,9 +20,24 @@ def place_order():
         return jsonify({"error": "Missing order details"}), 400
 
     try:
+        # Retrieve the customer to get their details including phone number for the SMS
+        customer = Customer.query.get(customer_id)
+        if not customer:
+            return jsonify({"error": "Customer not found"}), 404
+        
+        # Create the new order
         new_order = Order(customer_id=customer_id, item=item, amount=amount)
         db.session.add(new_order)
         db.session.commit()
+
+        # Prepare the order details for SMS
+        order_details = f"Item: {item}, Amount: {amount}"
+        customer_name = customer.name 
+        phone_number = customer.phone_number 
+
+        # Send SMS notification
+        SendSMS.send_order_confirmation(phone_number, customer_name, order_details)
+
         return jsonify({"message": "Order placed successfully!"}), 201
     except IntegrityError:
         db.session.rollback()
@@ -29,7 +46,7 @@ def place_order():
 @orders_bp.route('/view_orders/<int:customer_id>', methods=['GET'])
 def view_orders(customer_id):
     """
-    Function for viewing an order placed by a customer using the `customer_id` on the route `/orders/view_orders/<int:customer_id>`
+    Endpoint for viewing an order placed by a customer using the `customer_id` on the route `/orders/view_orders/<int:customer_id>`
     """
     orders = Order.query.filter_by(customer_id=customer_id).all()
     order_list = [{"id": order.id, "item": order.item, "amount": float(order.amount), "time": str(order.time)} for order in orders]
