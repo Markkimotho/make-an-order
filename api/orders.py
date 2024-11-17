@@ -1,16 +1,19 @@
-from flask import Blueprint, request, jsonify # type: ignore
+from flask import Blueprint, request, jsonify, session # type: ignore
 from models import db, Order, Customer
 from services.sms_service import SendSMS
 from sqlalchemy.exc import IntegrityError
+from auth.auth_middleware import login_required
 
 
 orders_bp = Blueprint('orders', __name__)
 
 @orders_bp.route('/place_order', methods=['POST'])
+@login_required
 def place_order():
     """
     Endpoint for creating a new order for a customer on the route `/orders/place_order`
     """
+    print(f"Session data:{session}")
     data = request.json
     customer_id = data.get("customer_id")
     item = data.get("item")
@@ -44,10 +47,17 @@ def place_order():
         return jsonify({"error": "Error placing order"}), 500
 
 @orders_bp.route('/view_orders/<int:customer_id>', methods=['GET'])
+@login_required
 def view_orders(customer_id):
     """
     Endpoint for viewing an order placed by a customer using the `customer_id` on the route `/orders/view_orders/<int:customer_id>`
     """
     orders = Order.query.filter_by(customer_id=customer_id).all()
-    order_list = [{"id": order.id, "item": order.item, "amount": float(order.amount), "time": str(order.time)} for order in orders]
+    order_list = [
+        {
+            "id": order.id, 
+            "item": order.item, 
+            "amount": float(order.amount), 
+            "time": str(order.time)
+        } for order in orders]
     return jsonify(order_list) if orders else jsonify({"message": "No orders found for this customer."}), 404

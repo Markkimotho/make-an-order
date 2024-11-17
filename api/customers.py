@@ -29,5 +29,12 @@ def view_customers():
     Function for viewing all the customers on the route `/customers/view_customers`
     """
     customers = Customer.query.all()
-    customer_list = [{"id": customer.id, "name": customer.name, "phone_number": customer.phone_number, "code": customer.code} for customer in customers]
+    customer_list = [
+        {
+            "id": customer.id, 
+            "name": customer.name, 
+            "phone_number": customer.phone_number, 
+            "code": customer.code
+        } for customer in customers
+    ]
     return jsonify(customer_list), 200
