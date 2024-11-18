@@ -11,8 +11,8 @@
   - [Tech Stack](#tech-stack)
   - [Getting Started](#getting-started)
     - [Prerequisites](#prerequisites)
-    - [Installation](#installation)
       - [Mandatory Step if you want to implement OAuth2.0 with Google](#mandatory-step-if-you-want-to-implement-oauth20-with-google)
+    - [Installation](#installation)
   - [Usage](#usage)
   - [API Documentation](#api-documentation)
     - [Authentication Endpoints](#authentication-endpoints)
@@ -77,6 +77,15 @@ Ensure you have the following installed:
 - Africa's Talking account credentials
 - Google API credentials
 
+#### Mandatory Step if you want to implement OAuth2.0 with Google
+
+- Set up Google [OAuth2.0](https://support.google.com/cloud/answer/6158849?hl=en)
+  - Follow the tutorial carefully. It's at this point that you will obtain the `google_client_id` and `google_client_secret`
+
+- REMEMBER: Ensure you have set your Authorized redirect URIs as: `http://127.0.0.1:5001/authorize`, otherwise the OAuth2.0 process will not be successful.
+
+The app will be accessible at `http://127.0.0.1:5001` on your local machine.
+
 ### Installation
 
 1. Clone the repository:
@@ -135,13 +144,6 @@ flask db upgrade
 ```bash
 python app.py
 ```
-
-#### Mandatory Step if you want to implement OAuth2.0 with Google
-
-1. Set up Google [OAuth2.0](https://support.google.com/cloud/answer/6158849?hl=en)
-2. Ensure you have set your Authorized redirect URIs as: `http://127.0.0.1:5001/authorize`
-
-The app will be accessible at `http://127.0.0.1:5001` on your local machine.
 
 7. Now you can test your endpoints using cURL or POSTMAN. You can use the [API Documentation](#api-documentation) as reference material.
 
@@ -492,6 +494,7 @@ heroku config:set AT_API_KEY=<your_africas_talking_api_key>
 ├── Procfile                      # Heroku deployment file
 ├── README.md                     # Project README containing documentation
 ├── requirements.txt              # List of Python dependencies for the project
+├── .gitignore                    # Contains all the files you dont want git to track
 ├── services
 │   ├── __init__.py               # Initializes services module
 │   ├── database_service.py       # Service handling database operations (connecting, creating databases)
