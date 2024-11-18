@@ -11,13 +11,23 @@
   - [Tech Stack](#tech-stack)
   - [Getting Started](#getting-started)
     - [Prerequisites](#prerequisites)
-      - [Mandatory Step if you want to implement OAuth2.0 with Google](#mandatory-step-if-you-want-to-implement-oauth20-with-google)
     - [Installation](#installation)
   - [Usage](#usage)
   - [API Documentation](#api-documentation)
     - [Authentication Endpoints](#authentication-endpoints)
     - [Customer Endpoints](#customer-endpoints)
+      - [1. Create a new Customer](#1-create-a-new-customer)
+      - [2. Retrieve All Customers](#2-retrieve-all-customers)
+      - [3. Retrieve a Specific Customer](#3-retrieve-a-specific-customer)
+      - [4. Update a Customer](#4-update-a-customer)
+      - [5. Delete a Customer](#5-delete-a-customer)
     - [Order Endpoints](#order-endpoints)
+      - [1. Place a New Order](#1-place-a-new-order)
+      - [2. Retrieve All Orders](#2-retrieve-all-orders)
+      - [3. Retrieve Orders by Customer ID](#3-retrieve-orders-by-customer-id)
+      - [4. Update an Order](#4-update-an-order)
+      - [5. Delete an Order](#5-delete-an-order)
+    - [Common Errors](#common-errors)
   - [Testing](#testing)
     - [Test Coverage](#test-coverage)
   - [Environment Variables](#environment-variables)
@@ -77,7 +87,7 @@ Ensure you have the following installed:
 - Africa's Talking account credentials
 - Google API credentials
 
-#### Mandatory Step if you want to implement OAuth2.0 with Google
+**Mandatory Step if you want to implement OAuth2.0 with Google**
 
 - Set up Google [OAuth2.0](https://support.google.com/cloud/answer/6158849?hl=en)
   - Follow the tutorial carefully. It's at this point that you will obtain the `google_client_id` and `google_client_secret`
@@ -167,22 +177,34 @@ python app.py
 | GET    | `/login`         | Redirects to Google login page. |
 | GET    | `/logout`        | Logs out the authenticated user.|
 
+**Base URL** 
+
+`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+
+
 ### Customer Endpoints
 
 | Method | Endpoint                | Description                      |
 |--------|-------------------------|----------------------------------|
-| POST   | `/customers/register`    Create a new customer.           |
+| POST   | `/customers/register`   | Create a new customer.               |
 | GET    | `/customers/view_customers`| Retrieve all customers.          |
 | GET    | `/customers/view_customers/<id>`   | Retrieve a specific customer.    |
 | PUT    | `/customers/update_customers/<id>` | Update customer details.         |
 | DELETE | `/customers/delete_customers/<id>` | Delete a customer.               |
 
-Example Request: Create a new Customer
+**Base URL**
 
+`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+
+#### 1. Create a new Customer
+
+**Request**
 ```bash
 POST /customers/register
 Content-Type: application/json
 ```
+
+**Body**
 
 ```http
 {
@@ -192,14 +214,143 @@ Content-Type: application/json
 }
 ```
 
-Example Response
+**Response**
+
+- **201 Created**
+
+   ```http
+   {
+      "customer_id": 3,
+      "message": "Customer registered successfully"
+   }
+   ```
+
+- **400 Bad Request** (If phone number or code already exists)
+
+   ```http
+   {
+      "error": "Phone number or code already exists"
+   }
+   ```
+
+#### 2. Retrieve All Customers
+
+**Request**
+
+```bash
+GET /customers/view_customers
+```
+
+**Response**
+
+- **200 OK**
+
+   ```http
+   [
+      {
+         "id": 1,
+         "name": "Mike",
+         "phone_number": "+254748995315",
+         "code": "CUST001"
+      },
+      {
+         "id": 2,
+         "name": "John",
+         "phone_number": "+254701234567",
+         "code": "CUST002"
+      }
+   ]
+   ```
+
+#### 3. Retrieve a Specific Customer
+
+**Request**
+
+```bash
+GET /customers/view_customers/<id>
+```
+
+**Response**
+
+- **200 OK**
+
+   ```http
+   {
+      "id": 1,
+      "name": "Mike",
+      "phone_number": "+254748995315",
+      "code": "CUST001"
+   }
+   ```
+
+- **404 Not Found** (If customer not found) 
+
+   ```http 
+   {
+    "error": "Customer not found"
+   }
+   ```
+
+#### 4. Update a Customer
+
+**Request**
+
+```bash
+PUT /customers/update_customers/<id>
+Content-Type: application/json
+```
+
+**Body**
 
 ```http
 {
-    "customer_id": 3,
-    "message": "Customer registered successfully"
+  "name": "Michael"
 }
 ```
+
+**Response**
+
+- **201 OK**
+
+   ```http
+   {
+      "message": "Customer updated successfully"
+   }
+   ```
+
+- **400 Not Found**
+
+   ```http
+   {
+      "error": "Customer not found"
+   }
+   ```
+
+#### 5. Delete a Customer
+
+**Request**
+
+```bash
+DELETE /customers/delete_customers/<id>
+```
+
+**Response**
+
+- **200 OK**
+
+   ```http
+   {
+      "message": "Customer deleted successfully"
+   }
+   ```
+
+- **404 Not Found**
+
+   ```http 
+   {
+      "error": "Customer not found"
+   }
+   ```
 
 ### Order Endpoints
 
@@ -211,28 +362,199 @@ Example Response
 | PUT    | `/orders/update_orders/<id>`    | Update order details.            |
 | DELETE | `/orders/delete_orders/<id>`    | Delete an order.                 |
 
-Example Request: Create Order
+**Base URL**
+
+`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+
+
+#### 1. Place a New Order
+
+**Request**
 
 ```bash
 POST /orders/place_order
 Content-Type: application/json
 ```
 
+**Body**
 ```http
 {
   "customer_id": 1,
-  "item": "BT Speaker",
-  "amount": 100.00
+  "item": "Laptop",
+  "amount": 1200.50
 }
 ```
 
-Example Response
+**Response**
+
+- **201 Created**
+
+   ```http
+   {
+      "message": "Order placed successfully!"
+   }
+   ```
+- **404 Not Found** (If customer not found)
+
+   ```http
+   {
+      "error": "Customer not found"
+   }
+   ```
+
+- **400 Bad Request** (If missing details)
+
+   ```http
+   {
+      "error": "Missing order details"
+   }
+   ```
+
+#### 2. Retrieve All Orders
+
+**Request**
+
+```bash
+GET /orders/view_orders
+```
+
+**Response**
+
+- **201 Created**
+
+   ```http
+   [
+      {
+         "id": 1,
+         "item": "Laptop",
+         "amount": 1200.50,
+         "time": "2024-11-19T15:04:05"
+      }
+   ]
+   ```
+
+#### 3. Retrieve Orders by Customer ID
+**Request**
+
+```bash
+GET /orders/view_orders/<customer_id>
+```
+
+**Response**
+
+- **201 OK**
+
+   ```http
+   [
+      {
+         "id": 1,
+         "item": "Laptop",
+         "amount": 1200.50,
+         "time": "2024-11-19T15:04:05"
+      }
+   ]
+
+   ```
+
+- **404 Not Found** (If no orders for customer not found)
+
+   ```http
+   {
+      "message": "No orders found for this customer."
+   }
+
+   ```
+
+#### 4. Update an Order
+
+**Request**
+
+```bash
+PUT /orders/update_orders/<id>
+Content-Type: application/json
+```
+
+**Body**
+```http
+{
+  "item": "Desktop PC"
+}
+```
+
+**Response**
+
+- **201 OK**
+
+   ```http
+   {
+      "message": "Order updated successfully"
+   }
+   ```
+- **404 Not Found**
+
+   ```http
+   {
+      "error": "Order not found"
+   }
+
+   ```
+
+- **400 Bad Request** (If missing details)
+
+   ```http
+   {
+      "error": "Missing order details"
+   }
+   ```
+
+#### 5. Delete an Order
+
+**Request**
+
+```bash
+DELETE /orders/delete_orders/<id>
+```
+
+**Response**
+
+- **201 OK**
+
+   ```http
+   {
+      "message": "Order deleted successfully"
+   }
+   ```
+- **404 Not Found**
+
+   ```http
+   {
+      "error": "Order not found"
+   }
+
+   ```
+
+### Common Errors
+
+- **500 Internal Server Error**
+
+If an unexpected error occurs, the API will return:
 
 ```http
 {
-    "message": "Order placed successfully!"
+    "error": "An unexpected error occurred."
 }
 ```
+
+- **401 Unauthorized**
+  
+If a route is protected and the user is not logged in:
+
+```http
+{
+    "error": "Unauthorized access"
+}
+```
+
 
 ## Testing
 
