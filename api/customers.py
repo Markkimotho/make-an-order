@@ -1,3 +1,4 @@
+# api/customer.py
 from flask import Blueprint, request, jsonify # type: ignore
 from models import db, Customer
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +19,7 @@ def register_customer():
         new_customer = Customer(name=name, phone_number=phone_number, code=code)
         db.session.add(new_customer)
         db.session.commit()
-        return jsonify({"message": "Customer registered successfully"}), 201
+        return jsonify({"message": "Customer registered successfully", "customer_id": new_customer.id}), 201
     except IntegrityError:
         db.session.rollback()
         return jsonify({"error": "Phone number or code already exists"}), 400
