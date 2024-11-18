@@ -69,9 +69,9 @@ jobs:
       # Step 6: Run tests
       - name: Run tests
         env:
-          MYSQL_HOST: 127.0.0.1
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
           MYSQL_PORT: 3306
-          MYSQL_USER: root
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
           MYSQL_DB: ${{ secrets.MYSQL_DB }}
         run: |
