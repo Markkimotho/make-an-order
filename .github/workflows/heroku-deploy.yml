@@ -3,7 +3,7 @@ name: Deploy to Heroku
 on:
   push:
     branches:
-      - testing  # Trigger on push to the testing branch (change to main after it works)
+      - main  # Trigger on push to the testing branch (change to main after it works)
 
 jobs:
   deploy:
@@ -46,4 +46,4 @@ jobs:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
         run: |
           git remote add heroku https://git.heroku.com/make-an-order.git
-          git push heroku testing:main  # Push testing branch to Heroku's main branch
+          git push heroku main  # Push testing branch to Heroku's main branch
