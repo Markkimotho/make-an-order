@@ -11,10 +11,13 @@ def create_database():
     connection = MySQLdb.connect(
         host=Config.MYSQL_HOST,
         user=Config.MYSQL_USER,
-        passwd=Config.MYSQL_PASSWORD  
+        passwd=Config.MYSQL_PASSWORD
     )
     cursor = connection.cursor()
     print("Connected to MySQL")
+
     cursor.execute(f"CREATE DATABASE IF NOT EXISTS {Config.MYSQL_DB}")
+
     print("Database created (or already exists)")
+    
     connection.close()
