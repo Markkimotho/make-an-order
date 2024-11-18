@@ -33,17 +33,16 @@ jobs:
         run: |
           pytest tests/
 
-      # Step 5: Install Heroku CLI (optional for caching)
+      # Step 5: Install Heroku CLI using curl
       - name: Install Heroku CLI
-        uses: heroku/heroku-action@v2
-        with:
-          heroku-api-key: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          curl https://cli-assets.heroku.com/install.sh | sh
+          heroku --version
 
       # Step 6: Deploy to Heroku
       - name: Deploy to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
         run: |
-          heroku --version
           git remote add heroku https://git.heroku.com/make-an-order.git
           git push heroku testing:main  # Push testing branch to Heroku's main branch
