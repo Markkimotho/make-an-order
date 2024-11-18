@@ -86,11 +86,12 @@ jobs:
           heroku --version
       
 
-      # Step 8: Login to Heroku using API key
+      # Step 8: Log into Heroku using API key (skip email)
       - name: Login to Heroku using API key
         run: |
           echo "Logging into Heroku..."
-          heroku auth:token --api-key ${{ secrets.HEROKU_API_KEY }}
+          echo "heroku_api_key=${{ secrets.HEROKU_API_KEY }}" > ~/.netrc
+          chmod 600 ~/.netrc
 
       # Step 9: Set up Heroku remote
       - name: Set up Heroku remote
