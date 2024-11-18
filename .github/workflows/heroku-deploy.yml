@@ -101,7 +101,7 @@ jobs:
       # Step 10: Deploy to Heroku
       - name: Deploy to Heroku
         run: |
-          git push heroku main
+          git push https://heroku:${{ secrets.HEROKU_API_KEY }}@git.heroku.com/make-an-order.git main
 
 
     
