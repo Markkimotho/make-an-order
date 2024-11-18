@@ -84,12 +84,19 @@ jobs:
         run: |
           curl https://cli-assets.heroku.com/install.sh | sh
           heroku --version
+          
+      - name: Unshallow the Git repository
+        run: git fetch --unshallow
+        
 
       # Step 8: Set up Heroku remote
       - name: Set up Heroku remote
         run: |
           heroku git:remote -a make-an-order
 
+      - name: Unshallow the Git repository
+        run: git fetch --unshallow
+        
       # Step 9: Deploy to Heroku
       - name: Deploy to Heroku
         env:
