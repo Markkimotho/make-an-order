@@ -1,12 +1,12 @@
 # services/sms_services.py
-from dotenv import dotenv_values
+from config import Config
+import os
 import africastalking
 
 # Load environment variables
-config = dotenv_values(".env")
-username = config['AT_USERNAME']
-api_key = config['AT_API_KEY']
-sender_id = config["AT_SENDER_ID"]
+username = os.environ.get('AT_USERNAME')
+api_key = os.environ.get('AT_API_KEY')
+sender_id = os.environ.get("AT_SENDER_ID")
 
 # Initialize Africa's Talking SDK
 africastalking.initialize(username, api_key)
