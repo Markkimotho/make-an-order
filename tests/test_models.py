@@ -6,8 +6,7 @@ from datetime import datetime
 # This will set up a test client with a temporary database
 @pytest.fixture
 def client():
-    # Assuming `app` is the Flask app object already created elsewhere
-    test_app = app  # Use the existing app instance
+    test_app = app  # Using the existing app instance
     
     # Set up the app context
     with test_app.app_context():
