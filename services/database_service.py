@@ -11,7 +11,8 @@ def create_database():
     connection = MySQLdb.connect(
         host=Config.MYSQL_HOST,
         user=Config.MYSQL_USER,
-        passwd=Config.MYSQL_PASSWORD
+        passwd=Config.MYSQL_PASSWORD,
+        db=Config.MYSQL_DB
     )
     cursor = connection.cursor()
     print("Connected to MySQL")
