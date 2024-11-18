@@ -21,6 +21,8 @@ jobs:
       # Step 1: Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
       # Step 2: Set up Python
       - name: Set up Python
@@ -84,10 +86,7 @@ jobs:
         run: |
           curl https://cli-assets.heroku.com/install.sh | sh
           heroku --version
-          
-      - name: Unshallow the Git repository
-        run: git fetch --unshallow
-        
+      
 
       # Step 8: Set up Heroku remote
       - name: Set up Heroku remote
@@ -96,7 +95,7 @@ jobs:
 
       - name: Unshallow the Git repository
         run: git fetch --unshallow
-        
+
       # Step 9: Deploy to Heroku
       - name: Deploy to Heroku
         env:
