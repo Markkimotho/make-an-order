@@ -1,3 +1,4 @@
+# models.py
 from flask_sqlalchemy import SQLAlchemy # type: ignore
 
 db = SQLAlchemy()
@@ -22,6 +23,20 @@ class Customer(db.Model):
     phone_number = db.Column(db.String(15), unique=True, nullable=False)
     code = db.Column(db.String(50), unique=True, nullable=False)
 
+    # Relationship to Order
+    orders = db.relationship('Order', backref='customer', lazy=True,  cascade='all, delete')
+
+    def __repr__(self):
+        return f"<Customer(id={self.id}, name={self.name}, phone_number={self.phone_number}, code={self.code})>"
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "phone_number": self.phone_number,
+            "code": self.code
+        }
+
 class Order(db.Model):
     """
     Order: Model to represent an order in the database
@@ -43,3 +58,15 @@ class Order(db.Model):
     item = db.Column(db.String(255), nullable=False)
     amount = db.Column(db.Numeric(10, 2), nullable=False)
     time = db.Column(db.DateTime, server_default=db.func.now())
+
+    def __repr__(self):
+        return f"<Order(id={self.id}, customer_id={self.customer_id}, item={self.item}, amount={self.amount}, time={self.time})>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "customer_id": self.customer_id,
+            "item": self.item,
+            "amount": self.amount,
+            "time": self.time
+        }   

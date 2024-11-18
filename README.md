@@ -7,25 +7,26 @@ make-an-order is a RESTful service project for managing customers and orders; wh
 ## Features
 
 1. **Customers and Orders Database**:
-   * **Customers**: `name`, `code`
+   * **Customers**: `name`, `phone_number`, `code`
    * **Orders**: `item`, `amount`, `time`
 2. **REST API**:
    * **Customers**: Create and manage customer details.
    * **Orders**: Place orders associated with customers.
 3. **Authentication and Authorization**:
-   * Uses OpenID Connect for secure access.
+   * Uses OAuth2.0 for secure access.
 4. **SMS Notifications**:
    * When an order is created, the customer receives an SMS notification via Africa's Talking.
-5. **Testing and CI/CD**:
+5. **Testing**:
    * Unit tests with coverage checks.
-   * CI/CD pipeline for deployment to a chosen platform (e.g., Heroku, AWS, or Google Cloud).
+6. **CI/CD**
+   * CI/CD pipeline for deployment to a chosen platform (Netflify).
 
 ## Tech Stack Used and Why:
 
 * **Backend**: Python
 * **Database**: MySQL/SQLite
 * **API**: REST
-* **Authentication**: OpenID Connect
+* **Authentication**: OAuth2.0 
 * **SMS Gateway**: Africa's Talking
 * **Deployment**: PAAS/FAAS/IAAS (e.g., Heroku, Google Cloud Functions)
 * **CI/CD:** GitHub Actions (or other preferred CI/CD service TBD)

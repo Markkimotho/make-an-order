@@ -1,3 +1,4 @@
+# app.py
 from flask import Flask, request, Response  # type: ignore
 from config import Config
 from models import db
