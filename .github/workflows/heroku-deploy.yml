@@ -1,28 +1,41 @@
-name: Deploy to Heroku
+name: CI/CD Pipeline for Testing and Deploying
 
 on:
   push:
     branches:
-      - main  # Trigger on push to the testing branch (change to main after it works)
+      - main  # Trigger on push to the main branch
 
 jobs:
-  test:
+  test-and-deploy:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:5.7  # Use MySQL 5.7
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DB }}
+        ports:
+          - 3306:3306
+
     steps:
+      # Step 1: Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Step 2: Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
+      # Step 3: Install dependencies
       - name: Install dependencies
         run: |
           python -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
 
+      # Step 4: Set up environment variables
       - name: Set up environment variables
         run: |
           echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
@@ -36,22 +49,40 @@ jobs:
           echo "AT_API_KEY=${{ secrets.AT_API_KEY }}" >> .env
           echo "AT_SENDER_ID=${{ secrets.AT_SENDER_ID }}" >> .env
 
+      # Step 5: Wait for MySQL to start
+      - name: Wait for MySQL to start
+        run: |
+          for i in {1..10}; do
+            if mysqladmin ping -h "${{ secrets.MYSQL_HOST }}" -u "${{ secrets.MYSQL_USER }}" --password="${{ secrets.MYSQL_PASSWORD }}" --silent; then
+              echo "MySQL is up and running."
+              break
+            fi
+            echo "Waiting for MySQL to be available..."
+            sleep 5
+          done
+
+      # Step 6: Run tests
       - name: Run tests
+        env:
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DB: ${{ secrets.MYSQL_DB }}
         run: |
           source venv/bin/activate
           export PYTHONPATH=$(pwd)
           pytest tests/
 
-      # Step 5: Install Heroku CLI using curl
+      # Step 7: Install Heroku CLI
       - name: Install Heroku CLI
         run: |
           curl https://cli-assets.heroku.com/install.sh | sh
           heroku --version
 
-      # Step 6: Deploy to Heroku
+      # Step 8: Deploy to Heroku
       - name: Deploy to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
         run: |
-          git remote add heroku https://git.heroku.com/make-an-order.git
-          git push heroku main  # Push testing branch to Heroku's main branch
+          git remote | grep heroku || git remote add heroku https://git.heroku.com/make-an-order.git
+          git push heroku main
