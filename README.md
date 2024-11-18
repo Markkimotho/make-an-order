@@ -12,6 +12,7 @@
   - [Getting Started](#getting-started)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
+      - [Mandatory Step if you want to implement OAuth2.0 with Google](#mandatory-step-if-you-want-to-implement-oauth20-with-google)
   - [Usage](#usage)
   - [API Documentation](#api-documentation)
     - [Authentication Endpoints](#authentication-endpoints)
@@ -134,6 +135,11 @@ flask db upgrade
 ```bash
 python app.py
 ```
+
+#### Mandatory Step if you want to implement OAuth2.0 with Google
+
+1. Set up Google [OAuth2.0](https://support.google.com/cloud/answer/6158849?hl=en)
+2. Ensure you have set your Authorized redirect URIs as: `http://127.0.0.1:5001/authorize`
 
 The app will be accessible at `http://127.0.0.1:5001` on your local machine.
 
@@ -374,7 +380,7 @@ jobs:
           git push https://heroku:${{ secrets.HEROKU_API_KEY }}@git.heroku.com/make-an-order.git main
 ```
 
-2. Set Up GitHub Secrets
+2. **Set Up GitHub Secrets**
 
 Go to your GitHub repository settings and add the following secrets under **Settings > Secrets and variables > Actions**:
 
@@ -401,7 +407,7 @@ Go to your GitHub repository settings and add the following secrets under **Sett
       AT_SENDER_ID
    ```
 
-1. Trigger Deployment
+3. **Trigger Deployment**
 
 Every time you push code to the main branch, this workflow will automatically deploy your application to Heroku.
 
@@ -409,7 +415,7 @@ Every time you push code to the main branch, this workflow will automatically de
 
 Assuming you are working on a git initialized directory:
 
-1. Create a heroku app:
+1. **Create a heroku app**:
 
 This will initialize your project on Heroku.
 
@@ -417,7 +423,7 @@ This will initialize your project on Heroku.
 heroku create <your-app-name>
 ```
 
-2. Add JawsDB for MySQL:
+2. **Add JawsDB for MySQL**:
 
 Provision the JawsDB MySQL Heroku add-on:
 
@@ -425,7 +431,7 @@ Provision the JawsDB MySQL Heroku add-on:
 heroku addons:create jawsdb:kitefin
 ```
 
-3. Add All Changes to Git
+3. **Add All Changes to Git**:
 
 Stage and commit your changes in Git:
 
@@ -435,7 +441,7 @@ git commit -m "Deploy to Heroku"
 git push origin main # This push will initiate the Github Actions workflow for CI/CD. 
 ```
 
-4. Add Heroku Remote
+4. **Add Heroku Remote**:
 
 Add Heroku as a remote repository if you haven't already:
 
@@ -443,7 +449,7 @@ Add Heroku as a remote repository if you haven't already:
 heroku git:remote -a <your-app-name>
 ```
 
-5. Push the code to Heroku:
+5. **Push the code to Heroku**:
 
 Deploy the app to Heroku:
 
@@ -451,7 +457,7 @@ Deploy the app to Heroku:
 git push heroku main
 ```
 
-4. Set environment variables on Heroku:
+6. **Set environment variables on Heroku**:
 
 Configure environment variables on Heroku:
 
@@ -472,22 +478,23 @@ heroku config:set AT_API_KEY=<your_africas_talking_api_key>
 ```graphql
 .
 ├── api
+│   ├── __init__.py               # Initializes API module
 │   ├── customers.py              # Customer-related API endpoints (e.g., create, retrieve, update, delete customers)
-│   ├── __init__.py               # Initializes the API module
 │   └── orders.py                 # Order-related API endpoints (e.g., create, retrieve, update, delete orders)
+├── .env                          # .env file for environment variables
 ├── app.py                        # Main application entry point
 ├── auth
-│   ├── auth_middleware.py        # Middleware for authentication-related checks
+│   ├── __init__.py               # Initializes auth module
 │   ├── auth_routes.py            # Routes for authentication (login, logout)
-│   └── __init__.py               # Initializes the auth module
+│   └── auth_middleware. py       # Middleware for authentication-related checks
 ├── config.py                     # Configuration file for environment variables (database, Google OAuth, Africa's Talking)
 ├── models.py                     # Defines database models (Customer, Order)
 ├── Procfile                      # Heroku deployment file
 ├── README.md                     # Project README containing documentation
 ├── requirements.txt              # List of Python dependencies for the project
 ├── services
+│   ├── __init__.py               # Initializes services module
 │   ├── database_service.py       # Service handling database operations (connecting, creating databases)
-│   ├── __init__.py               # Initializes the services module
 │   └── sms_service.py            # Service to handle SMS operations using Africa's Talking API
 └── tests
     ├── __init__.py               # Initializes the tests module
