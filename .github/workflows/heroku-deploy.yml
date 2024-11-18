@@ -28,9 +28,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 4: Run tests (optional)
+      # Step 4: Run tests (ensure virtual environment is active)
       - name: Run tests
         run: |
+          source venv/bin/activate
           pytest tests/
 
       # Step 5: Install Heroku CLI using curl
