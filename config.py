@@ -1,13 +1,11 @@
-from dotenv import dotenv_values
+import os
 
-# Loading environment variables to a dict
-config = dotenv_values(".env")
 
 class Config:
-    SECRET_KEY = config["APP_SECRET_KEY"]
+    SECRET_KEY = os.environ.get("APP_SECRET_KEY")
     SESSION_TYPE = "filesystem"
-    SQLALCHEMY_DATABASE_URI = f"mysql://{config['MYSQL_USER']}:{config['MYSQL_PASSWORD']}@{config['MYSQL_HOST']}/{config['MYSQL_DB']}"
+    SQLALCHEMY_DATABASE_URI = f"mysql://{os.environ.get('MYSQL_USER')}:{os.environ.get('MYSQL_PASSWORD')}@{os.environ.get('MYSQL_HOST')}/{os.environ.get('MYSQL_DB')}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    GOOGLE_CLIENT_ID = config["GOOGLE_CLIENT_ID"]
-    GOOGLE_CLIENT_SECRET = config["GOOGLE_CLIENT_SECRET"]
+    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
