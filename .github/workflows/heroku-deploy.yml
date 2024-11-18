@@ -45,9 +45,9 @@ jobs:
           echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
           echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
           echo "APP_SECRET_KEY=${{ secrets.APP_SECRET_KEY }}" >> .env
-          echo "MYSQL_HOST=127.0.0.1" >> .env
+          echo "MYSQL_HOST=${{ secrets.MYSQL_HOST }}" >> .env
           echo "MYSQL_PORT=3306" >> .env
-          echo "MYSQL_USER=root" >> .env
+          echo "MYSQL_USER=${{ secrets.MYSQL_USER }}" >> .env
           echo "MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}" >> .env
           echo "MYSQL_DB=${{ secrets.MYSQL_DB }}" >> .env
           echo "AT_USERNAME=${{ secrets.AT_USERNAME }}" >> .env

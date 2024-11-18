@@ -1,6 +1,7 @@
 # services/database_services.py
 import MySQLdb
 from config import Config
+import os
 
 
 
@@ -8,6 +9,11 @@ def create_database():
     """
     Connects to the MySQL server and creates the database if it doesn't exist.
     """
+    
+    if os.environ.get("JAWSDB_URL"):
+        print("Skipping database creation on JawsDB")
+        return
+    
     connection = MySQLdb.connect(
         host=Config.MYSQL_HOST,
         user=Config.MYSQL_USER,
