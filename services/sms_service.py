@@ -4,9 +4,9 @@ import os
 import africastalking
 
 # Load environment variables
-username = os.environ.get('AT_USERNAME')
-api_key = os.environ.get('AT_API_KEY')
-sender_id = os.environ.get("AT_SENDER_ID")
+username = Config.AT_USERNAME
+api_key = Config.AT_API_KEY
+sender_id = Config.AT_SENDER_ID
 
 # Initialize Africa's Talking SDK
 africastalking.initialize(username, api_key)
