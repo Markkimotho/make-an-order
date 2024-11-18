@@ -12,9 +12,7 @@ def create_database():
     connection = MySQLdb.connect(
         host=config['MYSQL_HOST'],
         user=config['MYSQL_USER'],
-        passwd=config['MYSQL_PASSWORD'],
-        database=config["MYSQL_DB"],
-        port=config["MYSQL_PORT"]      
+        passwd=config['MYSQL_PASSWORD']    
     )
     cursor = connection.cursor()
     print("Connected to MySQL")
