@@ -15,6 +15,6 @@ def create_database():
     )
     cursor = connection.cursor()
     print("Connected to MySQL")
-    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {config['MYSQL_DB']}")
+    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {Config.MYSQL_DB}")
     print("Database created (or already exists)")
     connection.close()
