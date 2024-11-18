@@ -89,6 +89,8 @@ jobs:
       - name: Deploy to Heroku
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+      
         run: |
-          git remote | grep heroku || git remote add heroku https://git.heroku.com/make-an-order.git
+          heroku git:remote -a make-an-order
           git push heroku main
+    
