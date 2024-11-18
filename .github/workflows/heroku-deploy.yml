@@ -93,9 +93,6 @@ jobs:
         run: |
           heroku git:remote -a make-an-order
 
-      - name: Unshallow the Git repository
-        run: git fetch --unshallow
-
       # Step 9: Deploy to Heroku
       - name: Deploy to Heroku
         env:
