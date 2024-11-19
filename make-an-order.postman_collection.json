@@ -1,0 +1,296 @@
+{
+	"info": {
+		"_postman_id": "08185a7d-a1eb-441f-9024-2202a428dd8a",
+		"name": "make-an-order",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "27542094"
+	},
+	"item": [
+		{
+			"name": "Register New Customer",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"name\": \"Maria\",\n  \"phone_number\": \"+254746905321\",\n  \"code\": \"CUST003\"\n}\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/customers/register",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"customers",
+						"register"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "View All Customers",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/customers/view_customers",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"customers",
+						"view_customers"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "View All Customer By ID",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/customers/view_customers/1",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"customers",
+						"view_customers",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Update Customer By ID",
+			"request": {
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"name\": \"Tinega\"\n}\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/update_customers/2",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"update_customers",
+						"2"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Delete Customer Using ID",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/delete_customers/2",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"delete_customers",
+						"2"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Placing Order",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "ya29.a0AeDClZB4cu8FIszbf6IumsDxjDEHYCnRzGzsxtP_5oU6O3wuT5llGjihul3yYphuOAy-myoBemduI5dnn0Zby6MrxHesxQY8PGq13zQqbIYpfc2QHBDWtYgHHprOw0mtN9iqr-9gzShCVUqSskLhG5o0J7JvCFv2sw1I9exdaCgYKASoSARISFQHGX2Mi11J7yg_kJ3erwHsvN0Pnig0175",
+							"type": "string"
+						}
+					]
+				},
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"customer_id\": 1,\n  \"item\": \"Mouse\",\n  \"amount\": 100.00\n}\n",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/orders/place_order",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"orders",
+						"place_order"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "View All Orders",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "ya29.a0AeDClZCQgsogHjbFLLz4oOEreFkesV0Ewg5FnYxOunEbop5A2pZEB-sykYdPAVEzmoJZkvd8QnCAj-jZSoCXW-Ho91degXVOta-qiHhSGYxzqPiZIc-LG8ccqM1qkPyKamPwMtDW4rLb6cYSRWpufg4b9Zd4I67BcVLATzjqaCgYKAegSARISFQHGX2MiMAa6Y2XNYmAvkMgZS3CpzA0175",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/orders/view_orders",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"orders",
+						"view_orders"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "View Customer Orders By ID",
+			"request": {
+				"auth": {
+					"type": "bearer",
+					"bearer": [
+						{
+							"key": "token",
+							"value": "ya29.a0AeDClZCQgsogHjbFLLz4oOEreFkesV0Ewg5FnYxOunEbop5A2pZEB-sykYdPAVEzmoJZkvd8QnCAj-jZSoCXW-Ho91degXVOta-qiHhSGYxzqPiZIc-LG8ccqM1qkPyKamPwMtDW4rLb6cYSRWpufg4b9Zd4I67BcVLATzjqaCgYKAegSARISFQHGX2MiMAa6Y2XNYmAvkMgZS3CpzA0175",
+							"type": "string"
+						}
+					]
+				},
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/orders/view_orders/1",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"orders",
+						"view_orders",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Update Customer Order By ID",
+			"request": {
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"item\": \"Desktop PC\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/orders/update_orders/1",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"orders",
+						"update_orders",
+						"1"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Delete Order Using ID",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"url": {
+					"raw": "https://make-an-order-ce858f58b429.herokuapp.com/orders/delete_orders/1",
+					"protocol": "https",
+					"host": [
+						"make-an-order-ce858f58b429",
+						"herokuapp",
+						"com"
+					],
+					"path": [
+						"orders",
+						"delete_orders",
+						"1"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
