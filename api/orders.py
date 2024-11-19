@@ -35,7 +35,7 @@ def place_order():
         SendSMS.send_order_confirmation(phone_number, customer_name, order_details)
 
         # Include the order ID in the response
-        return jsonify({"message": "Order placed successfully!", "id": new_order.id}), 201
+        return jsonify({"message": "Order placed successfully!", "id": new_order.id, "SMS": SendSMS.send_order_confirmation(phone_number, customer_name, order_details)}), 201
     except IntegrityError:
         db.session.rollback()
         return jsonify({"error": "Error placing order"}), 500
