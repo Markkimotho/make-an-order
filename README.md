@@ -191,7 +191,9 @@ CLICK BELOW👇
 
 **Base URL** 
 
-`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+Local Testing: `http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5001`)
+
+Live URL: `https://make-an-order-ce858f58b429.herokuapp.com/`
 
 
 ### Customer Endpoints
@@ -206,7 +208,9 @@ CLICK BELOW👇
 
 **Base URL**
 
-`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+Local Testing: `http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5001`)
+
+Live URL: `https://make-an-order-ce858f58b429.herokuapp.com/`
 
 #### 1. Create a new Customer
 
@@ -376,8 +380,9 @@ DELETE /customers/delete_customers/<id>
 
 **Base URL**
 
-`http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5000`)
+Local Testing: `http://localhost:<PORT>` (Replace `<PORT>` with your Flask application port, typically `5001`)
 
+Live URL: `https://make-an-order-ce858f58b429.herokuapp.com/`
 
 #### 1. Place a New Order
 
