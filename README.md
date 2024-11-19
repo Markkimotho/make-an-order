@@ -2,6 +2,8 @@
 
 **Deployed URL**: [Make-An-Order App](https://make-an-order-ce858f58b429.herokuapp.com/)
 
+[<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://god.gw.postman.com/run-collection/27542094-39386466-959a-4ee0-8c5d-aeb33e616e38?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D27542094-39386466-959a-4ee0-8c5d-aeb33e616e38%26entityType%3Dcollection%26workspaceId%3D0a892a52-7b10-43c4-9f95-315cee72a41a)
+
 ## Table of Contents
 
 - [make-an-order](#make-an-order)
@@ -169,6 +171,8 @@ python app.py
 4. Notifications are sent automatically to customers when their orders are placed.
 
 ## API Documentation
+
+[<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://god.gw.postman.com/run-collection/27542094-39386466-959a-4ee0-8c5d-aeb33e616e38?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D27542094-39386466-959a-4ee0-8c5d-aeb33e616e38%26entityType%3Dcollection%26workspaceId%3D0a892a52-7b10-43c4-9f95-315cee72a41a)
 
 ### Authentication Endpoints
 
@@ -817,6 +821,9 @@ heroku config:set AT_API_KEY=<your_africas_talking_api_key>
 ├── README.md                     # Project README containing documentation
 ├── requirements.txt              # List of Python dependencies for the project
 ├── .gitignore                    # Contains all the files you dont want git to track
+├── .github                       
+│   └── workflows
+|      └── heroku-deploy.yml      # Contains github actions CI/CD logic                 
 ├── services
 │   ├── __init__.py               # Initializes services module
 │   ├── database_service.py       # Service handling database operations (connecting, creating databases)
