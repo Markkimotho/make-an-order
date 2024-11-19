@@ -1,7 +1,6 @@
-import pytest
+import pytest # type: ignore
 from app import app, db
 from models import Customer, Order
-from datetime import datetime
 
 # This will set up a test client with a temporary database
 @pytest.fixture

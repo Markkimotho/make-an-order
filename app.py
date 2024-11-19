@@ -5,7 +5,7 @@ from models import db
 from api.customers import customers_bp
 from api.orders import orders_bp
 from services.database_service import create_database
-from authlib.integrations.flask_client import OAuth
+from authlib.integrations.flask_client import OAuth # type: ignore
 from datetime import timedelta
 from dotenv import load_dotenv
 from auth.auth_routes import create_auth_blueprint

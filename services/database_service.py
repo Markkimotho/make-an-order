@@ -1,5 +1,5 @@
 # services/database_services.py
-import MySQLdb
+import MySQLdb # type: ignore
 from config import Config
 import os
 

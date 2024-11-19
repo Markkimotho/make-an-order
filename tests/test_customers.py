@@ -1,6 +1,5 @@
-import pytest
+import pytest # type: ignore
 from app import app, db
-from models import Customer
 
 @pytest.fixture
 def client():

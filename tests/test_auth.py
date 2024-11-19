@@ -1,6 +1,5 @@
-import pytest
+import pytest # type: ignore
 from app import app
-from flask import session
 
 @pytest.fixture
 def client():

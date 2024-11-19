@@ -1,7 +1,6 @@
 # services/sms_services.py
 from config import Config
-import os
-import africastalking
+import africastalking # type: ignore
 
 # Load environment variables
 username = Config.AT_USERNAME
