@@ -24,7 +24,7 @@ def place_order():
         customer = db.session.get(Customer, customer_id)
         if not customer:
             return jsonify({"error": "Customer not found"}), 404
-        
+
         new_order = Order(customer_id=customer_id, item=item, amount=amount)
         db.session.add(new_order)
         db.session.commit()
@@ -34,7 +34,8 @@ def place_order():
         phone_number = customer.phone_number
         SendSMS.send_order_confirmation(phone_number, customer_name, order_details)
 
-        return jsonify({"message": "Order placed successfully!"}), 201
+        # Include the order ID in the response
+        return jsonify({"message": "Order placed successfully!", "id": new_order.id}), 201
     except IntegrityError:
         db.session.rollback()
         return jsonify({"error": "Error placing order"}), 500

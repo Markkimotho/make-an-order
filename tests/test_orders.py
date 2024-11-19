@@ -42,3 +42,31 @@ def test_view_orders_invalid_customer(client):
     response = client.get("/orders/view_orders/999")
     assert response.status_code == 404
     assert response.get_json()["message"] == "No orders found for this customer."
+
+def test_update_order(client):
+    customer_id = setup_customer(client)
+    response = client.post("/orders/place_order", json={"customer_id": customer_id, "item": "Laptop", "amount": 1500.0})
+    order_id = response.get_json()["id"]
+    update_data = {"item": "Desktop PC"}
+    response = client.put(f"/orders/update_orders/{order_id}", json=update_data)
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "Order updated successfully"
+
+def test_update_nonexistent_order(client):
+    update_data = {"item": "Desktop PC"}
+    response = client.put("/orders/update_orders/999", json=update_data)
+    assert response.status_code == 404
+    assert response.get_json()["error"] == "Order not found"
+
+def test_delete_order(client):
+    customer_id = setup_customer(client)
+    response = client.post("/orders/place_order", json={"customer_id": customer_id, "item": "Laptop", "amount": 1500.0})
+    order_id = response.get_json()["id"]
+    response = client.delete(f"/orders/delete_orders/{order_id}")
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "Order deleted successfully"
+
+def test_delete_nonexistent_order(client):
+    response = client.delete("/orders/delete_orders/999")
+    assert response.status_code == 404
+    assert response.get_json()["error"] == "Order not found"
