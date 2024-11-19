@@ -2,15 +2,18 @@
 
 **Deployed URL**: [Make-An-Order App](https://make-an-order-ce858f58b429.herokuapp.com/)
 
+**Functional Requirement Specification**: [Make-An-Order FRS](https://docs.google.com/document/d/12t3hsoXgQoeY3lfybs1ftLMlCDhik99QOiwX6D6_mVg/edit?usp=sharing)
+
 Below is a link to the Postman Collection for the services outlined in this README file. You can test them on your own.
 
-CLICK BELOW👇
+## 👇 CLICK
 
 [<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://god.gw.postman.com/run-collection/27542094-39386466-959a-4ee0-8c5d-aeb33e616e38?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D27542094-39386466-959a-4ee0-8c5d-aeb33e616e38%26entityType%3Dcollection%26workspaceId%3D0a892a52-7b10-43c4-9f95-315cee72a41a)
 
 ## Table of Contents
 
 - [make-an-order](#make-an-order)
+  - [👇 CLICK](#-click)
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Features](#features)
@@ -20,6 +23,7 @@ CLICK BELOW👇
     - [Installation](#installation)
   - [Usage](#usage)
   - [API Documentation](#api-documentation)
+  - [👇 CLICK](#-click-1)
     - [Authentication Endpoints](#authentication-endpoints)
     - [Customer Endpoints](#customer-endpoints)
       - [1. Create a new Customer](#1-create-a-new-customer)
@@ -178,7 +182,7 @@ python app.py
 
 Below is a link to the Postman Collection for the services outlined in this section. You can test them on your own.
 
-CLICK BELOW👇
+## 👇 CLICK
 
 [<img src="https://run.pstmn.io/button.svg" alt="Run In Postman" style="width: 128px; height: 32px;">](https://god.gw.postman.com/run-collection/27542094-39386466-959a-4ee0-8c5d-aeb33e616e38?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D27542094-39386466-959a-4ee0-8c5d-aeb33e616e38%26entityType%3Dcollection%26workspaceId%3D0a892a52-7b10-43c4-9f95-315cee72a41a)
 
