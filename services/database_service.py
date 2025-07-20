@@ -1,42 +1,34 @@
-# import MySQLdb # No longer needed if not explicitly using MySQLdb for local
+import MySQLdb # type: ignore
+from config import Config
 import os
 import logging
-import psycopg2 # Import psycopg2 for potential local PostgreSQL creation, though not strictly used by this function if DATABASE_URL exists
-from config import Config # Import Config to access DATABASE_URL
-import pymysql
-
 
 logger = logging.getLogger(__name__)
 
 def create_database():
     """
-    Connects to the MySQL/PostgreSQL server and creates the database if it doesn't exist.
-    This function is primarily for local development setup.
-    It will be skipped if a DATABASE_URL (indicating a hosted DB) is present.
+    Connects to the MySQL server and creates the database if it doesn't exist.
     """
-    # If DATABASE_URL is set (e.g., on Render), assume the DB is already provisioned
-    if os.environ.get("DATABASE_URL"):
-        logger.info("DATABASE_URL detected. Skipping local database creation (assuming hosted DB is used).")
+    if os.environ.get("JAWSDB_URL"):
+        logger.info("Skipping database creation on JawsDB (detected JAWSDB_URL).")
         return
 
-    # Fallback to local MySQL creation logic (as before)
-    # This block will only execute if DATABASE_URL is NOT set, meaning local dev.
     try:
-        # Use PyMySQL for local MySQL connection
-        connection = pymysql.connect(
+        connection = MySQLdb.connect(
             host=Config.MYSQL_HOST,
             user=Config.MYSQL_USER,
             passwd=Config.MYSQL_PASSWORD
+            # db parameter is omitted initially to allow creation
         )
         cursor = connection.cursor()
-        logger.info("Connected to local MySQL server for creation check.")
+        logger.info("Connected to MySQL server.")
 
         # Check if DB exists and create if not
         cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{Config.MYSQL_DB}`")
-        logger.info(f"Local MySQL Database '{Config.MYSQL_DB}' created (or already exists).")
+        logger.info(f"Database '{Config.MYSQL_DB}' created (or already exists).")
 
         connection.close()
     except Exception as e:
-        logger.error(f"Error connecting to local MySQL or creating database: {e}", exc_info=True)
-        # In a real app, raise this error to prevent startup
-        # if the local DB isn't available for development.
+        logger.error(f"Error connecting to MySQL or creating database: {e}", exc_info=True)
+        # In a real app, raise this error or handle it more gracefully
+        # to prevent the app from starting if the DB isn't available.
