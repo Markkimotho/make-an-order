@@ -118,12 +118,6 @@
 {% block scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Initialize tooltips (optional, but good UX)
-        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-          return new bootstrap.Tooltip(tooltipTriggerEl)
-        });
-
         const placeOrderForm = document.getElementById('placeOrderForm');
         const editOrderForm = document.getElementById('editOrderForm');
         const orderTableBody = document.getElementById('orderTableBody');
@@ -131,12 +125,32 @@
         const filterCustomerIdSelect = document.getElementById('filterCustomerId');
         const filterOrdersBtn = document.getElementById('filterOrdersBtn');
 
-        const placeOrderMessage = document.getElementById('placeOrderMessage');
-        const editOrderMessage = document.getElementById('editOrderMessage');
         const toastElement = document.getElementById('liveToast');
         const toastBody = document.getElementById('toastBody');
         const toastHeader = document.getElementById('toastHeader');
         const liveToast = new bootstrap.Toast(toastElement);
+
+        // Get the modal element once
+        const editOrderModalEl = document.getElementById('editOrderModal');
+        // Create the Bootstrap Modal instance once
+        const editOrderModal = new bootstrap.Modal(editOrderModalEl);
+
+
+        function initializeTooltips() {
+            // Destroy existing tooltips to prevent duplicates
+            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(tooltipEl => {
+                const tooltip = bootstrap.Tooltip.getInstance(tooltipEl);
+                if (tooltip) {
+                    tooltip.dispose();
+                }
+            });
+            // Initialize new tooltips
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        }
+
 
         function showToast(message, isSuccess = true) {
             toastBody.textContent = message;
@@ -183,7 +197,6 @@
                 }
 
 
-                // Pre-select customer if customer_id is in URL query
                 const urlParams = new URLSearchParams(window.location.search);
                 const customerIdFromUrl = urlParams.get('customer_id');
                 if (customerIdFromUrl && customers.some(c => c.id == customerIdFromUrl)) {
@@ -241,12 +254,8 @@
                             <button class="btn btn-sm btn-danger delete-btn" data-id="${order.id}" data-bs-toggle="tooltip" data-bs-placement="top" title="Delete Order"><i class="fas fa-trash-alt"></i> Delete</button>
                         `;
                     });
-                    attachEventListeners();
-                    // Re-initialize tooltips for new elements
-                    var newTooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-                    newTooltipList = newTooltipTriggerList.map(function (tooltipTriggerEl) {
-                      return new bootstrap.Tooltip(tooltipTriggerEl)
-                    });
+                    attachEventListeners(); // Attach event listeners to newly created buttons
+                    initializeTooltips(); // Initialize tooltips for newly created buttons
                 }
             } catch (error) {
                 console.error('Error fetching orders:', error);
@@ -265,8 +274,7 @@
                     document.getElementById('editOrderItem').value = item;
                     document.getElementById('editOrderAmount').value = amount;
 
-                    const editModal = new bootstrap.Modal(document.getElementById('editOrderModal'));
-                    editModal.show();
+                    editOrderModal.show(); // Use the pre-initialized modal instance
                 };
             });
 
@@ -348,8 +356,7 @@
                 const result = await response.json();
                 if (response.ok) {
                     showToast(result.message, true);
-                    const editModal = bootstrap.Modal.getInstance(document.getElementById('editOrderModal'));
-                    editModal.hide();
+                    editOrderModal.hide();
                     fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
                 } else {
                     showToast(result.error || 'Failed to update order', false);

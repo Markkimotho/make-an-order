@@ -102,21 +102,33 @@
 {% block scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Initialize tooltips (optional, but good UX)
-        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-          return new bootstrap.Tooltip(tooltipTriggerEl)
-        });
-
         const addCustomerForm = document.getElementById('addCustomerForm');
         const editCustomerForm = document.getElementById('editCustomerForm');
         const customerTableBody = document.getElementById('customerTableBody');
-        const addCustomerMessage = document.getElementById('addCustomerMessage');
-        const editCustomerMessage = document.getElementById('editCustomerMessage');
         const toastElement = document.getElementById('liveToast');
         const toastBody = document.getElementById('toastBody');
         const toastHeader = document.getElementById('toastHeader');
         const liveToast = new bootstrap.Toast(toastElement);
+
+        // Get the modal element once
+        const editCustomerModalEl = document.getElementById('editCustomerModal');
+        // Create the Bootstrap Modal instance once
+        const editCustomerModal = new bootstrap.Modal(editCustomerModalEl);
+
+        function initializeTooltips() {
+            // Destroy existing tooltips to prevent duplicates
+            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(tooltipEl => {
+                const tooltip = bootstrap.Tooltip.getInstance(tooltipEl);
+                if (tooltip) {
+                    tooltip.dispose();
+                }
+            });
+            // Initialize new tooltips
+            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+            tooltipTriggerList.map(function (tooltipTriggerEl) {
+                return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        }
 
 
         function showToast(message, isSuccess = true) {
@@ -156,12 +168,8 @@
                             <a href="/orders-ui?customer_id=${customer.id}" class="btn btn-sm btn-info ms-2" data-bs-toggle="tooltip" data-bs-placement="top" title="View Customer's Orders"><i class="fas fa-receipt"></i> Orders</a>
                         `;
                     });
-                    attachEventListeners(); // Re-attach after new rows
-                    // Re-initialize tooltips for new elements
-                    var newTooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-                    newTooltipList = newTooltipTriggerList.map(function (tooltipTriggerEl) {
-                      return new bootstrap.Tooltip(tooltipTriggerEl)
-                    });
+                    attachEventListeners(); // Attach event listeners to newly created buttons
+                    initializeTooltips(); // Initialize tooltips for newly created buttons
                 }
             } catch (error) {
                 console.error('Error fetching customers:', error);
@@ -170,6 +178,7 @@
         }
 
         function attachEventListeners() {
+            // Edit buttons
             document.querySelectorAll('.edit-btn').forEach(button => {
                 button.onclick = function() {
                     const id = this.dataset.id;
@@ -182,11 +191,11 @@
                     document.getElementById('editPhoneNumber').value = phone;
                     document.getElementById('editCode').value = code;
 
-                    const editModal = new bootstrap.Modal(document.getElementById('editCustomerModal'));
-                    editModal.show();
+                    editCustomerModal.show(); // Use the pre-initialized modal instance
                 };
             });
 
+            // Delete buttons
             document.querySelectorAll('.delete-btn').forEach(button => {
                 button.onclick = async function() {
                     const id = this.dataset.id;
@@ -260,8 +269,7 @@
                 const result = await response.json();
                 if (response.ok) {
                     showToast(result.message, true);
-                    const editModal = bootstrap.Modal.getInstance(document.getElementById('editCustomerModal'));
-                    editModal.hide();
+                    editCustomerModal.hide(); // Use the pre-initialized modal instance
                     fetchCustomers();
                 } else {
                     showToast(result.error || 'Failed to update customer', false);
@@ -272,7 +280,7 @@
             }
         };
 
-        fetchCustomers();
+        fetchCustomers(); // Initial load
     });
 </script>
 {% endblock %}
