@@ -1,5 +1,4 @@
-# app.py
-from flask import Flask, request, Response  # type: ignore
+from flask import Flask, request, Response, render_template, redirect, url_for, session, jsonify  # type: ignore
 from config import Config
 from models import db
 from api.customers import customers_bp
@@ -10,6 +9,8 @@ from datetime import timedelta
 from dotenv import load_dotenv
 from auth.auth_routes import create_auth_blueprint
 import os
+import logging
+from logging.handlers import RotatingFileHandler
 
 # dotenv setup
 load_dotenv()
@@ -21,7 +22,23 @@ app.secret_key = os.getenv("APP_SECRET_KEY")
 app.config['SESSION_COOKIE_NAME'] = 'google-login-session'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
 
-# Create the database if it doesn't exist
+# Configure logging
+if not app.debug:
+    if not os.path.exists('logs'):
+        os.mkdir('logs')
+    file_handler = RotatingFileHandler('logs/make-an-order.log', maxBytes=10240, backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Make-An-Order startup')
+else:
+    # For debug mode, log to console
+    logging.basicConfig(level=logging.DEBUG)
+
+
+# Create the database if it doesn't exist (only for local dev, skipped for JawsDB)
 create_database()
 
 # Initialize the database
@@ -48,16 +65,75 @@ app.register_blueprint(customers_bp, url_prefix='/customers')
 app.register_blueprint(orders_bp, url_prefix='/orders')
 app.register_blueprint(create_auth_blueprint(oauth))
 
+
+# --- Frontend Routes ---
+@app.route('/')
+def index():
+    if 'profile' in session:
+        return redirect(url_for('dashboard')) # Redirect to dashboard if logged in
+    return render_template('index.html') # Landing page with login button
+
+@app.route('/dashboard')
+# No @login_required here. The auth_routes '/' endpoint now handles the redirect from Google.
+# This dashboard route should be protected if directly accessed, but the flow usually goes
+# /login -> Google -> /authorize -> /dashboard.
+# So, the @login_required is more crucial on the API endpoints.
+# For a direct URL access, you might want to add @login_required here as well.
+# For simplicity and given the / route redirects to dashboard if logged in,
+# and auth_routes('/') is protected, we can leave it like this for now.
+def dashboard():
+    if 'profile' not in session: # Ensure session is still active
+        return redirect(url_for('auth.login'))
+    user_email = session['profile']['email']
+    return render_template('dashboard.html', user_email=user_email)
+
+@app.route('/customers-ui')
+def customers_page():
+    if 'profile' not in session:
+        return redirect(url_for('auth.login'))
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
+    return render_template('customers.html', user_email=user_email)
+
+@app.route('/orders-ui')
+def orders_page():
+    if 'profile' not in session:
+        return redirect(url_for('auth.login'))
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
+    return render_template('orders.html', user_email=user_email)
+
+
+# --- Centralized Error Handlers ---
+@app.errorhandler(400)
+def bad_request_error(error):
+    app.logger.error(f"Bad Request: {request.url} - {str(error)}")
+    return jsonify({"error": "Bad Request", "message": str(error)}), 400
+
+@app.errorhandler(401)
+def unauthorized_error(error):
+    app.logger.warning(f"Unauthorized Access: {request.url}")
+    return jsonify({"error": "Unauthorized", "message": "Authentication required or invalid credentials"}), 401
+
+@app.errorhandler(404)
+def not_found_error(error):
+    app.logger.warning(f"Not Found: {request.url}")
+    return jsonify({"error": "Not Found", "message": "The requested resource was not found"}), 404
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    app.logger.exception(f"Internal Server Error: {request.url}") # Logs traceback
+    return jsonify({"error": "Internal Server Error", "message": "An unexpected error occurred."}), 500
+
+
 # Route to handle incoming messages
 @app.route('/incoming-messages', methods=['POST'])
 def incoming_messages():
     """
-    This route handles incoming messages sent to your shortcode.
+    This route handles incoming messages sent to the AT shortcode.
     Africa's Talking will send POST requests to this URL.
     """
     data = request.get_json(force=True)  # Get the incoming message data
-    print(f'Incoming message: {data}')
-    
+    app.logger.info(f'Incoming message: {data}') # Use app.logger
+
     # Handle the incoming message here if needed, e.g., respond to the user or log it
     return Response(status=200)  # Return 200 OK to acknowledge receipt
 
@@ -69,8 +145,8 @@ def delivery_reports():
     Africa's Talking will send POST requests with delivery status updates.
     """
     data = request.get_json(force=True)
-    print(f'Delivery report: {data}')
-    
+    app.logger.info(f'Delivery report: {data}') # Use app.logger
+
     # Handle the delivery report here, e.g., log the delivery status or update the database
     return Response(status=200)  # Return 200 OK to acknowledge receipt
 

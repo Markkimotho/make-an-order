@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Welcome, {{ user_email }}!</h2>
+<p class="lead mb-4 text-secondary">Navigate through your management tools:</p>
+<div class="row">
+    <div class="col-md-6 mb-4">
+        <div class="card text-center shadow-sm dashboard-card">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-users fa-3x mb-3"></i></h5>
+                <p class="card-text">Effortlessly manage your customer base: add, view, update, and delete customer records.</p>
+                <a href="{{ url_for('customers_page') }}" class="btn btn-primary btn-lg mt-3">Go to Customers</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-4">
+        <div class="card text-center shadow-sm dashboard-card">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-shopping-cart fa-3x mb-3"></i></h5>
+                <p class="card-text">Handle all your customer orders: place new orders, track, modify, and manage.</p>
+                <a href="{{ url_for('orders_page') }}" class="btn btn-success btn-lg mt-3">Go to Orders</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

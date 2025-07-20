@@ -1,4 +1,3 @@
-# models.py
 from flask_sqlalchemy import SQLAlchemy # type: ignore
 
 db = SQLAlchemy()
@@ -8,7 +7,8 @@ class Customer(db.Model):
     Customer: Model to represent a customer in the database
     -----------
     Paramaters:
-    db.Model - A parameter for initializing models in flask's SQLAlchemy 
+    db.Model - A parameter for initializing models in flask's SQLAlchemy
+
     -----------
     Attributes/Column Names:
     -----------
@@ -28,7 +28,7 @@ class Customer(db.Model):
 
     def __repr__(self):
         return f"<Customer(id={self.id}, name={self.name}, phone_number={self.phone_number}, code={self.code})>"
-    
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -42,7 +42,8 @@ class Order(db.Model):
     Order: Model to represent an order in the database
     -----------
     Paramaters:
-    db.Model - A parameter for initializing models in flask's SQLAlchemy 
+    db.Model - A parameter for initializing models in flask's SQLAlchemy
+
     -----------
     Attributes/Column Names:
     -----------
@@ -67,6 +68,6 @@ class Order(db.Model):
             "id": self.id,
             "customer_id": self.customer_id,
             "item": self.item,
-            "amount": self.amount,
-            "time": self.time
-        }   
+            "amount": float(self.amount), # Ensure it's float for JSON serialization
+            "time": self.time.isoformat() if self.time else None # ISO format for datetime
+        }

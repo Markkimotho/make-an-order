@@ -1,0 +1,469 @@
+/* static/style.css */
+
+/* Google Fonts - Poppins for a modern, clean look */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+:root {
+    --primary-sky-blue: #00BFFF; /* Deep Sky Blue */
+    --primary-sky-blue-dark: #009ACD; /* Slightly darker for hover/active */
+    --primary-sky-blue-light: #87CEEB; /* Lighter for accents/backgrounds */
+
+    --glass-light-bg: rgba(255, 255, 255, 0.15); /* Light transparent white for glass */
+    --glass-light-border: rgba(255, 255, 255, 0.3); /* Border for glass effect */
+    --glass-dark-bg: rgba(0, 0, 0, 0.15); /* Dark transparent for glass on light areas */
+    --glass-dark-border: rgba(0, 0, 0, 0.3);
+
+    --text-primary: #1a202c; /* Dark text for readability */
+    --text-secondary: #4a5568; /* Slightly lighter text */
+    --text-light: #f8f9fa; /* White text */
+
+    --shadow-light: 0 4px 15px rgba(0, 0, 0, 0.1);
+    --shadow-deep: 0 10px 30px rgba(0, 0, 0, 0.2);
+
+    /* Bootstrap overrides for toast success/danger colors */
+    --bs-success-rgb: 0, 191, 255; /* Using primary-sky-blue for success */
+    --bs-danger-rgb: 220, 53, 69; /* Keep red for danger */
+    --bs-warning-rgb: 255, 193, 7;
+    --bs-info-rgb: 108, 117, 125; /* Changed info to a neutral grey */
+    --bs-secondary-rgb: 108, 117, 125;
+}
+
+/* Base Body Styles for Background Image */
+body {
+    font-family: 'Poppins', sans-serif;
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column; /* Allows footer to stick to bottom if added later */
+    position: relative;
+    overflow-x: hidden; /* Prevent horizontal scroll */
+}
+
+/* Blurred Background Image Effect */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('../static/background.jpg'); /* !!! IMPORTANT: Update this path to your image !!! */
+    background-size: cover;
+    background-position: center;
+    filter: blur(8px); /* Adjust blur intensity */
+    -webkit-filter: blur(8px);
+    z-index: -1; /* Place behind content */
+    transform: scale(1.05); /* Avoid blur edges */
+}
+
+/* Overlay for better readability on background */
+body::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(240, 248, 255, 0.4); /* Light transparent overlay (AliceBlue) */
+    z-index: -1;
+}
+
+/* General Layout & Containers */
+.container {
+    padding: 20px;
+    margin-top: 20px;
+    flex-grow: 1; /* Allow content to grow */
+}
+
+/* Glassmorphism Effect for Main Content Wrapper/Cards */
+.content-wrapper, .card, .login-container {
+    background: var(--glass-light-bg); /* Transparent background */
+    backdrop-filter: blur(10px); /* Frosted glass effect */
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-light-border); /* Light transparent border */
+    border-radius: 15px; /* More rounded corners */
+    box-shadow: var(--shadow-deep); /* Deeper shadow for elevation */
+    overflow: hidden; /* Ensure content stays within rounded corners */
+}
+.content-wrapper {
+    max-width: 1200px;
+    margin: 30px auto;
+    padding: 30px;
+}
+
+/* Navbar */
+.navbar {
+    background-color: var(--glass-dark-bg) !important; /* Glassy dark navbar */
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--glass-dark-border);
+    box-shadow: var(--shadow-light);
+    transition: background-color 0.3s ease;
+}
+.navbar-brand {
+    font-weight: 700;
+    color: var(--text-light) !important;
+    font-size: 1.5rem;
+}
+.navbar-nav .nav-link {
+    color: var(--text-light) !important;
+    padding: 0.8rem 1.2rem;
+    border-radius: 10px;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    font-weight: 500;
+}
+.navbar-nav .nav-link:hover {
+    background-color: var(--glass-light-bg); /* Slightly visible hover */
+    transform: translateY(-2px);
+}
+.navbar-nav .nav-link.active {
+    background-color: var(--primary-sky-blue-dark); /* Accent for active */
+    color: var(--text-light) !important;
+    font-weight: 600;
+}
+.navbar-nav .nav-link.btn-danger {
+    background-color: #dc3545 !important;
+    border-color: #dc3545 !important;
+    color: var(--text-light) !important;
+    font-weight: 500;
+}
+.navbar-nav .nav-link.btn-danger:hover {
+    background-color: #c82333 !important;
+    border-color: #bd2130 !important;
+    transform: translateY(-2px);
+}
+.navbar-nav .nav-link.text-white-50 {
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7) !important; /* Softer white for username */
+    cursor: default;
+}
+
+/* Headers */
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Poppins', sans-serif;
+    color: var(--text-primary); /* Darker text for headings */
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+}
+.lead {
+    color: var(--text-secondary);
+    font-size: 1.15rem;
+}
+
+/* Cards (General) */
+.card {
+    border: none; /* Already handled by glassmorphism */
+    box-shadow: var(--shadow-light);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow-deep);
+}
+.card-header {
+    background-color: rgba(255, 255, 255, 0.2) !important; /* Semi-transparent white header */
+    border-bottom: 1px solid var(--glass-light-border);
+    border-top-left-radius: 14px; /* Match card border-radius -1px */
+    border-top-right-radius: 14px;
+    padding: 1.2rem 1.5rem;
+    font-weight: 600;
+    font-size: 1.2rem;
+    color: var(--text-primary);
+}
+/* Specific card headers, using sky blue as success/primary */
+.card-header.bg-primary, .card-header.bg-success {
+    background-color: var(--primary-sky-blue) !important;
+    color: var(--text-light) !important;
+    border-bottom: 1px solid var(--primary-sky-blue-dark);
+}
+.card-header.bg-info { /* Changed info to grey from earlier */
+    background-color: var(--secondary-color) !important;
+    color: var(--text-light) !important;
+}
+.card-header.bg-secondary {
+    background-color: var(--secondary-color) !important;
+    color: var(--text-light) !important;
+}
+.card-header.bg-warning {
+    background-color: var(--primary-sky-blue-light) !important; /* Lighter sky blue for warning/edit */
+    color: var(--text-primary) !important;
+    border-bottom: 1px solid var(--primary-sky-blue);
+}
+.card-body {
+    padding: 1.5rem;
+}
+
+/* Buttons */
+.btn {
+    border-radius: 8px; /* Slightly more rounded buttons */
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    transition: all 0.2s ease-in-out;
+    border: none; /* Let background color define border */
+}
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+.btn-primary, .btn-success { /* Sky blue for primary actions */
+    background-color: var(--primary-sky-blue);
+    color: var(--text-light);
+}
+.btn-primary:hover, .btn-success:hover {
+    background-color: var(--primary-sky-blue-dark);
+    color: var(--text-light);
+}
+
+.btn-info { /* Neutral grey for info buttons */
+    background-color: var(--secondary-color);
+    color: var(--text-light);
+}
+.btn-info:hover {
+    background-color: var(--secondary-dark);
+}
+
+.btn-secondary { /* Darker grey for filter/secondary actions */
+    background-color: var(--secondary-dark);
+    color: var(--text-light);
+}
+.btn-secondary:hover {
+    background-color: var(--secondary-color);
+}
+
+.btn-warning { /* Accent color for edit */
+    background-color: var(--primary-sky-blue-light);
+    color: var(--text-primary);
+}
+.btn-warning:hover {
+    background-color: var(--primary-sky-blue);
+    color: var(--text-light);
+}
+
+.btn-danger {
+    background-color: #dc3545;
+    color: var(--text-light);
+}
+.btn-danger:hover {
+    background-color: #c82333;
+}
+
+/* Form Elements */
+.form-control, .form-select {
+    border-radius: 10px; /* Match card rounding */
+    background-color: rgba(255, 255, 255, 0.4); /* Slightly transparent input fields */
+    border: 1px solid rgba(255, 255, 255, 0.6); /* Lighter border */
+    color: var(--text-primary);
+    padding: 0.85rem 1.2rem;
+    box-shadow: inset 0 1px 5px rgba(0,0,0,0.05); /* Subtle inner shadow */
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.form-control::placeholder, .form-select option {
+    color: var(--text-secondary); /* Placeholder text color */
+}
+.form-control:focus, .form-select:focus {
+    border-color: var(--primary-sky-blue); /* Sky blue focus */
+    box-shadow: 0 0 0 0.25rem rgba(0, 191, 255, 0.25); /* Glow effect */
+    background-color: rgba(255, 255, 255, 0.6); /* Less transparent on focus */
+    outline: none;
+}
+label {
+    font-weight: 600;
+    margin-bottom: 0.6rem;
+    color: var(--text-primary);
+}
+.form-text {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* Tables */
+.table {
+    --bs-table-bg: rgba(255, 255, 255, 0.1); /* Very light glass table background */
+    --bs-table-striped-bg: rgba(255, 255, 255, 0.05);
+    --bs-table-hover-bg: rgba(255, 255, 255, 0.2);
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-top: 20px;
+    border-radius: 10px; /* Rounded table corners */
+    overflow: hidden; /* Ensure rounded corners clip content */
+}
+.table thead th {
+    background-color: var(--primary-sky-blue-light); /* Lighter sky blue header */
+    color: var(--text-primary);
+    font-weight: 600;
+    border-bottom: 1px solid var(--primary-sky-blue);
+    padding: 1rem 1.2rem;
+    text-transform: uppercase;
+    font-size: 0.95rem;
+}
+.table tbody td {
+    padding: 1rem 1.2rem;
+    vertical-align: middle;
+    border-top: 1px solid rgba(255, 255, 255, 0.4); /* Subtle separator */
+    color: var(--text-primary);
+}
+.table tbody td.text-center {
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 25px;
+}
+.table-responsive {
+    border-radius: 10px; /* Match table border radius */
+    overflow: hidden; /* Hide scrollbar outside */
+    box-shadow: var(--shadow-light); /* Subtle shadow for table */
+}
+
+/* Modal Enhancements */
+.modal-content {
+    background: var(--glass-light-bg); /* Use glass light for modal background */
+    backdrop-filter: blur(15px); /* More blur for modal */
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid var(--glass-light-border);
+    border-radius: 20px; /* More pronounced rounding */
+    box-shadow: var(--shadow-deep);
+}
+.modal-header {
+    background-color: var(--primary-sky-blue-light) !important; /* Lighter sky blue for modal header */
+    color: var(--text-primary) !important;
+    border-bottom: 1px solid var(--primary-sky-blue);
+    border-top-left-radius: 19px;
+    border-top-right-radius: 19px;
+    padding: 1.5rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+.modal-header .btn-close {
+    filter: invert(0.5); /* Make close button visible on light background */
+}
+.modal-body {
+    padding: 1.5rem;
+}
+
+
+/* Toast Notifications */
+.toast-container {
+    padding: 1.5rem;
+    z-index: 1080;
+}
+.toast {
+    border-radius: 10px;
+    box-shadow: 0 6px 15px rgba(0,0,0,0.15);
+    border: none;
+    padding: 1rem;
+    background: var(--glass-light-bg); /* Glassy toast */
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-light-border);
+}
+.toast .toast-header {
+    font-weight: 600;
+    background-color: transparent;
+    border-bottom: none;
+    padding-bottom: 0.5rem;
+    color: var(--text-primary);
+}
+.toast.text-bg-success {
+    background-color: rgba(0, 191, 255, 0.6) !important; /* Sky blue transparent success */
+    color: var(--text-light) !important;
+    border: 1px solid var(--primary-sky-blue);
+}
+.toast.text-bg-danger {
+    background-color: rgba(220, 53, 69, 0.6) !important; /* Red transparent danger */
+    color: var(--text-light) !important;
+    border: 1px solid #c82333;
+}
+.toast .toast-body {
+    color: var(--text-primary);
+}
+.toast.text-bg-success .toast-body {
+    color: var(--text-light);
+}
+.toast.text-bg-danger .toast-body {
+    color: var(--text-light);
+}
+.toast .btn-close {
+    filter: invert(1); /* Ensure close button is visible on success/danger toasts */
+}
+
+
+/* Login Page Specifics */
+.login-container {
+    background: var(--glass-light-bg); /* Glassy login container */
+    padding: 60px 40px;
+    border-radius: 20px;
+    box-shadow: var(--shadow-deep);
+    text-align: center;
+    max-width: 500px;
+    width: 90%;
+    backdrop-filter: blur(15px); /* More blur for login */
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid var(--glass-light-border);
+}
+.login-container h1 {
+    color: var(--primary-sky-blue-dark); /* Accent color for main heading */
+    margin-bottom: 1.5rem;
+    font-size: 2.5rem;
+}
+.login-container .lead {
+    color: var(--text-secondary);
+    font-size: 1.25rem;
+    margin-bottom: 2rem;
+}
+.login-container .btn-primary {
+    padding: 18px 35px;
+    font-size: 1.35rem;
+    margin-top: 2rem;
+    border-radius: 50px;
+    box-shadow: 0 6px 15px rgba(0, 191, 255, 0.4); /* Glowing effect */
+}
+.login-container .btn-primary:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 191, 255, 0.6);
+}
+
+/* Dashboard Specifics */
+.dashboard-card {
+    border-radius: 15px; /* Match content wrapper */
+    overflow: hidden;
+}
+.dashboard-card .card-body {
+    background: rgba(255, 255, 255, 0.1); /* Subtle transparent background for body */
+}
+.dashboard-card .card-title i {
+    color: var(--primary-sky-blue); /* Accent color for icons */
+    transition: transform 0.3s ease;
+}
+.dashboard-card:hover .card-title i {
+    transform: scale(1.1);
+}
+.dashboard-card .card-text {
+    font-size: 1.15rem;
+    color: var(--text-secondary);
+}
+.dashboard-card .btn {
+    border-radius: 30px; /* Slightly less rounded than login button */
+    padding: 10px 22px;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .content-wrapper {
+        padding: 15px;
+        margin: 15px auto;
+        border-radius: 10px;
+    }
+    .card, .modal-content, .login-container {
+        border-radius: 10px;
+    }
+    .navbar-nav .nav-link {
+        padding: 0.6rem 0.8rem;
+    }
+    .login-container {
+        padding: 40px 25px;
+    }
+}

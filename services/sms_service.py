@@ -1,6 +1,9 @@
-# services/sms_services.py
 from config import Config
 import africastalking # type: ignore
+import logging
+# import time # Uncomment if implementing blocking in-request retry (not recommended)
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 username = Config.AT_USERNAME
@@ -13,17 +16,23 @@ sms = africastalking.SMS
 
 class SendSMS:
     @staticmethod
-    def send_order_confirmation(phone_number, customer_name, order_details):
+    # Added max_retries parameter, though full retry logic for production would be async
+    def send_order_confirmation(phone_number, customer_name, order_details): # Removed max_retries parameter for simplicity
         """
         Sends an order confirmation SMS to the customer.
+        Returns True on success, False on failure.
         """
         message = f"Hello {customer_name}, your order has been placed. Details: {order_details}"
-        sender = sender_id
-        
+        sender = sender_id # Make sure this is correctly configured
+
         try:
             response = sms.send(message, [phone_number], sender)
-            print(f"SMS sent successfully: {response}")
-            return response
+            logger.info(f"SMS sent successfully to {phone_number} for customer {customer_name}. Response: {response}")
+            return True # Indicate success
         except Exception as e:
-            print(f"Error sending SMS: {e}")
-            return None
+            logger.error(f"Error sending SMS to {phone_number} for customer {customer_name}: {e}", exc_info=True)
+            # In a real application, you would log this failure persistently
+            # (e.g., to a dedicated SMS log table in the DB with retry attempts).
+            # You would also implement a proper retry mechanism here, ideally
+            # using a background task queue like Celery.
+            return False # Indicate failure
