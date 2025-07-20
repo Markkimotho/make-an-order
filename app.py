@@ -39,7 +39,7 @@ else:
     logging.basicConfig(level=logging.DEBUG)
 
 
-# Create the database if it doesn't exist (only for local dev, skipped for JawsDB)
+# Create the database if it doesn't exist (only for local dev, skipped for prod DB)
 create_database()
 
 # Initialize the database
@@ -92,7 +92,7 @@ def orders_page():
     user_email = session['profile']['email'] if 'profile' in session else 'Guest'
     return render_template('orders.html', user_email=user_email)
 
-# --- NEW: Customer Detail/Edit Pages ---
+# --- Customer Detail/Edit Pages ---
 @app.route('/customers/<int:customer_id>')
 @login_required
 def customer_detail_page(customer_id):
@@ -111,7 +111,7 @@ def customer_edit_page(customer_id):
     user_email = session['profile']['email'] if 'profile' in session else 'Guest'
     return render_template('customer_edit.html', customer=customer, user_email=user_email)
 
-# --- NEW: Order Edit Page ---
+# --- Order Edit Page ---
 @app.route('/orders/<int:order_id>/edit')
 @login_required
 def order_edit_page(order_id):

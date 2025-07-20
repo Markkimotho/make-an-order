@@ -31,8 +31,8 @@ class SendSMS:
             return True # Indicate success
         except Exception as e:
             logger.error(f"Error sending SMS to {phone_number} for customer {customer_name}: {e}", exc_info=True)
-            # In a real application, you would log this failure persistently
+            # In a real application, this failure will be logged persistently
             # (e.g., to a dedicated SMS log table in the DB with retry attempts).
-            # You would also implement a proper retry mechanism here, ideally
+            # I would also implement a proper retry mechanism here, ideally
             # using a background task queue like Celery.
             return False # Indicate failure

@@ -6,8 +6,13 @@ load_dotenv()
 class Config:
     SECRET_KEY = os.environ.get("APP_SECRET_KEY")
     SESSION_TYPE = "filesystem"
-    SQLALCHEMY_DATABASE_URI = os.environ.get("JAWSDB_URL") or \
+
+    # Prioritize DATABASE_URL (common for PaaS/deplyment platforms like Render) for PostgreSQL
+    # Fallback to local MySQL for local development if DATABASE_URL is not set
+    # Note: For local development, you should continue to use your local MySQL server
+    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL") or \
                               f"mysql+pymysql://{os.environ.get('MYSQL_USER')}:{os.environ.get('MYSQL_PASSWORD')}@{os.environ.get('MYSQL_HOST')}/{os.environ.get('MYSQL_DB')}"
+
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
@@ -18,7 +23,7 @@ class Config:
     AT_API_KEY = os.environ.get("AT_API_KEY")
     AT_SENDER_ID = os.environ.get("AT_SENDER_ID")
 
-    # DB Credentials (for local, non-JawsDB setup)
+    # DB Credentials (for local, non-JawsDB setup - these are MySQL specific)
     MYSQL_HOST=os.environ.get("MYSQL_HOST")
     MYSQL_USER=os.environ.get("MYSQL_USER")
     MYSQL_PASSWORD=os.environ.get("MYSQL_PASSWORD")

@@ -11,7 +11,7 @@ cryptography==43.0.3
 Flask==3.0.3
 Flask-Login==0.6.3
 Flask-Migrate==4.0.7
-Flask-MySQLdb==2.0.0
+# -Flask-MySQLdb==2.0.0 # REMOVE THIS
 Flask-SQLAlchemy==3.1.1
 greenlet==3.1.1
 gunicorn==23.0.0
@@ -21,11 +21,12 @@ itsdangerous==2.2.0
 Jinja2==3.1.4
 Mako==1.3.6
 MarkupSafe==3.0.2
-mysqlclient==2.2.6
+# -mysqlclient==2.2.6 # REMOVE THIS
 packaging==24.2
 pluggy==1.5.0
-pycparser==2.22
-PyMySQL==1.1.1
+# -pycparser==2.22 # Might be a dependency of Flask-SQLAlchemy, keep if `pip install -r` demands it
+# -PyMySQL==1.1.1 # REMOVE THIS
+psycopg2-binary==2.9.9 # ADD THIS
 pytest==8.3.3
 pytest-flask==1.3.0
 pytest-mock==3.14.0
