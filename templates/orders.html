@@ -75,32 +75,6 @@
     </div>
 </div>
 
-<div class="modal fade" id="editOrderModal" tabindex="-1" aria-labelledby="editOrderModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-warning text-dark">
-                <h5 class="modal-title" id="editOrderModalLabel"><i class="fas fa-edit me-2"></i> Edit Order</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <form id="editOrderForm">
-                    <input type="hidden" id="editOrderId">
-                    <div class="mb-3">
-                        <label for="editOrderItem" class="form-label">Item Name</label>
-                        <input type="text" class="form-control" id="editOrderItem" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="editOrderAmount" class="form-label">Amount</label>
-                        <input type="number" step="0.01" class="form-control" id="editOrderAmount" required>
-                    </div>
-                    <button type="submit" class="btn btn-warning mt-2"><i class="fas fa-save me-2"></i> Save Changes</button>
-                </form>
-                <div id="editOrderMessage" class="mt-3"></div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="toast-container position-fixed top-0 end-0 p-3">
     <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
         <div class="toast-header">
@@ -119,7 +93,6 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         const placeOrderForm = document.getElementById('placeOrderForm');
-        const editOrderForm = document.getElementById('editOrderForm');
         const orderTableBody = document.getElementById('orderTableBody');
         const orderCustomerIdSelect = document.getElementById('orderCustomerId');
         const filterCustomerIdSelect = document.getElementById('filterCustomerId');
@@ -130,27 +103,18 @@
         const toastHeader = document.getElementById('toastHeader');
         const liveToast = new bootstrap.Toast(toastElement);
 
-        // Get the modal element once
-        const editOrderModalEl = document.getElementById('editOrderModal');
-        // Create the Bootstrap Modal instance once
-        const editOrderModal = new bootstrap.Modal(editOrderModalEl);
-
-
         function initializeTooltips() {
-            // Destroy existing tooltips to prevent duplicates
             document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(tooltipEl => {
                 const tooltip = bootstrap.Tooltip.getInstance(tooltipEl);
                 if (tooltip) {
                     tooltip.dispose();
                 }
             });
-            // Initialize new tooltips
             var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
             tooltipTriggerList.map(function (tooltipTriggerEl) {
                 return new bootstrap.Tooltip(tooltipTriggerEl);
             });
         }
-
 
         function showToast(message, isSuccess = true) {
             toastBody.textContent = message;
@@ -195,7 +159,6 @@
                         filterCustomerIdSelect.appendChild(option2);
                     });
                 }
-
 
                 const urlParams = new URLSearchParams(window.location.search);
                 const customerIdFromUrl = urlParams.get('customer_id');
@@ -249,12 +212,13 @@
                         row.insertCell(3).textContent = parseFloat(order.amount).toFixed(2);
                         row.insertCell(4).textContent = new Date(order.time).toLocaleString();
                         const actionsCell = row.insertCell(5);
+                        // Changed to anchor tags linking to dedicated page
                         actionsCell.innerHTML = `
-                            <button class="btn btn-sm btn-warning me-2 edit-btn" data-id="${order.id}" data-item="${order.item}" data-amount="${order.amount}" data-bs-toggle="tooltip" data-bs-placement="top" title="Edit Order"><i class="fas fa-edit"></i> Edit</button>
-                            <button class="btn btn-sm btn-danger delete-btn" data-id="${order.id}" data-bs-toggle="tooltip" data-bs-placement="top" title="Delete Order"><i class="fas fa-trash-alt"></i> Delete</button>
+                            <a href="/orders/${order.id}/edit" class="btn btn-sm btn-warning me-2" data-bs-toggle="tooltip" data-bs-placement="top" title="Edit Order"><i class="fas fa-edit"></i> Edit</a>
+                            <button type="button" class="btn btn-sm btn-danger delete-btn" data-id="${order.id}" data-bs-toggle="tooltip" data-bs-placement="top" title="Delete Order"><i class="fas fa-trash-alt"></i> Delete</button>
                         `;
                     });
-                    attachEventListeners(); // Attach event listeners to newly created buttons
+                    attachEventListeners(); // Re-attach event listeners for delete
                     initializeTooltips(); // Initialize tooltips for newly created buttons
                 }
             } catch (error) {
@@ -264,45 +228,35 @@
         }
 
         function attachEventListeners() {
-            document.querySelectorAll('.edit-btn').forEach(button => {
-                button.onclick = function() {
-                    const id = this.dataset.id;
-                    const item = this.dataset.item;
-                    const amount = this.dataset.amount;
+            orderTableBody.removeEventListener('click', handleDeleteButtonEvent);
+            orderTableBody.addEventListener('click', handleDeleteButtonEvent);
+        }
 
-                    document.getElementById('editOrderId').value = id;
-                    document.getElementById('editOrderItem').value = item;
-                    document.getElementById('editOrderAmount').value = amount;
-
-                    editOrderModal.show(); // Use the pre-initialized modal instance
-                };
-            });
-
-            document.querySelectorAll('.delete-btn').forEach(button => {
-                button.onclick = async function() {
-                    const id = this.dataset.id;
-                    if (confirm('Are you sure you want to delete this order?')) {
-                        try {
-                            const response = await fetch(`/orders/delete_orders/${id}`, {
-                                method: 'DELETE',
-                                headers: {
-                                    'Content-Type': 'application/json'
-                                }
-                            });
-                            const result = await response.json();
-                            if (response.ok) {
-                                showToast(result.message, true);
-                                fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
-                            } else {
-                                showToast(result.error || 'Failed to delete order', false);
+        async function handleDeleteButtonEvent(event) {
+            if (event.target.classList.contains('delete-btn') || event.target.closest('.delete-btn')) {
+                const button = event.target.closest('.delete-btn');
+                const id = button.dataset.id;
+                if (confirm('Are you sure you want to delete this order?')) {
+                    try {
+                        const response = await fetch(`/orders/delete_orders/${id}`, {
+                            method: 'DELETE',
+                            headers: {
+                                'Content-Type': 'application/json'
                             }
-                        } catch (error) {
-                            console.error('Error deleting order:', error);
-                            showToast('An error occurred during deletion.', false);
+                        });
+                        const result = await response.json();
+                        if (response.ok) {
+                            showToast(result.message, true);
+                            fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
+                        } else {
+                            showToast(result.error || 'Failed to delete order', false);
                         }
+                    } catch (error) {
+                        console.error('Error deleting order:', error);
+                        showToast('An error occurred during deletion.', false);
                     }
-                };
-            });
+                }
+            }
         }
 
         placeOrderForm.onsubmit = async function(event) {
@@ -339,39 +293,10 @@
             }
         };
 
-        editOrderForm.onsubmit = async function(event) {
-            event.preventDefault();
-            const id = document.getElementById('editOrderId').value;
-            const item = document.getElementById('editOrderItem').value;
-            const amount = parseFloat(document.getElementById('editOrderAmount').value);
-
-            try {
-                const response = await fetch(`/orders/update_orders/${id}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ item, amount })
-                });
-                const result = await response.json();
-                if (response.ok) {
-                    showToast(result.message, true);
-                    editOrderModal.hide();
-                    fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
-                } else {
-                    showToast(result.error || 'Failed to update order', false);
-                }
-            } catch (error) {
-                console.error('Error updating order:', error);
-                showToast('An error occurred while updating the order.', false);
-            }
-        };
-
         filterOrdersBtn.addEventListener('click', function() {
             const selectedCustomerId = filterCustomerIdSelect.value;
             fetchOrders(selectedCustomerId === "" ? null : selectedCustomerId);
         });
-
 
         fetchCustomersForSelects();
     });

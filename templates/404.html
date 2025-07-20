@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}Page Not Found{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+    <h1 class="display-1 text-secondary">404</h1>
+    <h2 class="mb-4">{{ message | default("Oops! Page Not Found") }}</h2>
+    <p class="lead">The resource you requested could not be found. It might have been moved or deleted.</p>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-primary btn-lg mt-3">Go to Dashboard</a>
+</div>
+{% endblock %}

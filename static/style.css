@@ -316,7 +316,22 @@ label {
     box-shadow: var(--shadow-light); /* Subtle shadow for table */
 }
 
-/* Modal Enhancements */
+/* Modal Enhancements - VERY IMPORTANT Z-INDEX OVERRIDES */
+/* These values are deliberately very high to override potential conflicts */
+.modal {
+    z-index: 99999 !important; /* Ensure modal itself is on top */
+    pointer-events: auto !important; /* Crucial: Ensure elements inside are clickable */
+}
+.modal-backdrop {
+    z-index: 99998 !important; /* Ensure backdrop is just below the modal */
+    background-color: rgba(0, 0, 0, 0.7) !important; /* Make it a bit darker for visibility */
+    pointer-events: auto !important; /* Ensure backdrop receives clicks to dismiss */
+}
+/* Ensure the modal content is not hidden by other rules */
+.modal.fade.show .modal-dialog {
+    transform: none !important; /* Override any lingering transform issues that might hide content */
+    opacity: 1 !important; /* Ensure full opacity */
+}
 .modal-content {
     background: var(--glass-light-bg); /* Use glass light for modal background */
     backdrop-filter: blur(15px); /* More blur for modal */
@@ -346,7 +361,7 @@ label {
 /* Toast Notifications */
 .toast-container {
     padding: 1.5rem;
-    z-index: 1080;
+    z-index: 100000 !important; /* Even higher than modal to ensure visibility */
 }
 .toast {
     border-radius: 10px;

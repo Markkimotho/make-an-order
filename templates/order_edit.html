@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Order{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Edit Order: {{ order.item }} (ID: {{ order.id }})</h2>
+
+<div class="card mb-4 shadow-sm">
+    <div class="card-header bg-warning text-dark">
+        <i class="fas fa-edit me-2"></i> Edit Order Details
+    </div>
+    <div class="card-body">
+        <form id="editOrderForm">
+            <input type="hidden" id="orderId" value="{{ order.id }}">
+            <div class="mb-3">
+                <label for="customerId" class="form-label">Customer ID</label>
+                <input type="text" class="form-control" id="customerId" value="{{ order.customer_id }}" disabled>
+                <small class="form-text text-muted">Customer ID cannot be changed directly.</small>
+            </div>
+            <div class="mb-3">
+                <label for="item" class="form-label">Item Name</label>
+                <input type="text" class="form-control" id="item" value="{{ order.item }}" required>
+            </div>
+            <div class="mb-3">
+                <label for="amount" class="form-label">Amount</label>
+                <input type="number" step="0.01" class="form-control" id="amount" value="{{ '%.2f' | format(order.amount) }}" required>
+            </div>
+            <div class="mb-3">
+                <label for="orderTime" class="form-label">Order Time</label>
+                <input type="text" class="form-control" id="orderTime" value="{{ order.time.strftime('%Y-%m-%d %H:%M:%S') }}" disabled>
+                <small class="form-text text-muted">Order time is automatically set.</small>
+            </div>
+            <div class="d-flex justify-content-between mt-4">
+                <a href="{{ url_for('orders_page', customer_id=order.customer_id) }}" class="btn btn-secondary"><i class="fas fa-times-circle me-2"></i> Cancel</a>
+                <button type="submit" class="btn btn-warning"><i class="fas fa-save me-2"></i> Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="toast-container position-fixed top-0 end-0 p-3">
+    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto" id="toastHeader">Notification</strong>
+            <small>Just now</small>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" id="toastBody">
+            </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const editOrderForm = document.getElementById('editOrderForm');
+        const toastElement = document.getElementById('liveToast');
+        const toastBody = document.getElementById('toastBody');
+        const toastHeader = document.getElementById('toastHeader');
+        const liveToast = new bootstrap.Toast(toastElement);
+
+        function showToast(message, isSuccess = true) {
+            toastBody.textContent = message;
+            toastHeader.textContent = isSuccess ? 'Success' : 'Error';
+            toastElement.classList.remove('text-bg-success', 'text-bg-danger');
+            toastElement.classList.add(isSuccess ? 'text-bg-success' : 'text-bg-danger');
+            liveToast.show();
+        }
+
+        editOrderForm.onsubmit = async function(event) {
+            event.preventDefault();
+            const id = document.getElementById('orderId').value;
+            const item = document.getElementById('item').value;
+            const amount = parseFloat(document.getElementById('amount').value);
+            const customerId = document.getElementById('customerId').value; // Get customer ID for redirect
+
+            try {
+                const response = await fetch(`/orders/update_orders/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ item, amount })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    showToast(result.message, true);
+                    // Redirect back to the orders page, filtered by customer if possible
+                    window.location.href = `/orders-ui?customer_id=${customerId}`;
+                } else {
+                    showToast(result.error || 'Failed to update order', false);
+                }
+            } catch (error) {
+                console.error('Error updating order:', error);
+                showToast('An error occurred while updating the order.', false);
+            }
+        };
+    });
+</script>
+{% endblock %}

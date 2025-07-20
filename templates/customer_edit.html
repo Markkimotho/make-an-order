@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Customer{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Edit Customer: {{ customer.name }}</h2>
+
+<div class="card mb-4 shadow-sm">
+    <div class="card-header bg-warning text-dark">
+        <i class="fas fa-edit me-2"></i> Edit Customer Details
+    </div>
+    <div class="card-body">
+        <form id="editCustomerForm">
+            <input type="hidden" id="customerId" value="{{ customer.id }}">
+            <div class="mb-3">
+                <label for="name" class="form-label">Customer Name</label>
+                <input type="text" class="form-control" id="name" value="{{ customer.name }}" required>
+            </div>
+            <div class="mb-3">
+                <label for="phoneNumber" class="form-label">Phone Number</label>
+                <input type="tel" class="form-control" id="phoneNumber" value="{{ customer.phone_number }}" required>
+                <small class="form-text text-muted">Include country code, e.g., +254712345678</small>
+            </div>
+            <div class="mb-3">
+                <label for="code" class="form-label">Customer Code</label>
+                <input type="text" class="form-control" id="code" value="{{ customer.code }}" required>
+                <small class="form-text text-muted">Unique identifier for the customer.</small>
+            </div>
+            <div class="d-flex justify-content-between mt-4">
+                <a href="{{ url_for('customer_detail_page', customer_id=customer.id) }}" class="btn btn-secondary"><i class="fas fa-times-circle me-2"></i> Cancel</a>
+                <button type="submit" class="btn btn-warning"><i class="fas fa-save me-2"></i> Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="toast-container position-fixed top-0 end-0 p-3">
+    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto" id="toastHeader">Notification</strong>
+            <small>Just now</small>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" id="toastBody">
+            </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const editCustomerForm = document.getElementById('editCustomerForm');
+        const toastElement = document.getElementById('liveToast');
+        const toastBody = document.getElementById('toastBody');
+        const toastHeader = document.getElementById('toastHeader');
+        const liveToast = new bootstrap.Toast(toastElement);
+
+        function showToast(message, isSuccess = true) {
+            toastBody.textContent = message;
+            toastHeader.textContent = isSuccess ? 'Success' : 'Error';
+            toastElement.classList.remove('text-bg-success', 'text-bg-danger');
+            toastElement.classList.add(isSuccess ? 'text-bg-success' : 'text-bg-danger');
+            liveToast.show();
+        }
+
+        editCustomerForm.onsubmit = async function(event) {
+            event.preventDefault();
+            const id = document.getElementById('customerId').value;
+            const name = document.getElementById('name').value;
+            const phoneNumber = document.getElementById('phoneNumber').value;
+            const code = document.getElementById('code').value;
+
+            try {
+                const response = await fetch(`/customers/update_customers/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name, phone_number: phoneNumber, code })
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    showToast(result.message, true);
+                    // Redirect back to the customer detail page after successful update
+                    window.location.href = `/customers/${id}`;
+                } else {
+                    showToast(result.error || 'Failed to update customer', false);
+                }
+            } catch (error) {
+                console.error('Error updating customer:', error);
+                showToast('An error occurred while updating the customer.', false);
+            }
+        };
+    });
+</script>
+{% endblock %}

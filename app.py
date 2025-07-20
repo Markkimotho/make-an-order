@@ -1,6 +1,6 @@
-from flask import Flask, request, Response, render_template, redirect, url_for, session, jsonify  # type: ignore
+from flask import Flask, request, Response, render_template, redirect, url_for, session, jsonify
 from config import Config
-from models import db
+from models import db, Customer, Order # Import Customer and Order models
 from api.customers import customers_bp
 from api.orders import orders_bp
 from services.database_service import create_database
@@ -8,6 +8,7 @@ from authlib.integrations.flask_client import OAuth # type: ignore
 from datetime import timedelta
 from dotenv import load_dotenv
 from auth.auth_routes import create_auth_blueprint
+from auth.auth_middleware import login_required # Ensure login_required is imported
 import os
 import logging
 from logging.handlers import RotatingFileHandler
@@ -74,32 +75,51 @@ def index():
     return render_template('index.html') # Landing page with login button
 
 @app.route('/dashboard')
-# No @login_required here. The auth_routes '/' endpoint now handles the redirect from Google.
-# This dashboard route should be protected if directly accessed, but the flow usually goes
-# /login -> Google -> /authorize -> /dashboard.
-# So, the @login_required is more crucial on the API endpoints.
-# For a direct URL access, you might want to add @login_required here as well.
-# For simplicity and given the / route redirects to dashboard if logged in,
-# and auth_routes('/') is protected, we can leave it like this for now.
+@login_required
 def dashboard():
-    if 'profile' not in session: # Ensure session is still active
-        return redirect(url_for('auth.login'))
-    user_email = session['profile']['email']
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
     return render_template('dashboard.html', user_email=user_email)
 
 @app.route('/customers-ui')
+@login_required
 def customers_page():
-    if 'profile' not in session:
-        return redirect(url_for('auth.login'))
     user_email = session['profile']['email'] if 'profile' in session else 'Guest'
     return render_template('customers.html', user_email=user_email)
 
 @app.route('/orders-ui')
+@login_required
 def orders_page():
-    if 'profile' not in session:
-        return redirect(url_for('auth.login'))
     user_email = session['profile']['email'] if 'profile' in session else 'Guest'
     return render_template('orders.html', user_email=user_email)
+
+# --- NEW: Customer Detail/Edit Pages ---
+@app.route('/customers/<int:customer_id>')
+@login_required
+def customer_detail_page(customer_id):
+    customer = db.session.get(Customer, customer_id)
+    if not customer:
+        return render_template('404.html', message="Customer not found"), 404
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
+    return render_template('customer_detail.html', customer=customer, user_email=user_email)
+
+@app.route('/customers/<int:customer_id>/edit')
+@login_required
+def customer_edit_page(customer_id):
+    customer = db.session.get(Customer, customer_id)
+    if not customer:
+        return render_template('404.html', message="Customer not found"), 404
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
+    return render_template('customer_edit.html', customer=customer, user_email=user_email)
+
+# --- NEW: Order Edit Page ---
+@app.route('/orders/<int:order_id>/edit')
+@login_required
+def order_edit_page(order_id):
+    order = db.session.get(Order, order_id)
+    if not order:
+        return render_template('404.html', message="Order not found"), 404
+    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
+    return render_template('order_edit.html', order=order, user_email=user_email)
 
 
 # --- Centralized Error Handlers ---
@@ -116,7 +136,8 @@ def unauthorized_error(error):
 @app.errorhandler(404)
 def not_found_error(error):
     app.logger.warning(f"Not Found: {request.url}")
-    return jsonify({"error": "Not Found", "message": "The requested resource was not found"}), 404
+    # Render a more user-friendly 404 page for UI
+    return render_template('404.html', message="The page you are looking for does not exist."), 404
 
 @app.errorhandler(500)
 def internal_server_error(error):
@@ -128,7 +149,7 @@ def internal_server_error(error):
 @app.route('/incoming-messages', methods=['POST'])
 def incoming_messages():
     """
-    This route handles incoming messages sent to the AT shortcode.
+    This route handles incoming messages sent to your shortcode.
     Africa's Talking will send POST requests to this URL.
     """
     data = request.get_json(force=True)  # Get the incoming message data
