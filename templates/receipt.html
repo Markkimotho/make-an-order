@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Receipt — Order #{{ order.id }}{% endblock %}
+
+{% block content %}
+<style>
+@media print {
+    nav.navbar, .no-print { display: none !important; }
+    .content-wrapper { padding-top: 0 !important; }
+    .card { border: 1px solid #ddd !important; box-shadow: none !important; }
+    body { background: white !important; }
+}
+</style>
+
+<div class="no-print d-flex gap-2 mb-3 flex-wrap align-items-center">
+    <a href="javascript:history.back()" class="btn btn-sm btn-secondary">
+        <i class="fas fa-arrow-left me-1"></i>Back
+    </a>
+    <button onclick="window.print()" class="btn btn-sm btn-primary">
+        <i class="fas fa-print me-1"></i>Print Receipt
+    </button>
+</div>
+
+<div class="card mx-auto" style="max-width:680px;">
+    <!-- Header -->
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+            <div style="font-size:18px;font-weight:700;">Make-An-Order</div>
+            <div style="font-size:12px;color:var(--mac-text-muted);">Order Receipt</div>
+        </div>
+        <div class="text-end">
+            <div style="font-size:13px;font-weight:600;">Order #{{ order.id }}</div>
+            <div style="font-size:12px;color:var(--mac-text-muted);">
+                {{ order.time.strftime('%d %b %Y, %H:%M') if order.time else '—' }}
+            </div>
+            {% set status_cls = {
+                'pending':   'bg-warning text-dark',
+                'confirmed': 'bg-primary',
+                'completed': 'bg-success',
+                'cancelled': 'bg-danger',
+                'refunded':  'bg-secondary',
+            } %}
+            <span class="badge {{ status_cls.get(order.status, 'bg-secondary') }} mt-1">
+                {{ order.status | capitalize }}
+            </span>
+        </div>
+    </div>
+
+    <div class="card-body">
+        <!-- Customer info -->
+        <div class="row mb-4">
+            <div class="col-sm-6">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--mac-text-muted);margin-bottom:4px;">Bill To</div>
+                {% if order.customer %}
+                    <div style="font-size:14px;font-weight:600;">{{ order.customer.name }}</div>
+                    <div style="font-size:12px;color:var(--mac-text-muted);">{{ order.customer.phone_number }}</div>
+                    {% if order.customer.email %}
+                    <div style="font-size:12px;color:var(--mac-text-muted);">{{ order.customer.email }}</div>
+                    {% endif %}
+                    <div style="font-size:12px;color:var(--mac-text-muted);">Code: {{ order.customer.code }}</div>
+                {% else %}
+                    <div style="font-size:13px;color:var(--mac-text-muted);">—</div>
+                {% endif %}
+            </div>
+            {% if order.payment_method %}
+            <div class="col-sm-6 text-sm-end">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--mac-text-muted);margin-bottom:4px;">Payment</div>
+                <div style="font-size:14px;font-weight:600;">
+                    {% if order.payment_method == 'cash' %}<i class="fas fa-money-bill-wave me-1"></i>Cash
+                    {% elif order.payment_method == 'mpesa' %}<i class="fas fa-mobile-alt me-1"></i>M-Pesa
+                    {% elif order.payment_method == 'card' %}<i class="fas fa-credit-card me-1"></i>Card
+                    {% else %}{{ order.payment_method | capitalize }}{% endif %}
+                </div>
+                {% if order.payment_reference %}
+                <div style="font-size:12px;color:var(--mac-text-muted);">Ref: {{ order.payment_reference }}</div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Line items -->
+        <table class="table table-sm" style="font-size:13px;">
+            <thead style="background:var(--mac-bg-lt);">
+                <tr>
+                    <th style="font-weight:600;">Item</th>
+                    <th style="font-weight:600;text-align:center;">Qty</th>
+                    <th style="font-weight:600;text-align:right;">Unit Price</th>
+                    <th style="font-weight:600;text-align:right;">Subtotal</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if order.order_items %}
+                    {% for oi in order.order_items %}
+                    <tr>
+                        <td>{{ oi.item_name }}</td>
+                        <td style="text-align:center;">{{ oi.quantity }}</td>
+                        <td style="text-align:right;">{{ '%.2f' | format(oi.unit_price | float) }}</td>
+                        <td style="text-align:right;font-weight:600;">{{ '%.2f' | format(oi.subtotal | float) }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <!-- Legacy order: show summary row -->
+                    <tr>
+                        <td colspan="3">{{ order.item }}</td>
+                        <td style="text-align:right;font-weight:600;">{{ '%.2f' | format(order.amount | float) }}</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+            <tfoot>
+                <tr style="border-top:2px solid var(--mac-border);">
+                    <td colspan="3" style="text-align:right;font-weight:700;font-size:14px;">Total</td>
+                    <td style="text-align:right;font-weight:700;font-size:14px;">
+                        {{ '%.2f' | format(order.amount | float) }}
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div class="card-footer text-center" style="font-size:12px;color:var(--mac-text-muted);">
+        Thank you for your business!
+    </div>
+</div>
+{% endblock %}

@@ -5,73 +5,73 @@
 {% block content %}
 <h2 class="mb-4">Order Management</h2>
 
-<div class="card mb-4 shadow-sm">
-    <div class="card-header bg-success text-white">
-        <i class="fas fa-shopping-basket me-2"></i> Place New Order
-    </div>
-    <div class="card-body">
-        <form id="placeOrderForm">
-            <div class="mb-3">
-                <label for="orderCustomerId" class="form-label">Select Customer</label>
-                <select class="form-select" id="orderCustomerId" required>
-                    <option value="">Loading customers...</option>
-                </select>
-                <small class="form-text text-muted">Choose the customer for this order.</small>
+<div class="row g-4 mb-4">
+    <!-- Place Order via Inventory -->
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header bg-success">
+                <i class="fas fa-plus-circle me-2"></i>Place New Order
             </div>
-            <div class="mb-3">
-                <label for="item" class="form-label">Item Name</label>
-                <input type="text" class="form-control" id="item" placeholder="E.g., Laptop, Smartphone" required>
+            <div class="card-body d-flex flex-column">
+                <p class="card-text mb-4" style="color: var(--mac-text-sub);">
+                    Browse live stock, build a cart, and place orders with automatic inventory tracking and SMS confirmation.
+                </p>
+                <a href="{{ url_for('inventory_page') }}" class="btn btn-success mt-auto">
+                    <i class="fas fa-store me-2"></i>Go to Inventory &amp; Place Order
+                </a>
             </div>
-            <div class="mb-3">
-                <label for="amount" class="form-label">Amount</label>
-                <input type="number" step="0.01" class="form-control" id="amount" placeholder="E.g., 1200.50" required>
-                <small class="form-text text-muted">Enter the total amount for the order.</small>
-            </div>
-            <button type="submit" class="btn btn-success mt-2"><i class="fas fa-plus-square me-2"></i> Place Order</button>
-        </form>
-        <div id="placeOrderMessage" class="mt-3"></div>
-    </div>
-</div>
-
-<div class="card mb-4 shadow-sm">
-    <div class="card-header bg-secondary text-white">
-        <i class="fas fa-filter me-2"></i> Filter Orders
-    </div>
-    <div class="card-body">
-        <div class="mb-3">
-            <label for="filterCustomerId" class="form-label">Filter by Customer</label>
-            <select class="form-select" id="filterCustomerId">
-                <option value="">View All Orders</option>
-                </select>
-            <small class="form-text text-muted">Select a customer to see only their orders, or choose "View All Orders".</small>
         </div>
-        <button id="filterOrdersBtn" class="btn btn-secondary mt-2"><i class="fas fa-search me-2"></i> Apply Filter</button>
+    </div>
+
+    <!-- Filter Orders -->
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header bg-secondary">
+                <i class="fas fa-filter me-2"></i>Filter Orders
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="filterCustomerId" class="form-label">Filter by Customer</label>
+                    <select class="form-select" id="filterCustomerId">
+                        <option value="">View All Orders</option>
+                    </select>
+                    <div class="form-text">Select a customer to show only their orders.</div>
+                </div>
+                <button id="filterOrdersBtn" class="btn btn-secondary">
+                    <i class="fas fa-magnifying-glass me-2"></i>Apply Filter
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 
-
-<div class="card shadow-sm">
-    <div class="card-header bg-info text-white">
-        <i class="fas fa-receipt me-2"></i> All Orders
+<!-- Orders Table -->
+<div class="card">
+    <div class="card-header bg-info d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-receipt me-2"></i>Orders</span>
+        <a id="exportCsvBtn" href="/orders/export" class="btn btn-sm btn-light">
+            <i class="fas fa-file-csv me-1"></i>Export CSV
+        </a>
     </div>
-    <div class="card-body">
+    <div class="card-body" style="padding: 0 !important;">
         <div class="table-responsive">
-            <table class="table table-hover table-striped">
+            <table class="table table-hover table-striped mb-0">
                 <thead>
                     <tr>
-                        <th>Order ID</th>
-                        <th>Customer ID</th>
-                        <th>Item</th>
-                        <th>Amount</th>
+                        <th>ID</th>
+                        <th>Customer</th>
+                        <th>Items</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                        <th>Payment</th>
                         <th>Time</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody id="orderTableBody">
-                    </tbody>
+                <tbody id="orderTableBody"></tbody>
             </table>
         </div>
-        <div id="orderListMessage" class="mt-3"></div>
+        <div id="orderListMessage" class="p-3"></div>
     </div>
 </div>
 
@@ -82,38 +82,41 @@
             <small>Just now</small>
             <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
         </div>
-        <div class="toast-body" id="toastBody">
-            </div>
+        <div class="toast-body" id="toastBody"></div>
     </div>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const placeOrderForm = document.getElementById('placeOrderForm');
-        const orderTableBody = document.getElementById('orderTableBody');
-        const orderCustomerIdSelect = document.getElementById('orderCustomerId');
+        const orderTableBody         = document.getElementById('orderTableBody');
         const filterCustomerIdSelect = document.getElementById('filterCustomerId');
-        const filterOrdersBtn = document.getElementById('filterOrdersBtn');
+        const filterOrdersBtn        = document.getElementById('filterOrdersBtn');
+        const toastElement           = document.getElementById('liveToast');
+        const toastBody              = document.getElementById('toastBody');
+        const toastHeader            = document.getElementById('toastHeader');
+        const liveToast              = new bootstrap.Toast(toastElement);
 
-        const toastElement = document.getElementById('liveToast');
-        const toastBody = document.getElementById('toastBody');
-        const toastHeader = document.getElementById('toastHeader');
-        const liveToast = new bootstrap.Toast(toastElement);
+        const STATUS_BADGES = {
+            pending:   'bg-warning text-dark',
+            confirmed: 'bg-primary',
+            completed: 'bg-success',
+            cancelled: 'bg-danger',
+            refunded:  'bg-secondary',
+        };
+        const PAYMENT_ICONS = {
+            cash:  '<i class="fas fa-money-bill-wave me-1"></i>Cash',
+            mpesa: '<i class="fas fa-mobile-alt me-1"></i>M-Pesa',
+            card:  '<i class="fas fa-credit-card me-1"></i>Card',
+        };
 
         function initializeTooltips() {
-            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(tooltipEl => {
-                const tooltip = bootstrap.Tooltip.getInstance(tooltipEl);
-                if (tooltip) {
-                    tooltip.dispose();
-                }
+            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+                const t = bootstrap.Tooltip.getInstance(el);
+                if (t) t.dispose();
             });
-            var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-            tooltipTriggerList.map(function (tooltipTriggerEl) {
-                return new bootstrap.Tooltip(tooltipTriggerEl);
-            });
+            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
         }
 
         function showToast(message, isSuccess = true) {
@@ -124,181 +127,145 @@
             liveToast.show();
         }
 
-        async function fetchCustomersForSelects() {
+        async function fetchCustomersForFilter() {
             try {
                 const response = await fetch('/customers/view_customers');
                 if (!response.ok) {
-                    if (response.status === 401) {
-                        window.location.href = '/login';
-                        return;
-                    }
-                    const errorData = await response.json();
-                    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+                    if (response.status === 401) { window.location.href = '/login'; return; }
+                    throw new Error(`HTTP ${response.status}`);
                 }
-                const customers = await response.json();
-
-                orderCustomerIdSelect.innerHTML = '<option value="">Select a Customer</option>';
+                const data = await response.json();
+                const customers = data.customers || data;  // Support both old and new format
                 filterCustomerIdSelect.innerHTML = '<option value="">View All Orders</option>';
-
-                if (customers.length === 0) {
-                    orderCustomerIdSelect.innerHTML = '<option value="">No customers found. Add one first!</option>';
-                    orderCustomerIdSelect.disabled = true;
-                    filterCustomerIdSelect.disabled = true;
-                } else {
-                    orderCustomerIdSelect.disabled = false;
-                    filterCustomerIdSelect.disabled = false;
-                    customers.forEach(customer => {
-                        const option1 = document.createElement('option');
-                        option1.value = customer.id;
-                        option1.textContent = `${customer.name} (ID: ${customer.id})`;
-                        orderCustomerIdSelect.appendChild(option1);
-
-                        const option2 = document.createElement('option');
-                        option2.value = customer.id;
-                        option2.textContent = `${customer.name} (ID: ${customer.id})`;
-                        filterCustomerIdSelect.appendChild(option2);
-                    });
-                }
-
+                customers.forEach(c => {
+                    filterCustomerIdSelect.appendChild(new Option(c.name, c.id));
+                });
                 const urlParams = new URLSearchParams(window.location.search);
-                const customerIdFromUrl = urlParams.get('customer_id');
-                if (customerIdFromUrl && customers.some(c => c.id == customerIdFromUrl)) {
-                    filterCustomerIdSelect.value = customerIdFromUrl;
-                    fetchOrders(customerIdFromUrl);
+                const cid = urlParams.get('customer_id');
+                if (cid && customers.some(c => c.id == cid)) {
+                    filterCustomerIdSelect.value = cid;
+                    fetchOrders(cid);
                 } else {
                     fetchOrders();
                 }
-
             } catch (error) {
-                console.error('Error fetching customers for selects:', error);
-                showToast(`Failed to load customers for forms: ${error.message}`, false);
-                orderCustomerIdSelect.innerHTML = '<option value="">Error loading customers</option>';
-                orderCustomerIdSelect.disabled = true;
-                filterCustomerIdSelect.disabled = true;
+                showToast(`Failed to load customers: ${error.message}`, false);
+                fetchOrders();
             }
         }
 
         async function fetchOrders(customerId = null) {
             let url = '/orders/view_orders';
-            if (customerId) {
-                url += `/${customerId}`;
-            }
+            if (customerId) url += `/${customerId}`;
 
+            // Keep export link in sync with active filter
+            const exportBtn = document.getElementById('exportCsvBtn');
+            exportBtn.href = customerId ? `/orders/export?customer_id=${customerId}` : '/orders/export';
             try {
                 const response = await fetch(url);
                 if (!response.ok) {
-                    if (response.status === 401) {
-                        window.location.href = '/login';
-                        return;
-                    }
-                    if (response.status === 404 && customerId) {
-                        const result = await response.json();
-                        orderTableBody.innerHTML = `<tr><td colspan="6" class="text-center">${result.message}</td></tr>`;
-                        return;
-                    }
-                    const errorData = await response.json();
-                    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+                    if (response.status === 401) { window.location.href = '/login'; return; }
+                    throw new Error(`HTTP ${response.status}`);
                 }
-                const orders = await response.json();
+                const data = await response.json();
+                const orders = data.orders || data;  // Support both old and new format
+                const pagination = data.pagination;
                 orderTableBody.innerHTML = '';
                 if (orders.length === 0) {
-                    orderTableBody.innerHTML = '<tr><td colspan="6" class="text-center">No orders found.</td></tr>';
-                } else {
-                    orders.forEach(order => {
-                        const row = orderTableBody.insertRow();
-                        row.insertCell(0).textContent = order.id;
-                        row.insertCell(1).textContent = order.customer_id;
-                        row.insertCell(2).textContent = order.item;
-                        row.insertCell(3).textContent = parseFloat(order.amount).toFixed(2);
-                        row.insertCell(4).textContent = new Date(order.time).toLocaleString();
-                        const actionsCell = row.insertCell(5);
-                        // Changed to anchor tags linking to dedicated page
-                        actionsCell.innerHTML = `
-                            <a href="/orders/${order.id}/edit" class="btn btn-sm btn-warning me-2" data-bs-toggle="tooltip" data-bs-placement="top" title="Edit Order"><i class="fas fa-edit"></i> Edit</a>
-                            <button type="button" class="btn btn-sm btn-danger delete-btn" data-id="${order.id}" data-bs-toggle="tooltip" data-bs-placement="top" title="Delete Order"><i class="fas fa-trash-alt"></i> Delete</button>
-                        `;
-                    });
-                    attachEventListeners(); // Re-attach event listeners for delete
-                    initializeTooltips(); // Initialize tooltips for newly created buttons
+                    orderTableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--mac-text-muted);">No orders found.</td></tr>';
+                    return;
                 }
+                orders.forEach(o => {
+                    const statusCls = STATUS_BADGES[o.status] || 'bg-secondary';
+                    const payHtml   = o.payment_method
+                        ? `<span class="badge bg-dark">${PAYMENT_ICONS[o.payment_method] || o.payment_method}</span>${o.payment_reference ? `<br><small class="text-muted">${o.payment_reference}</small>` : ''}`
+                        : '<span class="text-muted" style="font-size:12px;">—</span>';
+
+                    // Build items display
+                    let itemsHtml;
+                    if (o.items && o.items.length > 0) {
+                        itemsHtml = o.items.map(i =>
+                            `<div style="font-size:12px;">${i.item_name}${i.quantity > 1 ? ` ×${i.quantity}` : ''} <span class="text-muted">@ ${parseFloat(i.unit_price).toFixed(2)}</span></div>`
+                        ).join('');
+                    } else {
+                        itemsHtml = `<span style="font-size:12px;">${o.item}</span>`;
+                    }
+
+                    const row = orderTableBody.insertRow();
+                    row.insertCell(0).textContent = o.id;
+                    row.insertCell(1).textContent = o.customer_name || '—';
+                    row.insertCell(2).innerHTML   = itemsHtml;
+                    row.insertCell(3).textContent = parseFloat(o.amount).toFixed(2);
+                    row.insertCell(4).innerHTML   = `<span class="badge ${statusCls}">${o.status || 'pending'}</span>`;
+                    row.insertCell(5).innerHTML   = payHtml;
+                    row.insertCell(6).textContent = o.time ? new Date(o.time).toLocaleString() : '—';
+                    row.insertCell(7).innerHTML   = `
+                        <div class="d-flex flex-wrap gap-1 align-items-center">
+                            <select class="form-select form-select-sm status-select" data-id="${o.id}" style="width:120px;">
+                                ${['pending','confirmed','completed','cancelled','refunded'].map(s =>
+                                    `<option value="${s}"${s === o.status ? ' selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
+                                ).join('')}
+                            </select>
+                            <a href="/orders/${o.id}/receipt" class="btn btn-sm btn-info"
+                               data-bs-toggle="tooltip" title="Receipt"><i class="fas fa-file-invoice"></i></a>
+                            <a href="/orders/${o.id}/edit" class="btn btn-sm btn-warning"
+                               data-bs-toggle="tooltip" title="Edit"><i class="fas fa-pencil"></i></a>
+                            <button class="btn btn-sm btn-danger delete-btn" data-id="${o.id}"
+                               data-bs-toggle="tooltip" title="Delete"><i class="fas fa-trash"></i></button>
+                        </div>
+                    `;
+                });
+                attachListeners();
+                initializeTooltips();
             } catch (error) {
-                console.error('Error fetching orders:', error);
                 showToast(`Failed to load orders: ${error.message}`, false);
             }
         }
 
-        function attachEventListeners() {
-            orderTableBody.removeEventListener('click', handleDeleteButtonEvent);
-            orderTableBody.addEventListener('click', handleDeleteButtonEvent);
-        }
-
-        async function handleDeleteButtonEvent(event) {
-            if (event.target.classList.contains('delete-btn') || event.target.closest('.delete-btn')) {
-                const button = event.target.closest('.delete-btn');
-                const id = button.dataset.id;
-                if (confirm('Are you sure you want to delete this order?')) {
+        function attachListeners() {
+            orderTableBody.querySelectorAll('.status-select').forEach(sel => {
+                sel.addEventListener('change', async function() {
+                    const id     = this.dataset.id;
+                    const status = this.value;
                     try {
-                        const response = await fetch(`/orders/delete_orders/${id}`, {
-                            method: 'DELETE',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            }
+                        const r = await fetch(`/orders/${id}/status`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ status }),
                         });
-                        const result = await response.json();
-                        if (response.ok) {
-                            showToast(result.message, true);
-                            fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
+                        const res = await r.json();
+                        if (r.ok) {
+                            showToast(res.message, true);
+                            fetchOrders(filterCustomerIdSelect.value || null);
                         } else {
-                            showToast(result.error || 'Failed to delete order', false);
+                            showToast(res.error || 'Failed to update status', false);
                         }
-                    } catch (error) {
-                        console.error('Error deleting order:', error);
-                        showToast('An error occurred during deletion.', false);
-                    }
-                }
-            }
+                    } catch { showToast('Error updating status', false); }
+                });
+            });
+
+            orderTableBody.removeEventListener('click', handleDelete);
+            orderTableBody.addEventListener('click', handleDelete);
         }
 
-        placeOrderForm.onsubmit = async function(event) {
-            event.preventDefault();
-            const customer_id = document.getElementById('orderCustomerId').value;
-            const item = document.getElementById('item').value;
-            const amount = parseFloat(document.getElementById('amount').value);
-
-            if (!customer_id) {
-                showToast('Please select a customer.', false);
-                return;
-            }
-
+        async function handleDelete(event) {
+            const btn = event.target.closest('.delete-btn');
+            if (!btn) return;
+            if (!confirm('Delete this order? Inventory stock will be restored.')) return;
             try {
-                const response = await fetch('/orders/place_order', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ customer_id: parseInt(customer_id), item, amount })
+                const r = await fetch(`/orders/delete_orders/${btn.dataset.id}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
                 });
-                const result = await response.json();
-                if (response.ok) {
-                    showToast(result.message + (result.sms_status ? ` SMS Status: ${result.sms_status}` : ''), true);
-                    placeOrderForm.reset();
-                    document.getElementById('orderCustomerId').value = customer_id;
-                    fetchOrders(filterCustomerIdSelect.value === "" ? null : filterCustomerIdSelect.value);
-                } else {
-                    showToast(result.error || 'Failed to place order', false);
-                }
-            } catch (error) {
-                console.error('Error placing order:', error);
-                showToast('An error occurred while placing the order.', false);
-            }
-        };
+                const res = await r.json();
+                if (r.ok) { showToast(res.message, true); fetchOrders(filterCustomerIdSelect.value || null); }
+                else { showToast(res.error || 'Failed to delete order', false); }
+            } catch { showToast('An error occurred during deletion.', false); }
+        }
 
-        filterOrdersBtn.addEventListener('click', function() {
-            const selectedCustomerId = filterCustomerIdSelect.value;
-            fetchOrders(selectedCustomerId === "" ? null : selectedCustomerId);
-        });
+        filterOrdersBtn.addEventListener('click', () => fetchOrders(filterCustomerIdSelect.value || null));
 
-        fetchCustomersForSelects();
+        fetchCustomersForFilter();
     });
 </script>
 {% endblock %}

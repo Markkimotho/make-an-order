@@ -1,28 +1,174 @@
 {% extends "base.html" %}
 
-{% block title %}Customer Details{% endblock %}
+{% block title %}Customer — {{ customer.name }}{% endblock %}
 
 {% block content %}
 <h2 class="mb-4">Customer Details</h2>
 
-<div class="card shadow-sm mb-4">
-    <div class="card-header bg-info text-white">
-        <i class="fas fa-user me-2"></i> {{ customer.name }} (ID: {{ customer.id }})
-    </div>
-    <div class="card-body">
-        <p class="card-text"><strong>Phone Number:</strong> {{ customer.phone_number }}</p>
-        <p class="card-text"><strong>Customer Code:</strong> {{ customer.code }}</p>
-
-        <hr>
-
-        <div class="d-flex justify-content-between align-items-center">
-            <div>
-                <a href="{{ url_for('customers_page') }}" class="btn btn-secondary me-2"><i class="fas fa-arrow-left me-2"></i>Back to Customers</a>
-                <a href="{{ url_for('customer_edit_page', customer_id=customer.id) }}" class="btn btn-warning"><i class="fas fa-edit me-2"></i>Edit Customer</a>
+<div class="row g-3 mb-4">
+    <div class="col-lg-4">
+        <div class="card h-100">
+            <div class="card-header bg-info">
+                <i class="fas fa-circle-user me-2"></i>{{ customer.name }}
             </div>
-            <a href="{{ url_for('orders_page', customer_id=customer.id) }}" class="btn btn-info"><i class="fas fa-receipt me-2"></i>View Orders for This Customer</a>
+            <div class="card-body">
+                <table class="table mb-0" style="font-size: 13px;">
+                    <tbody>
+                        <tr>
+                            <td style="width: 100px; font-weight: 600; color: var(--mac-text-sub); border: none; padding-left: 0;">ID</td>
+                            <td style="border: none;">{{ customer.id }}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-weight: 600; color: var(--mac-text-sub); border-top: 1px solid var(--mac-border-lt); padding-left: 0;">Name</td>
+                            <td style="border-top: 1px solid var(--mac-border-lt);">{{ customer.name }}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-weight: 600; color: var(--mac-text-sub); border-top: 1px solid var(--mac-border-lt); padding-left: 0;">Phone</td>
+                            <td style="border-top: 1px solid var(--mac-border-lt);">{{ customer.phone_number }}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-weight: 600; color: var(--mac-text-sub); border-top: 1px solid var(--mac-border-lt); padding-left: 0;">Email</td>
+                            <td style="border-top: 1px solid var(--mac-border-lt);">{{ customer.email or '—' }}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-weight: 600; color: var(--mac-text-sub); border-top: 1px solid var(--mac-border-lt); padding-left: 0;">Code</td>
+                            <td style="border-top: 1px solid var(--mac-border-lt);">{{ customer.code }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <hr>
+
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div class="d-flex gap-2">
+                        <a href="{{ url_for('customers_page') }}" class="btn btn-secondary" style="font-size: 13px; padding: 6px 12px;">
+                            <i class="fas fa-arrow-left me-1"></i>Back
+                        </a>
+                        <a href="{{ url_for('customer_edit_page', customer_id=customer.id) }}" class="btn btn-warning" style="font-size: 13px; padding: 6px 12px;">
+                            <i class="fas fa-pencil me-1"></i>Edit
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats cards -->
+    <div class="col-lg-8">
+        <div class="row g-2">
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div style="font-size: 11px; color: var(--mac-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Total Orders</div>
+                        <div id="statTotalOrders" style="font-size: 28px; font-weight: 700;">—</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div style="font-size: 11px; color: var(--mac-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Total Spent</div>
+                        <div id="statTotalSpent" style="font-size: 28px; font-weight: 700;">—</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div style="font-size: 11px; color: var(--mac-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Completed</div>
+                        <div id="statCompleted" style="font-size: 28px; font-weight: 700;">—</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <div style="font-size: 11px; color: var(--mac-text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Pending</div>
+                        <div id="statPending" style="font-size: 28px; font-weight: 700;">—</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
+<!-- Order history -->
+<div class="card">
+    <div class="card-header bg-info">
+        <i class="fas fa-receipt me-2"></i>Order History
+    </div>
+    <div class="card-body" style="padding: 0 !important;">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Order #</th>
+                        <th>Items</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="orderHistoryBody">
+                    <tr><td colspan="6" style="text-align: center; color: var(--mac-text-muted); padding: 24px;">Loading orders…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', async function() {
+    const customerId = {{ customer.id }};
+    const STATUS_BADGES = {
+        pending: 'bg-warning text-dark',
+        confirmed: 'bg-primary',
+        completed: 'bg-success',
+        cancelled: 'bg-danger',
+        refunded: 'bg-secondary',
+    };
+
+    try {
+        const r = await fetch(`/customers/view_customers/${customerId}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+
+        // Update stats
+        document.getElementById('statTotalOrders').textContent = data.stats.total_orders;
+        document.getElementById('statTotalSpent').textContent = '$' + data.stats.total_spent.toFixed(2);
+        document.getElementById('statCompleted').textContent = data.stats.completed_orders;
+        document.getElementById('statPending').textContent = data.stats.pending_orders;
+
+        // Render order history
+        const tbody = document.getElementById('orderHistoryBody');
+        if (!data.orders.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--mac-text-muted); padding: 24px;">No orders yet.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = data.orders.map(o => {
+            const date = o.time ? new Date(o.time).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+            const statusCls = STATUS_BADGES[o.status] || 'bg-secondary';
+            return `<tr>
+                <td style="font-weight: 600;">#${o.id}</td>
+                <td style="font-size: 12px;">${o.item}</td>
+                <td>$${parseFloat(o.amount).toFixed(2)}</td>
+                <td><span class="badge ${statusCls}">${o.status || 'pending'}</span></td>
+                <td style="white-space: nowrap;">${date}</td>
+                <td>
+                    <a href="/orders/${o.id}/receipt" class="btn btn-sm btn-outline-secondary" title="Receipt" style="padding: 2px 6px; font-size: 11px;">
+                        <i class="fas fa-file-invoice"></i>
+                    </a>
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        document.getElementById('orderHistoryBody').innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--mac-text-danger); padding: 24px;">Failed to load orders.</td></tr>';
+    }
+});
+</script>
 {% endblock %}

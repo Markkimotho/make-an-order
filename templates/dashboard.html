@@ -1,28 +1,247 @@
 {% extends "base.html" %}
-
 {% block title %}Dashboard{% endblock %}
-
 {% block content %}
-<h2 class="mb-4">Welcome, {{ user_email }}!</h2>
-<p class="lead mb-4 text-secondary">Navigate through your management tools:</p>
+
+{% if user_role in ('admin', 'superuser') %}
+<!-- ADMIN / SUPERUSER DASHBOARD -->
+<h2 class="mb-1">Dashboard</h2>
+<p class="lead mb-4">Welcome back, {{ user_email }}</p>
 <div class="row">
-    <div class="col-md-6 mb-4">
-        <div class="card text-center shadow-sm dashboard-card">
-            <div class="card-body">
-                <h5 class="card-title"><i class="fas fa-users fa-3x mb-3"></i></h5>
-                <p class="card-text">Effortlessly manage your customer base: add, view, update, and delete customer records.</p>
-                <a href="{{ url_for('customers_page') }}" class="btn btn-primary btn-lg mt-3">Go to Customers</a>
+    <div class="col-md-3 mb-4">
+        <div class="card dashboard-card h-100">
+            <div class="card-header bg-primary">
+                <i class="fas fa-users me-2"></i>Customers
+            </div>
+            <div class="card-body d-flex flex-column align-items-start">
+                <p class="card-text mb-4" style="color: var(--mac-text-sub);">Add, view, edit, and remove customer records.</p>
+                <a href="{{ url_for('customers_page') }}" class="btn btn-primary mt-auto">
+                    <i class="fas fa-users me-2"></i>Open Customers
+                </a>
             </div>
         </div>
     </div>
-    <div class="col-md-6 mb-4">
-        <div class="card text-center shadow-sm dashboard-card">
-            <div class="card-body">
-                <h5 class="card-title"><i class="fas fa-shopping-cart fa-3x mb-3"></i></h5>
-                <p class="card-text">Handle all your customer orders: place new orders, track, modify, and manage.</p>
-                <a href="{{ url_for('orders_page') }}" class="btn btn-success btn-lg mt-3">Go to Orders</a>
+    <div class="col-md-3 mb-4">
+        <div class="card dashboard-card h-100">
+            <div class="card-header bg-success">
+                <i class="fas fa-receipt me-2"></i>Orders
+            </div>
+            <div class="card-body d-flex flex-column align-items-start">
+                <p class="card-text mb-4" style="color: var(--mac-text-sub);">View and manage all order history across customers.</p>
+                <a href="{{ url_for('orders_page') }}" class="btn btn-success mt-auto">
+                    <i class="fas fa-receipt me-2"></i>Open Orders
+                </a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-4">
+        <div class="card dashboard-card h-100">
+            <div class="card-header" style="background: linear-gradient(to bottom, #f3e5f5, #e1bee7) !important; color: #6a1b9a !important;">
+                <i class="fas fa-store me-2"></i>Inventory
+            </div>
+            <div class="card-body d-flex flex-column align-items-start">
+                <p class="card-text mb-4" style="color: var(--mac-text-sub);">Browse stock, build a cart, and place orders in one step.</p>
+                <a href="{{ url_for('inventory_page') }}" class="btn mt-auto"
+                   style="background: linear-gradient(to bottom, #ce93d8, #8e24aa); border: 1px solid #6a1b9a; color: white; font-size: 13px; padding: 5px 14px; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);">
+                    <i class="fas fa-store me-2"></i>Open Inventory
+                </a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-4">
+        <div class="card dashboard-card h-100">
+            <div class="card-header bg-warning">
+                <i class="fas fa-shield-halved me-2"></i>
+                {% if user_role == 'superuser' %}Users{% else %}Approvals{% endif %}
+                <span class="badge bg-danger ms-2 d-none" id="pendingCountBadge" style="font-size:10px;">0</span>
+            </div>
+            <div class="card-body d-flex flex-column align-items-start">
+                <p class="card-text mb-4" style="color: var(--mac-text-sub);">
+                    {% if user_role == 'superuser' %}
+                        Manage user roles and approve new registrations.
+                    {% else %}
+                        Review and approve pending user registrations.
+                    {% endif %}
+                </p>
+                <a href="{{ url_for('users_page') }}" class="btn btn-warning mt-auto">
+                    <i class="fas fa-shield-halved me-2"></i>
+                    {% if user_role == 'superuser' %}Manage Users{% else %}View Approvals{% endif %}
+                </a>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Low-stock alert (admin only) -->
+<div id="lowStockAlert" class="d-none mb-4">
+    <div class="card border-warning">
+        <div class="card-header d-flex justify-content-between align-items-center"
+             style="background:linear-gradient(to bottom,#fff8e1,#fff3cd);color:#856404;">
+            <span><i class="fas fa-triangle-exclamation me-2"></i>Low Stock Alert
+                <span class="badge bg-warning text-dark ms-2" id="lowStockCount">0</span>
+            </span>
+            <a href="{{ url_for('inventory_page') }}" class="btn btn-sm btn-warning" style="font-size:12px;">
+                <i class="fas fa-boxes-stacked me-1"></i>Manage Inventory
+            </a>
+        </div>
+        <div class="card-body py-2">
+            <div id="lowStockItems" class="d-flex flex-wrap gap-2"></div>
+        </div>
+    </div>
+</div>
+
+{% else %}
+<!-- NORMAL USER DASHBOARD -->
+<h2 class="mb-1">My Account</h2>
+<p class="lead mb-4">{{ user_name or user_email }}</p>
+
+<div class="row">
+    <!-- Profile card -->
+    <div class="col-md-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-info">
+                <i class="fas fa-circle-user me-2"></i>My Profile
+            </div>
+            <div class="card-body d-flex flex-column">
+                <p style="font-size: 15px; font-weight: 700; margin-bottom: 2px;">{{ user_name or user_email }}</p>
+                <p style="font-size: 12px; color: var(--mac-text-muted); margin-bottom: 16px;">{{ user_email }}</p>
+                <div style="font-size: 12px; color: var(--mac-text-sub); margin-bottom: 6px;">
+                    <i class="fas fa-receipt me-1" style="color: var(--mac-blue);"></i>
+                    Total orders: <strong id="orderCount">…</strong>
+                </div>
+                <div style="font-size: 12px; color: var(--mac-text-sub); margin-bottom: 20px;">
+                    <i class="fas fa-dollar-sign me-1" style="color: var(--mac-green);"></i>
+                    Total spent: <strong id="orderTotal">…</strong>
+                </div>
+                <a href="{{ url_for('inventory_page') }}" class="btn btn-primary mt-auto">
+                    <i class="fas fa-store me-2"></i>Browse &amp; Order
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Orders table -->
+    <div class="col-md-8 mb-4">
+        <div class="card h-100">
+            <div class="card-header bg-info">
+                <i class="fas fa-receipt me-2"></i>My Orders
+            </div>
+            <div class="card-body" style="padding: 0 !important;">
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Item</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="myOrdersBody">
+                            <tr>
+                                <td colspan="6" style="text-align:center; color: var(--mac-text-muted);
+                                    padding: 24px !important; font-style: italic;">
+                                    Loading your orders&hellip;
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if user_role in ('admin', 'superuser') %}
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    // Fetch low-stock and pending approvals in parallel
+    const [lsRes, pcRes] = await Promise.allSettled([
+        fetch('/inventory/low_stock'),
+        fetch('/users/pending_count'),
+    ]);
+
+    // Low-stock alert
+    try {
+        if (lsRes.status === 'fulfilled' && lsRes.value.ok) {
+            const data = await lsRes.value.json();
+            if (data.count) {
+                document.getElementById('lowStockCount').textContent = data.count;
+                document.getElementById('lowStockItems').innerHTML = data.items.map(item =>
+                    `<span class="badge border" style="font-size:12px;background:#fff3cd;color:#856404;border-color:#ffc107 !important;">
+                        <i class="fas ${item.icon} me-1"></i>${item.name}
+                        <span class="badge bg-${item.stock === 0 ? 'danger' : 'warning'} text-dark ms-1">
+                            ${item.stock === 0 ? 'out' : item.stock}
+                        </span>
+                    </span>`
+                ).join('');
+                document.getElementById('lowStockAlert').classList.remove('d-none');
+            }
+        }
+    } catch (e) {}
+
+    // Pending approvals badge
+    try {
+        if (pcRes.status === 'fulfilled' && pcRes.value.ok) {
+            const data = await pcRes.value.json();
+            if (data.count > 0) {
+                const badge = document.getElementById('pendingCountBadge');
+                badge.textContent = data.count;
+                badge.classList.remove('d-none');
+            }
+        }
+    } catch (e) {}
+});
+</script>
+{% else %}
+<script>
+document.addEventListener('DOMContentLoaded', async function () {
+    const tbody   = document.getElementById('myOrdersBody');
+    const countEl = document.getElementById('orderCount');
+    const totalEl = document.getElementById('orderTotal');
+    if (!tbody) return;
+
+    try {
+        const r = await fetch('/orders/my_orders');
+        if (!r.ok) {
+            if (r.status === 401) { window.location.href = '/login'; return; }
+            throw new Error('Failed to load orders');
+        }
+        const orders = await r.json();
+
+        countEl.textContent = orders.length;
+        const total = orders.reduce((s, o) => s + o.amount, 0);
+        totalEl.textContent = '$' + total.toFixed(2);
+
+        if (!orders.length) {
+            tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mac-text-muted);padding:24px !important;font-style:italic;">No orders yet. <a href="{{ url_for('inventory_page') }}">Browse the shop</a> to place your first order.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = orders.map((o, i) => {
+            const date = o.time ? new Date(o.time).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+            const STATUS_BADGES = { pending: 'bg-warning text-dark', confirmed: 'bg-primary', completed: 'bg-success', cancelled: 'bg-danger', refunded: 'bg-secondary' };
+            const statusCls = STATUS_BADGES[o.status] || 'bg-secondary';
+            return `<tr>
+                <td>${i + 1}</td>
+                <td>${o.item}</td>
+                <td>$${o.amount.toFixed(2)}</td>
+                <td><span class="badge ${statusCls}">${o.status || 'pending'}</span></td>
+                <td style="white-space:nowrap;">${date}</td>
+                <td><a href="/orders/${o.id}/receipt" class="btn btn-sm btn-outline-secondary" style="font-size:11px;padding:2px 8px;"><i class="fas fa-file-invoice me-1"></i>Receipt</a></td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--mac-text-muted);padding:24px !important;font-style:italic;">Could not load orders.</td></tr>`;
+        if (countEl) countEl.textContent = '—';
+        if (totalEl) totalEl.textContent = '—';
+    }
+});
+</script>
+{% endif %}
 {% endblock %}

@@ -4,9 +4,11 @@
 
 {% block content %}
 <div class="text-center py-5">
-    <h1 class="display-1 text-secondary">404</h1>
-    <h2 class="mb-4">{{ message | default("Oops! Page Not Found") }}</h2>
-    <p class="lead">The resource you requested could not be found. It might have been moved or deleted.</p>
-    <a href="{{ url_for('dashboard') }}" class="btn btn-primary btn-lg mt-3">Go to Dashboard</a>
+    <div style="font-size: 80px; font-weight: 900; color: var(--mac-border); letter-spacing: -4px; line-height: 1;">404</div>
+    <h2 class="mt-3 mb-2">{{ message | default("Page Not Found") }}</h2>
+    <p class="lead mb-4">The resource you requested could not be found.</p>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-primary">
+        <i class="fas fa-house me-2"></i>Go to Dashboard
+    </a>
 </div>
 {% endblock %}

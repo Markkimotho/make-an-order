@@ -1,0 +1,799 @@
+{% extends "base.html" %}
+
+{% block title %}{% if user_role in ('admin', 'superuser') %}Inventory{% else %}Shop{% endif %}{% endblock %}
+
+{% block content %}
+
+{% if user_role in ('admin', 'superuser') %}
+<!-- ═══════════════════════════════ ADMIN VIEW (tabs) ═══════════════════════════════ -->
+<div class="d-flex align-items-center gap-3 mb-3">
+    <h2 class="mb-0">Inventory</h2>
+</div>
+
+<ul class="nav nav-tabs mb-3" id="inventoryTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="shop-tab" data-bs-toggle="tab"
+            data-bs-target="#shopPane" type="button" role="tab">
+            <i class="fas fa-cart-shopping me-2"></i>Shop &amp; Order
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="manage-tab" data-bs-toggle="tab"
+            data-bs-target="#managePane" type="button" role="tab">
+            <i class="fas fa-boxes-stacked me-2"></i>Manage Inventory
+            <span class="badge bg-danger ms-2 d-none" id="lowStockBadge">0 low</span>
+        </button>
+    </li>
+</ul>
+
+<div class="tab-content" id="inventoryTabContent">
+
+    <!-- ─── Shop & Order tab ─── -->
+    <div class="tab-pane fade show active" id="shopPane" role="tabpanel">
+        <p class="lead mb-2">Browse stock and build an order for any customer.</p>
+        <div class="d-flex gap-2 mb-3 align-items-end flex-wrap">
+            <div style="flex:1;min-width:200px;">
+                <label class="form-label" style="font-size:12px;">Search items</label>
+                <input type="text" class="form-control form-control-sm" id="itemSearchBox" placeholder="Type to search by name&hellip;">
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <label class="form-label" style="font-size:12px;">Scan barcode/SKU</label>
+                <input type="text" class="form-control form-control-sm" id="barcodeScanner" placeholder="Scan or type SKU&hellip;">
+            </div>
+            <div class="cat-filter" id="catFilter"></div>
+        </div>
+        <div class="row g-3">
+            <div class="col-lg-8">
+                <div class="item-grid" id="itemGrid">
+                    <div style="color:var(--mac-text-muted);font-size:13px;padding:20px;">Loading inventory&hellip;</div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="cart-panel">
+                    <div class="cart-header">
+                        <span><i class="fas fa-cart-shopping me-2"></i>Current Order</span>
+                        <span class="cart-count-badge" id="cartBadge">0</span>
+                    </div>
+                    <div class="cart-items" id="cartItems">
+                        <div class="cart-empty" id="cartEmpty">No items yet.<br>Click an item to add it.</div>
+                    </div>
+                    <div class="cart-footer">
+                        <div class="cart-total-row">
+                            <span class="cart-total-label">Total</span>
+                            <span class="cart-total-amount" id="cartTotal">$0.00</span>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label" style="font-size:11px;">Customer</label>
+                            <select class="form-select form-select-sm" id="cartCustomer">
+                                <option value="">Select a customer&hellip;</option>
+                            </select>
+                        </div>
+                        <button class="btn-place-order" id="placeOrderBtn" disabled>
+                            <i class="fas fa-check me-2"></i>Place Order
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Manage Inventory tab ─── -->
+    <div class="tab-pane fade" id="managePane" role="tabpanel">
+
+        <!-- Add Item form -->
+        <div class="card mb-4">
+            <div class="card-header"><i class="fas fa-plus me-2"></i>Add Item</div>
+            <div class="card-body">
+                <form id="addItemForm" class="row g-2">
+                    <div class="col-md-3">
+                        <input type="text" class="form-control form-control-sm" id="newName" placeholder="Item name" required>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="text" class="form-control form-control-sm" id="newCategory" placeholder="Category" required>
+                    </div>
+                    <div class="col-md-2">
+                        <input type="number" class="form-control form-control-sm" id="newPrice" placeholder="Price" step="0.01" min="0" required>
+                    </div>
+                    <div class="col-md-1">
+                        <input type="number" class="form-control form-control-sm" id="newStock" placeholder="Stock" min="0" value="0">
+                    </div>
+                    <div class="col-md-1">
+                        <input type="text" class="form-control form-control-sm" id="newSku" placeholder="SKU (optional)">
+                    </div>
+                    <div class="col-md-1">
+                        <input type="text" class="form-control form-control-sm" id="newIcon" placeholder="fa-box" value="fa-box">
+                    </div>
+                    <div class="col-md-2">
+                        <input type="text" class="form-control form-control-sm" id="newDescription" placeholder="Description (optional)">
+                    </div>
+                    <div class="col-md-1">
+                        <button type="submit" class="btn btn-sm btn-primary w-100">Add</button>
+                    </div>
+                </form>
+                <div id="addItemMsg" class="form-text mt-1"></div>
+            </div>
+        </div>
+
+        <!-- Inventory management table -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-list me-2"></i>All Items</span>
+                <button class="btn btn-sm btn-outline-secondary" id="refreshManageBtn">
+                    <i class="fas fa-arrows-rotate me-1"></i>Refresh
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0" id="manageTable">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Price</th>
+                                <th>Stock</th>
+                                <th style="min-width:160px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manageTableBody">
+                            <tr><td colspan="5" class="text-muted" style="font-size:13px;padding:16px;">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div><!-- end tab-content -->
+
+<!-- ─── Edit Item Modal ─── -->
+<div class="modal fade" id="editItemModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-pencil me-2"></i>Edit Item</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editItemForm">
+                    <input type="hidden" id="editItemId">
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Name</label>
+                        <input type="text" class="form-control form-control-sm" id="editName" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Category</label>
+                        <input type="text" class="form-control form-control-sm" id="editCategory" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Price</label>
+                        <input type="number" class="form-control form-control-sm" id="editPrice" step="0.01" min="0" required>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Description</label>
+                        <input type="text" class="form-control form-control-sm" id="editDescription">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">SKU (Barcode) - Optional</label>
+                        <input type="text" class="form-control form-control-sm" id="editSku">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label form-label-sm">Icon (FontAwesome class)</label>
+                        <input type="text" class="form-control form-control-sm" id="editIcon">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning btn-sm" id="saveEditBtn">
+                    <i class="fas fa-floppy-disk me-1"></i>Save
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── Restock Modal ─── -->
+<div class="modal fade" id="restockModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-arrow-up me-2"></i>Restock</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2" style="font-size:13px;font-weight:600;" id="restockItemName"></p>
+                <input type="hidden" id="restockItemId">
+                <div class="mb-2">
+                    <label class="form-label form-label-sm">Quantity to add</label>
+                    <input type="number" class="form-control form-control-sm" id="restockQty" min="1" value="1">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label form-label-sm">Note (optional)</label>
+                    <input type="text" class="form-control form-control-sm" id="restockNote" placeholder="e.g. Supplier XYZ">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success btn-sm" id="confirmRestockBtn">
+                    <i class="fas fa-check me-1"></i>Restock
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% else %}
+<!-- ═══════════════════════════════ NORMAL USER VIEW ═══════════════════════════════ -->
+<h2 class="mb-1">Shop</h2>
+<p class="lead mb-0">Pick items and place your order — your tab is updated instantly.</p>
+<div class="cat-filter" id="catFilter"></div>
+<div class="row g-3">
+    <div class="col-lg-8">
+        <div class="item-grid" id="itemGrid">
+            <div style="color:var(--mac-text-muted);font-size:13px;padding:20px;">Loading inventory&hellip;</div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="cart-panel">
+            <div class="cart-header">
+                <span><i class="fas fa-cart-shopping me-2"></i>Current Order</span>
+                <span class="cart-count-badge" id="cartBadge">0</span>
+            </div>
+            <div class="cart-items" id="cartItems">
+                <div class="cart-empty" id="cartEmpty">No items yet.<br>Click an item to add it.</div>
+            </div>
+            <div class="cart-footer">
+                <div class="cart-total-row">
+                    <span class="cart-total-label">Total</span>
+                    <span class="cart-total-amount" id="cartTotal">$0.00</span>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label" style="font-size:11px;">Ordering as</label>
+                    <div style="font-size:13px;font-weight:600;color:var(--mac-text);padding:5px 0;">
+                        <i class="fas fa-circle-user me-2" style="color:var(--mac-blue);"></i>{{ user_name or user_email }}
+                    </div>
+                </div>
+                <button class="btn-place-order" id="placeOrderBtn" disabled>
+                    <i class="fas fa-check me-2"></i>Place Order
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Toast -->
+<div class="toast-container position-fixed top-0 end-0 p-3">
+    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto" id="toastHeader">Notification</strong>
+            <small>Just now</small>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body" id="toastBody"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+
+    /* ── role flags ─────────────────────────────────── */
+    const isAdmin      = {{ 'true' if user_role in ('admin', 'superuser') else 'false' }};
+    const isSuperuser  = {{ 'true' if user_role == 'superuser' else 'false' }};
+
+    /* ── state ──────────────────────────────────────── */
+    let allItems       = [];
+    let activeCategory = 'All';
+    let activeSearch   = '';
+    const cart         = {};
+
+    /* ── DOM refs ────────────────────────────────────── */
+    const catFilter     = document.getElementById('catFilter');
+    const itemGrid      = document.getElementById('itemGrid');
+    const cartItems     = document.getElementById('cartItems');
+    const cartBadge     = document.getElementById('cartBadge');
+    const cartTotal     = document.getElementById('cartTotal');
+    const cartCustomer  = document.getElementById('cartCustomer');
+    const placeOrderBtn = document.getElementById('placeOrderBtn');
+    const toastEl       = document.getElementById('liveToast');
+    const toastBody     = document.getElementById('toastBody');
+    const toastHeader   = document.getElementById('toastHeader');
+    const liveToast     = new bootstrap.Toast(toastEl);
+
+    /* ── toast ──────────────────────────────────────── */
+    function showToast(msg, ok = true) {
+        toastBody.textContent   = msg;
+        toastHeader.textContent = ok ? 'Success' : 'Error';
+        toastEl.classList.remove('text-bg-success', 'text-bg-danger');
+        toastEl.classList.add(ok ? 'text-bg-success' : 'text-bg-danger');
+        liveToast.show();
+    }
+
+    /* ── helpers ─────────────────────────────────────── */
+    function chipClass(cat) {
+        const map = {
+            'Electronics':     'chip-electronics',
+            'Office':          'chip-office',
+            'Food & Beverage': 'chip-food',
+            'Accessories':     'chip-accessories',
+        };
+        return map[cat] || 'chip-default';
+    }
+
+    function stockBadge(stock) {
+        if (stock === 0)  return `<span class="item-stock-badge stock-out">Out of stock</span>`;
+        if (stock <= 10)  return `<span class="item-stock-badge stock-low">${stock} left</span>`;
+        return                   `<span class="item-stock-badge stock-ok">${stock} in stock</span>`;
+    }
+
+    function manageStockBadge(stock) {
+        if (stock === 0)  return `<span class="badge bg-danger">0</span>`;
+        if (stock <= 5)   return `<span class="badge bg-warning text-dark">${stock}</span>`;
+        return                   `<span class="badge bg-success">${stock}</span>`;
+    }
+
+    /* ── render grid ─────────────────────────────────── */
+    function renderGrid() {
+        let visible = activeCategory === 'All'
+            ? allItems
+            : allItems.filter(i => i.category === activeCategory);
+
+        if (activeSearch.trim()) {
+            const q = activeSearch.toLowerCase();
+            visible = visible.filter(i => i.name.toLowerCase().includes(q));
+        }
+
+        if (!visible.length) {
+            itemGrid.innerHTML = '<div style="color:var(--mac-text-muted);font-size:13px;padding:20px;">No items in this category.</div>';
+            return;
+        }
+
+        itemGrid.innerHTML = visible.map(item => {
+            const inCart   = cart[item.id] ? cart[item.id].qty : 0;
+            const btnLabel = inCart
+                ? `<i class="fas fa-plus me-1"></i>Add (${inCart} in cart)`
+                : `<i class="fas fa-plus me-1"></i>Add to Order`;
+            return `
+            <div class="item-card${item.stock === 0 ? ' out-of-stock' : ''}">
+                <div class="item-icon-chip ${chipClass(item.category)}">
+                    <i class="fas ${item.icon}"></i>
+                </div>
+                <p class="item-name">${item.name}</p>
+                <p class="item-desc">${item.description || ''}</p>
+                <div class="d-flex align-items-center justify-content-between w-100 gap-1">
+                    <span class="item-price">$${item.price.toFixed(2)}</span>
+                    ${stockBadge(item.stock)}
+                </div>
+                <button class="btn-add-cart" data-id="${item.id}"
+                    ${item.stock === 0 ? 'disabled' : ''}>
+                    ${item.stock === 0 ? 'Out of Stock' : btnLabel}
+                </button>
+            </div>`;
+        }).join('');
+
+        itemGrid.querySelectorAll('.btn-add-cart:not([disabled])').forEach(btn => {
+            btn.addEventListener('click', () => addToCart(parseInt(btn.dataset.id)));
+        });
+    }
+
+    function renderCatFilter(categories) {
+        const all = ['All', ...categories];
+        catFilter.innerHTML = all.map(c =>
+            `<button class="cat-btn${c === activeCategory ? ' active' : ''}" data-cat="${c}">${c}</button>`
+        ).join('');
+        catFilter.querySelectorAll('.cat-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                activeCategory = btn.dataset.cat;
+                catFilter.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                renderGrid();
+            });
+        });
+    }
+
+    /* ── search box listener ────────────────────────── */
+    const itemSearchBox = document.getElementById('itemSearchBox');
+    if (itemSearchBox) {
+        itemSearchBox.addEventListener('input', (e) => {
+            activeSearch = e.target.value;
+            renderGrid();
+        });
+    }
+
+    /* ── barcode scanner listener ────────────────────── */
+    const barcodeScanner = document.getElementById('barcodeScanner');
+    if (barcodeScanner) {
+        barcodeScanner.addEventListener('keypress', async (e) => {
+            if (e.key !== 'Enter') return;
+            const sku = e.target.value.trim();
+            e.target.value = '';
+            if (!sku) return;
+
+            try {
+                const r = await fetch(`/inventory/items/by-sku/${encodeURIComponent(sku)}`);
+                if (!r.ok) {
+                    showToast(`Item with SKU "${sku}" not found`, false);
+                    return;
+                }
+                const item = await r.json();
+                if (item.stock === 0) {
+                    showToast(`"${item.name}" is out of stock`, false);
+                    return;
+                }
+                addToCart(item.id);
+                showToast(`Added "${item.name}" to cart`, true);
+            } catch (e) {
+                showToast('Error scanning barcode', false);
+            }
+        });
+    }
+
+    /* ── cart logic ─────────────────────────────────── */
+    function addToCart(id) {
+        const item = allItems.find(i => i.id === id);
+        if (!item || item.stock === 0) return;
+        if (!cart[id]) cart[id] = { item, qty: 0 };
+        if (item.stock - cart[id].qty <= 0) {
+            showToast(`No more stock available for "${item.name}"`, false);
+            return;
+        }
+        cart[id].qty++;
+        renderCart();
+        renderGrid();
+    }
+
+    function updateQty(id, delta) {
+        if (!cart[id]) return;
+        cart[id].qty = Math.max(0, cart[id].qty + delta);
+        if (cart[id].qty === 0) delete cart[id];
+        renderCart();
+        renderGrid();
+    }
+
+    function removeFromCart(id) {
+        delete cart[id];
+        renderCart();
+        renderGrid();
+    }
+
+    function cartItemCount()   { return Object.values(cart).reduce((s, e) => s + e.qty, 0); }
+    function cartTotalAmount() { return Object.values(cart).reduce((s, e) => s + e.item.price * e.qty, 0); }
+
+    function canPlaceOrder() {
+        if (!Object.keys(cart).length) return false;
+        if (isAdmin) return cartCustomer && !!cartCustomer.value;
+        return true;
+    }
+
+    function renderCart() {
+        const entries = Object.values(cart);
+        cartBadge.textContent = cartItemCount();
+        cartTotal.textContent = `$${cartTotalAmount().toFixed(2)}`;
+
+        if (!entries.length) {
+            cartItems.innerHTML = '<div class="cart-empty">No items yet.<br>Click an item to add it.</div>';
+            placeOrderBtn.disabled = true;
+            return;
+        }
+
+        cartItems.innerHTML = entries.map(({ item, qty }) => `
+            <div class="cart-line">
+                <div class="cart-line-name" title="${item.name}">${item.name}</div>
+                <div class="qty-stepper">
+                    <button class="qty-btn" data-id="${item.id}" data-delta="-1">&minus;</button>
+                    <span class="qty-display">${qty}</span>
+                    <button class="qty-btn" data-id="${item.id}" data-delta="1">+</button>
+                </div>
+                <span class="cart-line-subtotal">$${(item.price * qty).toFixed(2)}</span>
+                <button class="btn-remove-line" data-id="${item.id}" title="Remove">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </div>
+        `).join('');
+
+        cartItems.querySelectorAll('.qty-btn').forEach(btn => {
+            btn.addEventListener('click', () => updateQty(parseInt(btn.dataset.id), parseInt(btn.dataset.delta)));
+        });
+        cartItems.querySelectorAll('.btn-remove-line').forEach(btn => {
+            btn.addEventListener('click', () => removeFromCart(parseInt(btn.dataset.id)));
+        });
+
+        placeOrderBtn.disabled = !canPlaceOrder();
+    }
+
+    /* ── customer selector (admin only) ─────────────── */
+    if (isAdmin && cartCustomer) {
+        async function fetchCustomers() {
+            try {
+                const r = await fetch('/customers/view_customers');
+                if (!r.ok) { if (r.status === 401) window.location.href = '/login'; return; }
+                const data = await r.json();
+                const cs = data.customers || data;  // Support both old and new format
+                cartCustomer.innerHTML = '<option value="">Select a customer\u2026</option>';
+                cs.forEach(c => cartCustomer.appendChild(new Option(`${c.name}  (${c.code})`, c.id)));
+            } catch (e) {
+                showToast('Failed to load customers.', false);
+            }
+        }
+        cartCustomer.addEventListener('change', () => { placeOrderBtn.disabled = !canPlaceOrder(); });
+        fetchCustomers();
+    }
+
+    /* ── place order ─────────────────────────────────── */
+    placeOrderBtn.addEventListener('click', async () => {
+        if (!canPlaceOrder()) {
+            showToast(isAdmin ? 'Please select a customer first.' : 'Add items to your cart first.', false);
+            return;
+        }
+        const items = Object.values(cart).map(({ item, qty }) => ({ id: item.id, quantity: qty }));
+        placeOrderBtn.disabled = true;
+        placeOrderBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Placing\u2026';
+        const payload = { items };
+        if (isAdmin) payload.customer_id = parseInt(cartCustomer.value);
+
+        try {
+            const r = await fetch('/inventory/place_order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await r.json();
+            if (r.ok) {
+                showToast(result.message, true);
+                Object.keys(cart).forEach(k => delete cart[k]);
+                await fetchItems();
+                renderCart();
+            } else {
+                showToast(result.error || 'Failed to place order.', false);
+                placeOrderBtn.disabled = !canPlaceOrder();
+            }
+        } catch (e) {
+            showToast('An error occurred while placing the order.', false);
+            placeOrderBtn.disabled = !canPlaceOrder();
+        }
+        placeOrderBtn.innerHTML = '<i class="fas fa-check me-2"></i>Place Order';
+    });
+
+    /* ── fetch inventory ─────────────────────────────── */
+    async function fetchItems() {
+        try {
+            const [ir, cr] = await Promise.all([fetch('/inventory/items'), fetch('/inventory/categories')]);
+            if (!ir.ok) { if (ir.status === 401) window.location.href = '/login'; return; }
+            allItems = await ir.json();
+            const cats = await cr.json();
+            renderCatFilter(cats);
+            renderGrid();
+        } catch (e) {
+            itemGrid.innerHTML = '<div style="color:var(--mac-text-muted);padding:20px;">Failed to load inventory.</div>';
+        }
+    }
+
+    fetchItems();
+
+    /* ════════════════════════════════════════════════════
+       ADMIN — Manage Inventory tab
+    ════════════════════════════════════════════════════ */
+    if (!isAdmin) return;
+
+    const manageTableBody = document.getElementById('manageTableBody');
+    const lowStockBadge   = document.getElementById('lowStockBadge');
+    const addItemForm     = document.getElementById('addItemForm');
+    const addItemMsg      = document.getElementById('addItemMsg');
+
+    /* ── Manage tab: fetch items ─────────────────────── */
+    async function fetchManageItems() {
+        try {
+            const [ir, lsr] = await Promise.all([
+                fetch('/inventory/items'),
+                fetch('/inventory/low_stock'),
+            ]);
+            const items = await ir.json();
+            const ls    = lsr.ok ? await lsr.json() : { count: 0 };
+
+            // Low-stock badge
+            if (ls.count > 0) {
+                lowStockBadge.textContent = `${ls.count} low`;
+                lowStockBadge.classList.remove('d-none');
+            } else {
+                lowStockBadge.classList.add('d-none');
+            }
+
+            // Render table
+            if (!items.length) {
+                manageTableBody.innerHTML = '<tr><td colspan="5" class="text-muted" style="font-size:13px;padding:16px;">No inventory items yet.</td></tr>';
+                return;
+            }
+
+            manageTableBody.innerHTML = items.map(item => `
+                <tr data-id="${item.id}">
+                    <td style="font-size:13px;"><i class="fas ${item.icon} me-2 text-secondary"></i>${item.name}</td>
+                    <td style="font-size:12px;">${item.category}</td>
+                    <td style="font-size:13px;">$${item.price.toFixed(2)}</td>
+                    <td>${manageStockBadge(item.stock)}</td>
+                    <td>
+                        <div class="d-flex gap-1 flex-wrap">
+                            <button class="btn btn-xs btn-outline-warning btn-edit-item" data-id="${item.id}"
+                                data-name="${item.name}" data-category="${item.category}"
+                                data-price="${item.price}" data-description="${item.description || ''}"
+                                data-icon="${item.icon || 'fa-box'}" data-sku="${item.sku || ''}"
+                                style="font-size:11px;padding:2px 8px;">
+                                <i class="fas fa-pencil me-1"></i>Edit
+                            </button>
+                            <button class="btn btn-xs btn-outline-success btn-restock-item" data-id="${item.id}"
+                                data-name="${item.name}"
+                                style="font-size:11px;padding:2px 8px;">
+                                <i class="fas fa-arrow-up me-1"></i>Restock
+                            </button>
+                            ${isSuperuser ? `
+                            <button class="btn btn-xs btn-outline-danger btn-delete-item" data-id="${item.id}"
+                                data-name="${item.name}"
+                                style="font-size:11px;padding:2px 8px;">
+                                <i class="fas fa-trash me-1"></i>Delete
+                            </button>` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+
+            attachManageListeners();
+        } catch (e) {
+            manageTableBody.innerHTML = '<tr><td colspan="5" class="text-danger" style="font-size:13px;padding:16px;">Failed to load items.</td></tr>';
+        }
+    }
+
+    /* ── Manage tab: attach row listeners ────────────── */
+    const editModal    = new bootstrap.Modal(document.getElementById('editItemModal'));
+    const restockModal = new bootstrap.Modal(document.getElementById('restockModal'));
+
+    function attachManageListeners() {
+        // Edit buttons
+        manageTableBody.querySelectorAll('.btn-edit-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.getElementById('editItemId').value          = btn.dataset.id;
+                document.getElementById('editName').value            = btn.dataset.name;
+                document.getElementById('editCategory').value        = btn.dataset.category;
+                document.getElementById('editPrice').value           = btn.dataset.price;
+                document.getElementById('editDescription').value     = btn.dataset.description;
+                document.getElementById('editSku').value             = btn.dataset.sku;
+                document.getElementById('editIcon').value            = btn.dataset.icon;
+                editModal.show();
+            });
+        });
+
+        // Restock buttons
+        manageTableBody.querySelectorAll('.btn-restock-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.getElementById('restockItemId').value   = btn.dataset.id;
+                document.getElementById('restockItemName').textContent = btn.dataset.name;
+                document.getElementById('restockQty').value      = 1;
+                document.getElementById('restockNote').value     = '';
+                restockModal.show();
+            });
+        });
+
+        // Delete buttons (superuser only)
+        manageTableBody.querySelectorAll('.btn-delete-item').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (!confirm(`Delete "${btn.dataset.name}"? This cannot be undone.`)) return;
+                try {
+                    const r = await fetch(`/inventory/items/${btn.dataset.id}`, { method: 'DELETE' });
+                    const result = await r.json();
+                    if (r.ok) {
+                        showToast(result.message, true);
+                        fetchManageItems();
+                        fetchItems();   // refresh shop grid too
+                    } else {
+                        showToast(result.error || 'Delete failed.', false);
+                    }
+                } catch (e) {
+                    showToast('An error occurred.', false);
+                }
+            });
+        });
+    }
+
+    /* ── Save edit ───────────────────────────────────── */
+    document.getElementById('saveEditBtn').addEventListener('click', async () => {
+        const id = document.getElementById('editItemId').value;
+        const payload = {
+            name:        document.getElementById('editName').value.trim(),
+            category:    document.getElementById('editCategory').value.trim(),
+            price:       parseFloat(document.getElementById('editPrice').value),
+            description: document.getElementById('editDescription').value.trim() || null,
+            sku:         document.getElementById('editSku').value.trim() || null,
+            icon:        document.getElementById('editIcon').value.trim() || 'fa-box',
+        };
+        try {
+            const r = await fetch(`/inventory/items/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await r.json();
+            if (r.ok) {
+                editModal.hide();
+                showToast(result.message, true);
+                fetchManageItems();
+                fetchItems();
+            } else {
+                showToast(result.error || 'Update failed.', false);
+            }
+        } catch (e) {
+            showToast('An error occurred.', false);
+        }
+    });
+
+    /* ── Confirm restock ─────────────────────────────── */
+    document.getElementById('confirmRestockBtn').addEventListener('click', async () => {
+        const id  = document.getElementById('restockItemId').value;
+        const qty = parseInt(document.getElementById('restockQty').value);
+        const note = document.getElementById('restockNote').value.trim() || null;
+        if (!qty || qty <= 0) { showToast('Enter a valid quantity.', false); return; }
+        try {
+            const r = await fetch(`/inventory/items/${id}/restock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: qty, note }),
+            });
+            const result = await r.json();
+            if (r.ok) {
+                restockModal.hide();
+                showToast(result.message, true);
+                fetchManageItems();
+                fetchItems();
+            } else {
+                showToast(result.error || 'Restock failed.', false);
+            }
+        } catch (e) {
+            showToast('An error occurred.', false);
+        }
+    });
+
+    /* ── Add item form ───────────────────────────────── */
+    addItemForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+            name:        document.getElementById('newName').value.trim(),
+            category:    document.getElementById('newCategory').value.trim(),
+            price:       parseFloat(document.getElementById('newPrice').value),
+            stock:       parseInt(document.getElementById('newStock').value) || 0,
+            description: document.getElementById('newDescription').value.trim() || null,
+            icon:        document.getElementById('newIcon').value.trim() || 'fa-box',
+            sku:         document.getElementById('newSku').value.trim() || null,
+        };
+        addItemMsg.textContent = '';
+        try {
+            const r = await fetch('/inventory/items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await r.json();
+            if (r.ok) {
+                addItemMsg.style.color = 'green';
+                addItemMsg.textContent = result.message;
+                addItemForm.reset();
+                document.getElementById('newIcon').value = 'fa-box';
+                fetchManageItems();
+                fetchItems();
+            } else {
+                addItemMsg.style.color = 'red';
+                addItemMsg.textContent = result.error || 'Failed to add item.';
+            }
+        } catch (e) {
+            addItemMsg.style.color = 'red';
+            addItemMsg.textContent = 'An error occurred.';
+        }
+    });
+
+    /* ── Refresh button ──────────────────────────────── */
+    document.getElementById('refreshManageBtn').addEventListener('click', fetchManageItems);
+
+    /* ── Load manage data when tab is activated ──────── */
+    document.getElementById('manage-tab').addEventListener('shown.bs.tab', fetchManageItems);
+
+});
+</script>
+{% endblock %}

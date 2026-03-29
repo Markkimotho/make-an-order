@@ -1,14 +1,18 @@
 from flask import Flask, request, Response, render_template, redirect, url_for, session, jsonify
 from config import Config
-from models import db, Customer, Order # Import Customer and Order models
+from models import db, Customer, Order, OrderItem, StockMovement  # Import models
 from api.customers import customers_bp
 from api.orders import orders_bp
+from api.inventory import inventory_bp
+from api.users import users_bp
+from api.reports import reports_bp
 from services.database_service import create_database
+from services.seed_service import seed_inventory, seed_customers
 from authlib.integrations.flask_client import OAuth # type: ignore
 from datetime import timedelta
 from dotenv import load_dotenv
 from auth.auth_routes import create_auth_blueprint
-from auth.auth_middleware import login_required # Ensure login_required is imported
+from auth.auth_middleware import login_required, admin_required, superuser_required
 import os
 import logging
 from logging.handlers import RotatingFileHandler
@@ -40,12 +44,55 @@ else:
 
 
 # Create the database if it doesn't exist (only for local dev, skipped for prod DB)
+import sys; print("[app.py] calling create_database...", flush=True)
 create_database()
+print("[app.py] create_database done, init_app...", flush=True)
 
 # Initialize the database
 db.init_app(app)
+
+def migrate_schema():
+    """Add new columns to existing tables without dropping data."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+
+    def add_missing_columns(table, additions):
+        existing = {c['name'] for c in inspector.get_columns(table)}
+        stmts = [sql for col, sql in additions if col not in existing]
+        if stmts:
+            with db.engine.begin() as conn:
+                for sql in stmts:
+                    conn.execute(text(sql))
+            print(f"[app.py] migrated {table}: {stmts}", flush=True)
+
+    add_missing_columns('users', [
+        ('phone_number',  "ALTER TABLE users ADD COLUMN phone_number VARCHAR(20) NULL"),
+        ('status',        "ALTER TABLE users ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending'"),
+        ('password_hash', "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL"),
+    ])
+
+    add_missing_columns('customers', [
+        ('email', "ALTER TABLE customers ADD COLUMN email VARCHAR(255) NULL"),
+    ])
+
+    add_missing_columns('orders', [
+        ('status',            "ALTER TABLE orders ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending'"),
+        ('payment_method',    "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(20) NULL"),
+        ('payment_reference', "ALTER TABLE orders ADD COLUMN payment_reference VARCHAR(100) NULL"),
+    ])
+
+    add_missing_columns('inventory_items', [
+        ('sku', "ALTER TABLE inventory_items ADD COLUMN sku VARCHAR(50) UNIQUE NULL"),
+    ])
+
 with app.app_context():
+    print("[app.py] db.create_all()...", flush=True)
     db.create_all()
+    migrate_schema()
+    print("[app.py] seeding...", flush=True)
+    seed_inventory()
+    seed_customers()
+    print("[app.py] startup complete", flush=True)
 
 # OAuth Setup
 oauth = OAuth(app)
@@ -64,7 +111,20 @@ google = oauth.register(
 # Register the endpoint blueprints
 app.register_blueprint(customers_bp, url_prefix='/customers')
 app.register_blueprint(orders_bp, url_prefix='/orders')
+app.register_blueprint(inventory_bp, url_prefix='/inventory')
+app.register_blueprint(users_bp, url_prefix='/users')
+app.register_blueprint(reports_bp, url_prefix='/reports')
 app.register_blueprint(create_auth_blueprint(oauth))
+
+
+# --- User context helper ---
+def get_user_context():
+    profile = session.get('profile', {})
+    return {
+        'user_email': profile.get('email', 'Guest'),
+        'user_name':  profile.get('name', ''),
+        'user_role':  session.get('role', 'user'),
+    }
 
 
 # --- Frontend Routes ---
@@ -77,49 +137,73 @@ def index():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('dashboard.html', user_email=user_email)
+    return render_template('dashboard.html', **get_user_context())
 
 @app.route('/customers-ui')
-@login_required
+@admin_required
 def customers_page():
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('customers.html', user_email=user_email)
+    return render_template('customers.html', **get_user_context())
 
 @app.route('/orders-ui')
-@login_required
+@admin_required
 def orders_page():
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('orders.html', user_email=user_email)
+    return render_template('orders.html', **get_user_context())
+
+@app.route('/inventory-ui')
+@login_required
+def inventory_page():
+    return render_template('inventory.html', **get_user_context())
+
+@app.route('/users-ui')
+@admin_required
+def users_page():
+    return render_template('users.html', **get_user_context())
+
+@app.route('/reports-ui')
+@admin_required
+def reports_page():
+    return render_template('reports.html', **get_user_context())
+
+@app.route('/orders/<int:order_id>/receipt')
+@login_required
+def order_receipt_page(order_id):
+    order = db.session.get(Order, order_id)
+    if not order:
+        return render_template('404.html', message="Order not found"), 404
+    # Normal users can only view receipts for their own orders
+    if session.get('role', 'user') not in ('admin', 'superuser'):
+        from models import Customer as _Customer
+        cust = _Customer.query.filter_by(code=f"USR-{session.get('user_id')}").first()
+        if not cust or order.customer_id != cust.id:
+            return render_template('404.html', message="Receipt not found"), 404
+    return render_template('receipt.html', order=order, **get_user_context())
+
 
 # --- Customer Detail/Edit Pages ---
 @app.route('/customers/<int:customer_id>')
-@login_required
+@admin_required
 def customer_detail_page(customer_id):
     customer = db.session.get(Customer, customer_id)
     if not customer:
         return render_template('404.html', message="Customer not found"), 404
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('customer_detail.html', customer=customer, user_email=user_email)
+    return render_template('customer_detail.html', customer=customer, **get_user_context())
 
 @app.route('/customers/<int:customer_id>/edit')
-@login_required
+@admin_required
 def customer_edit_page(customer_id):
     customer = db.session.get(Customer, customer_id)
     if not customer:
         return render_template('404.html', message="Customer not found"), 404
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('customer_edit.html', customer=customer, user_email=user_email)
+    return render_template('customer_edit.html', customer=customer, **get_user_context())
 
 # --- Order Edit Page ---
 @app.route('/orders/<int:order_id>/edit')
-@login_required
+@admin_required
 def order_edit_page(order_id):
     order = db.session.get(Order, order_id)
     if not order:
         return render_template('404.html', message="Order not found"), 404
-    user_email = session['profile']['email'] if 'profile' in session else 'Guest'
-    return render_template('order_edit.html', order=order, user_email=user_email)
+    return render_template('order_edit.html', order=order, **get_user_context())
 
 
 # --- Centralized Error Handlers ---
