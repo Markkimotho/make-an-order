@@ -1,210 +1,232 @@
 ---
 layout: post
-title: "Building a POS System from Scratch: Lessons from Real-World Constraints"
+title: "Building a POS System: What I Did Wrong and How I Fixed It"
 date: 2026-03-30 10:00:00
-description: How real business requirements forced architectural decisions that make the system actually useful — and why a spreadsheet mentality gets you nowhere.
-tags: projects flask ecommerce pos retail backend python
+description: Mistakes made while building a real ordering system and what I learned from having to rewrite stuff
+tags: projects flask backend retail python
 categories: projects
 giscus_comments: true
 related_posts: true
 ---
 
-I built a point-of-sale system for a reason. Not as an exercise. A real human wanted to take orders, track inventory, get notified when something sold, and know how much money they made. This is not a toy problem. It is what happens when you stop building for the internet and start building for actual business.
+I was building a POS system for someone who actually needed to use it. Not a tutorial. Not a demo. A real system where someone takes orders and tracks inventory.
 
-I started wrong. I thought: customers place orders, admin manages things. Done. Ship it.
+I made mistakes. Some of them cost me hours of work to fix. But that's the best way to learn because you're fixing real problems, not theoretical ones.
 
-Then reality happened.
+## The First Problem: Auto-Provisioning Customers
 
-## The First Wrong Assumption
+I thought: when a staff member places an order, they become a customer automatically. I'll just create a customer record linked to their user account. Problem solved.
 
-My first implementation auto-provisioned users as customers. Every staff member who logged in got a customer record attached to them automatically. The logic was simple: when a user placed an order, link it to their auto-created customer account.
-
-This broke almost immediately. A superuser logs in to check on things, not to buy. An admin wants to place an order on behalf of someone else, not for themselves. A warehouse operator is scanning inventory, not shopping. Yet each of them had a customer account silently created, their orders showing up in analytics, confusion spreading through the whole system.
-
-The epiphany: **users and customers are not the same thing**.
-
-This was not a data model problem. It was a conceptual problem. I was collapsing two completely different business entities into one table and hoping the logic would sort itself out. It would not.
-
-## Separating Users from Customers
-
-The fix required rethinking the whole thing:
-
-- **User:** A staff account. Email login via Google OAuth. Role-based permissions. Can manage the platform.
-- **Customer:** A buyer. Phone number. Can browse the shop and place orders. Gets SMS notifications.
-
-These are different things with different needs. A user might manage 500 customers. A customer does not need to know they are a "user" anywhere.
-
-I rebuilt the order flow:
-
-**Before (broken):**
-```
-Staff logs in → Auto-customer created (USR-123) → Places order → Order linked to USR-123
-Result: Confusion. Staff orders mixed in with real customer orders.
-```
-
-**After (correct):**
-```
-Admin opens inventory → Selects a customer from list → Adds items to cart → Places order on behalf of customer
-OR
-Customer gets sent a link → Logs in with their code/email → Browses shop → Places their own order
-Result: Clean separation. No confusion.
-```
-
-The second version required:
-1. A customer selector dropdown populated at runtime
-2. Order placement that explicitly requires a customer_id
-3. No auto-provisioning logic — admins must intentionally create or link customers
-4. A completely separate customer login flow
-
-It sounds obvious in retrospect. But you only learn this by shipping the wrong thing, watching it break, and fixing it under pressure.
-
-## Role-Based Access Getting Complicated
-
-Once you have separate users and customers, role-based access gets real fast.
-
-I have three roles:
-
-- **Superuser:** Godmode. Approve staff, link users to customers, delete anything.
-- **Admin:** Run the business. Create customers, manage inventory, see reports, approve new staff.
-- **User (Operator):** Work the register. Browse inventory, place orders.
-
-But the same page (`/inventory`) serves all three roles with different permissions. An operator clicks "place order" and gets a button. An admin clicks it and gets a customer selector plus the button. A guest sees neither and gets a message: "Sign in to place orders."
-
-This calls for conditional rendering at the template level:
-
-```html
-{% if user_role == 'admin' %}
-  <select id="customer-selector"><!-- customer dropdown --></select>
-{% endif %}
-
-<button id="place-order-btn">
-  {% if user_role == 'guest' %}
-    (disabled - sign in to place orders)
-  {% else %}
-    Place Order
-  {% endif %}
-</button>
-```
-
-The backend validates the request too. Just because the button is hidden does not mean someone cannot forge a request. Every API call checks permissions:
+So I wrote this:
 
 ```python
-@admin_api_required  # Decorator checks role
+def place_order(user_id, items):
+    user = User.query.get(user_id)
+
+    # Auto-create customer if they don't have one
+    if not user.customer_code:
+        user.customer_code = f"USR-{user_id}"
+
+    order = Order(user_id=user_id, items=items)
+    db.session.add(order)
+    db.session.commit()
+```
+
+This worked for about five minutes. Then I showed it to someone and said: "Here's the report showing your top customers."
+
+At the top of the list:
+- USR-1 (staff testing the system)
+- USR-2 (another staff member)
+- USR-3 (me testing)
+
+The actual customers who paid money? Buried below all the staff test data.
+
+Worse, the superuser had placed 16 orders just testing things. So USR-1 looked like the biggest revenue source. Wrong. It was me testing.
+
+The "customers" report was useless because staff was polluting it.
+
+## The Real Problem: Two Different Things
+
+I was trying to squeeze two different concepts into one model:
+
+**A User:** Someone who logs in to manage the system. Email. Google OAuth. Role-based permissions (admin, operator, etc).
+
+**A Customer:** Someone who buys things. Phone number. Gets SMS notifications. No email login. No role. Just buys stuff.
+
+These are different. Not just slightly different. Fundamentally different purposes. Different data. Different workflows.
+
+But I had one User table handling both. That's when things got messy.
+
+## How This Actually Broke Things
+
+**Reports Broken**
+```python
+# Show top customers by revenue
+SELECT customer_code, SUM(amount)
+FROM orders
+GROUP BY customer_code
+ORDER BY revenue DESC
+```
+
+At the top: USR codes (staff accounts). Real customers buried below. Report useless.
+
+**Analytics Wrong**
+Any metric about "customers" included staff test accounts. Revenue calculations wrong. Repeat purchase rates wrong. Everything was noise.
+
+**UI Confusion**
+The staff would see themselves in the customer list. "Why am I listed as a customer?"
+
+**Ordering Broken**
+When an admin wanted to place an order for an actual customer, the system was confused. The order got linked to the admin's auto-customer account instead of the real customer.
+
+## What I Did to Fix It
+
+Separated them completely.
+
+```python
+class User(db.Model):
+    """Staff member or system operator"""
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True)
+    name = db.Column(db.String(120))
+    role = db.Column(db.String(20))  # admin, user, superuser
+    created_at = db.Column(db.DateTime)
+
+class Customer(db.Model):
+    """Buyer. Completely different from User"""
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(50), unique=True)  # CUST-001
+    name = db.Column(db.String(120))
+    phone = db.Column(db.String(20))  # For SMS
+    created_at = db.Column(db.DateTime)
+
+class Order(db.Model):
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))  # WHO bought
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))  # WHO recorded it
+```
+
+Now:
+- User is for staff
+- Customer is for buyers
+- Order knows both: which customer bought it, which staff person processed it
+
+No auto-provisioning. No confusion. No USR codes polluting the data.
+
+## What Changed in the UI
+
+With separate tables, the login flow had to change.
+
+Before: everyone logs in one place.
+
+After:
+```
+/role-select page
+  ↓
+Choose "Staff Member" or "Customer"
+  ↓
+Different flows for each
+```
+
+Staff member goes to Google OAuth. Customer enters their code or email. Guests can just browse.
+
+The entire checkout flow changed:
+
+Before:
+```javascript
+// Implicitly link to current user
+order = place_order({ items: [...] })
+// Assumes current_user is the customer
+```
+
+After:
+```javascript
+// Admin explicitly picks which customer
+const customerId = document.getElementById('customer-selector').value;
+order = place_order({ customer_id: customerId, items: [...] });
+// No assumptions
+```
+
+For an operator (non-admin):
+```javascript
+// Their orders still work
+order = place_order({ items: [...] });
+// Backend knows it's their own customer record
+```
+
+## What Broke During the Change
+
+I had to migrate data.
+
+All those SQLite USR-1, USR-2 records? I converted them to proper Customer records:
+
+```python
+for user in User.query.all():
+    if user.role not in ['admin', 'superuser']:
+        customer = Customer(
+            code=f"USR-{user.id}",
+            name=user.name,
+            phone=user.phone
+        )
+        db.session.add(customer)
+```
+
+Then reassigned all orders:
+
+```python
+for order in Order.query.all():
+    customer = Customer.query.filter_by(code=f"USR-{order.user_id}").first()
+    if customer:
+        order.customer_id = customer.id
+```
+
+Took an hour. Tested it thoroughly. Nothing broke after migration.
+
+## Backend Had to Validate Everything
+
+The order endpoint changed from trusting context to requiring explicit data:
+
+```python
+@admin_api_required
 def place_order():
-    # Only admins can omit customer_id
-    # Only non-admins auto-link to themselves
-    ...
+    customer_id = request.json['customer_id']  # Required, explicit
+    customer = db.session.get(Customer, customer_id)
+
+    if not customer:
+        return {'error': 'Invalid customer'}, 400
+
+    order = Order(
+        customer_id=customer_id,
+        created_by=current_user.id,
+        items=request.json['items']
+    )
 ```
 
-Double validation. Frontend hides features. Backend enforces permissions. Both are necessary.
+No more implicit assumptions. Everything is explicit. That makes bugs obvious.
 
-## OAuth Getting Real
+## Why This Matters
 
-Google OAuth looked simple. Click button, redirect to Google, come back authenticated. Except it kept failing with `Error 400: redirect_uri_mismatch`.
+Before the change: report shows staff, code has special cases for USR handling, login is ambiguous.
 
-The problem: I was dynamically constructing the redirect URL in the auth route using Flask's `url_for()` function. During local development on `localhost:5001` it worked. But when I deployed to production, the app was behind a reverse proxy, or on a different URL, and the redirect URL I was constructing did not match what Google had registered. Mismatch. Error. No login.
+After: reports show real customers, code is straightforward, login is explicit.
 
-The fix required understanding a critical principle: **the app must know its own URL.**
+The separation also made permissions clearer. A superuser manages Users. An admin manages Customers. These are separate concerns in separate parts of the code.
 
-```python
-# .env
-APP_URL="http://localhost:5001"  # Or production domain
+## What I Learned
 
-# app.py
-app_url = os.environ.get("APP_URL", "http://localhost:5001")
-redirect_uri = f"{app_url}/auth/authorize"
+Two things that look similar often need to be completely separate. Just because they share some fields (name, created_at) does not mean they should be in the same table.
 
-google = oauth.register(
-    redirect_uri=redirect_uri,  # Tell Authlib exactly what to use
-    ...
-)
-```
+When you conflate them, you end up dealing with:
+- Confusing code (is this field about staff or about buyers?)
+- Special cases (this endpoint behaves differently if role is X)
+- Wrong reports (data you should not be seeing shows up)
+- Migrations (when you finally separate them, you have to rewrite everything)
 
-Now the redirect URI is fixed, registered in Google Console, and matches exactly. No more mismatches. No more errors.
+The cost of getting it wrong is higher than getting it right from the start.
 
-This taught me that you cannot rely on proxies to fix your URLs for you. The app must be explicit about where it lives.
+If you're building something similar, think clearly about what your entities are. A staff member is not a customer. A user is not a buyer. Keep them separate. From the beginning.
 
-## SMS Notifications Teaching Humility
+It takes maybe five minutes longer to set up separate tables. And it saves you hours later when you're not debugging weird edge cases.
 
-I integrated Africa's Talking API to send SMS confirmations. Nice feature. Customer places order, SMS goes out immediately with order details.
+---
 
-Except what happens when the SMS API is down? Or the API key is wrong? Or the phone number format is invalid?
-
-My first version crashed. SMS error = order endpoint error = no response to the client. Bad.
-
-I fixed it with graceful degradation:
-
-```python
-try:
-    send_sms(customer_phone, message)
-except Exception as e:
-    logger.warning(f"SMS failed: {str(e)}")
-    # Continue anyway - order still placed
-    # SMS is nice to have, not critical
-```
-
-The order goes through. The SMS either arrives or it does not. The customer does not lose their order because a third-party API had an issue at 3am.
-
-This is a principle I should have known beforehand but learned the hard way: **dependencies are liabilities**. Minimize them. When you have to use them, isolate the failure.
-
-## Inventory Audit Trail Saving My Bacon
-
-I built a stock audit trail early. Every time inventory changes, log it:
-- What changed (how many units)
-- Why (sale, restock, cancel, refund)
-- Who did it (operator ID)
-- When (timestamp)
-
-Felt like overkill at the time. Just tracking count would be simpler.
-
-But then a customer disputed an order. "I never got my stock." I looked at the orders table and saw the sale processed. But the admin swore they refunded it. My word against theirs.
-
-The audit trail showed the truth. Sale on date X. Refund on date Y by admin Z. There it was, immutable, timestamped. No argument.
-
-This is a lesson learned at scale by companies that did not have it and had to rebuild. I learned it by being paranoid and building it from the start. Worth every line.
-
-## The Guest Shop Surprise
-
-I wanted people to browse the shop without signing in. Seemed straightforward: redirect unauthenticated users to `/shop` where they see products but cannot order.
-
-Except the template logic was checking `@login_required`. Guest could not even see the inventory page. They hit a 403 error.
-
-The fix: create a public `/shop` route that does not require auth, renders the same inventory template, but passes `user_role='guest'`. The template uses that variable to hide the "Place Order" button and the customer selector.
-
-This required:
-1. A new route where auth is optional
-2. Conditional rendering in the template based on role
-3. API validation that guests cannot call order endpoints
-
-Again, simpler than it seemed once you separated concerns.
-
-## What I Actually Learned
-
-**Real requirements teach you things books cannot.** I did not start planning an audit trail. The business need for order dispute resolution forced me to think about it.
-
-**Separation of concerns is not about purity; it is about not going insane.** Users and customers being separate meant the code I wrote for one did not accidentally affect the other.
-
-**Double-layer validation works.** Hide the button on the frontend. Check permissions on the backend. Both must pass. One layer is a false sense of security.
-
-**Third-party integrations need graceful fallbacks.** SMS down? Order still places. That is the only way to build systems that actually work in production.
-
-**Audit trails are not slowness — they are your future self.** Log generously. The disk is cheap. The confusion when you need to know why something changed and the log is silent is expensive.
-
-**Your app needs to know where it lives.** Not rely on headers or magic to figure it out. Ask it explicitly at startup. Store it in config. Use it everywhere URLs matter.
-
-## What Comes Next
-
-There are things I did not do yet that I will:
-- Inventory forecasting based on sales trends
-- Customer loyalty or points system
-- Multi-location support (franchise setup)
-- Advanced reporting with date range filters
-- Payment gateway integration
-
-These are not needs yet. I am not adding them. The system works for what it needs to do right now. I will let reality tell me what to build next.
-
-That is the lesson. Not overengineering. Not overthinking. Building what is needed, shipping it, learning from where it breaks, fixing just that.
-
-The code is on [GitHub](https://github.com/Markkimotho/make-an-order). If you are building something similar, take what is useful. The audit trail approach. The role separation. The OAuth config pattern. Leave the rest.
-
-If you are starting from scratch and thinking you could do it simpler, go ahead. Everyone does. Come back here after your third redesign. I will still be here.
+The code is on [GitHub](https://github.com/Markkimotho/make-an-order) if you want to see how it's structured now.

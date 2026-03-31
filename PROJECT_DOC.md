@@ -2,7 +2,7 @@
 published: true
 layout: page
 title: Make-An-Order — Multi-Role POS & Inventory System
-description: Enterprise-grade Point of Sale system with real-time inventory, SMS notifications, analytics, and role-based access control
+description: Point of Sale system with real-time inventory, SMS, analytics, and role-based access
 img: assets/img/project_makeorder.jpg
 importance: 17
 category: projects
@@ -10,179 +10,159 @@ category: projects
 
 ## Overview
 
-**Make-An-Order** is an enterprise-grade Point of Sale (POS) system designed for retail and service businesses. It combines order management, real-time inventory tracking, multi-user role-based access control, customer management, advanced analytics, and SMS integration into a cohesive platform.
+**Make-An-Order** is a POS system for managing orders, inventory, and customers. Built with Flask and MySQL. Handles multiple user roles (superuser, admin, operator), real-time stock tracking, order management, SMS notifications, and analytics dashboards.
 
-Built with Flask, SQLAlchemy, and Bootstrap 5, it provides a modern interface for staff to manage operations while maintaining complete separation between user accounts (staff/operators) and customer records (buyers). Guests can browse and shop without authentication.
+The key thing: staff accounts (users) are completely separate from customer accounts. Staff logs in and manages the system. Customers browse and buy. Guests can look at inventory without signing in.
 
-## Key Features
+## What It Does
 
-### 🎯 Role-Based Access Control (RBAC)
+### Core Features
 
-The system enforces three distinct roles with granular permissions:
+**Order Management**
+- Staff places orders on behalf of customers
+- Customers place their own orders with a code/email lookup
+- Orders go through states: pending → confirmed → completed
+- Can also cancel or refund orders
+- Automatic SMS sent to customer when order placed
 
-- **Superuser** — Full platform access, user management, protected account (`kimothomark93@gmail.com`)
-- **Admin** — Customer & order management, inventory control, user approvals, analytics
-- **User (Operator)** — Browse inventory, place orders, view their order history
-- **Customer** — Browse shop, place orders with customer code/email lookup
-- **Guest** — Browse inventory without authentication, cannot place orders
+**Inventory**
+- Add products with SKU, category, price, stock level
+- Stock automatically decreases when orders placed
+- Stock increases when you restock
+- If an order gets cancelled or refunded, stock goes back
+- Log of every stock change: what moved, why, who did it, when
 
-### 🛒 Cart-Based Ordering System
-
-- Visual inventory browser with search and filtering
-- Add items to cart with quantity adjustments
-- Real-time stock validation
-- Admin can place orders on behalf of customers
-- Automatic order confirmation SMS via Africa's Talking
-- Support for multiple payment methods with reference tracking
-
-### 📦 Real-Time Inventory Management
-
-- Live stock tracking with automatic decrement on sales
-- Stock audit trail logging every movement with reason (sale, restock, cancel, refund)
-- Barcode/SKU scanning support
-- Low-stock alerts
-- Historical inventory tracking by category
-- Restock management with admin dashboard
-- CSV export for external analysis
-
-### 👥 Customer Management System
-
-- Customer CRUD operations (admin+)
-- Unique customer codes for identification
-- Phone number storage for SMS notifications
+**Customers**
+- Create customer records with name, phone, unique code
+- Only admins create/edit/delete customers
+- Customers place orders tied to their record
 - Complete order history per customer
-- Separate database table from user accounts (fixes architectural misunderstanding)
 
-### 📊 Advanced Analytics & Reporting
+**Users (Staff)**
+- Login via Google OAuth
+- Three roles: superuser (godmode), admin (run the business), user (operate register)
+- Superuser: create/delete users, manage roles, approve pending staff
+- Admin: manage customers, inventory, orders, see reports
+- User: browse inventory, place orders, see their own history
 
-- Revenue trends with time-series data
-- Top-selling products and categories
+**Reports**
+- Revenue trends over time
+- Top selling products
 - Payment method breakdown
 - Order status distribution
 - Custom date range filtering
-- Chart.js visualizations (bar, pie, line charts)
-- CSV export of all reports
+- Download as CSV
 
-### 🧾 Digital Receipts & Exports
+**Analytics Dashboard**
+- Chart.js visualizations
+- All reports on one page
+- Filter by date
 
-- Generate receipts per order with full item details
-- Print-friendly receipt interface
-- Download receipts as documents
-- Bulk export orders to CSV with columns:
-  - Order ID, Customer, Phone, Items, Total, Status, Payment Method, Reference, Date
-- Export inventory listings
-- Export analytics data
+## Tech Stack
 
-### 🔐 Google OAuth 2.0 Integration
-
-- Secure single sign-on via Google
-- Auto-user creation on first login
-- Session persistence (24 hours)
-- Role enforcement
-- Role-based landing page (staff vs customer selection)
-- Proper redirect_uri configuration for local and production environments
-
-### 📱 SMS Integration
-
-- Africa's Talking API integration
-- Automatic order confirmation SMS to customers
-- Customizable sender ID
-- Graceful fallback if SMS unavailable
-
-### 🏠 Landing Page & Role Selection Gateway
-
-- Professional marketing landing page with feature showcase
-- Role selection screen (Staff Member vs Customer)
-- Separate login flows:
-  - **Staff:** Google OAuth or email/password with admin approval
-  - **Customer:** Code/email lookup or guest browsing
-  - **Guest:** Direct shop access without authentication
-
-## Technology Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Backend Framework | Flask 3.0 |
+| What | Technology |
+|------|-----------|
+| Backend | Flask 3.0 |
+| Database | MySQL 5.7+ / MariaDB |
 | ORM | SQLAlchemy 2.0 |
-| Database | MySQL (local) / JawsDB (production) |
-| Authentication | Google OAuth 2.0 (Authlib) |
-| SMS Gateway | Africa's Talking API |
-| Frontend | Jinja2, Bootstrap 5.3, Font Awesome 6 |
+| Auth | Google OAuth 2.0 (Authlib) |
+| SMS | Africa's Talking API |
+| Frontend | Bootstrap 5.3, Jinja2 |
 | Charts | Chart.js |
-| Session | Flask-Session (filesystem) |
-| Web Server | Gunicorn (production) |
-| Testing | Pytest |
-| Deployment | Heroku / Render |
+| Session | Flask-Session |
+| Production Server | Gunicorn |
+| Tests | Pytest |
 
-## User Flows
+## How It Actually Works
 
-### Staff Sign-In Flow
-```
-Landing Page → Role Select ("Staff Member") → Google OAuth Login
-  → User created/updated → Role check → Dashboard
-```
+### User Flows
 
-### Customer Sign-In Flow
-```
-Landing Page → Role Select ("Customer") → Code/Email Lookup
-  → Customer verified → Shop access
-```
+**Staff Sign In**
+1. Click "Staff Member" on role select page
+2. Google OAuth login
+3. User account created/updated
+4. Lands on dashboard
 
-### Guest Shop Flow
-```
-Landing Page → "Continue as Guest" → Public Shop (no auth)
-  → Browse only (place order disabled)
-```
+**Customer Sign In**
+1. Click "Customer" on role select page
+2. Enter customer code or email
+3. System finds matching customer record
+4. Can browse shop and place orders
 
-## Core API Endpoints
+**Guest Browsing**
+1. Click "Continue as Guest"
+2. Lands on public shop
+3. Can see inventory but can't place orders
 
-### Authentication (`/auth`)
-- `GET /auth/login` — Initiate Google OAuth
-- `GET /auth/authorize` — OAuth callback
-- `POST /auth/login/local` — Email/password login
-- `POST /auth/customer-login` — Customer code/email lookup
-- `GET /auth/logout` — Clear session
+### Actually Placing an Order
+
+**If admin:**
+1. Go to inventory page
+2. Dropdown at top: select which customer this order is for
+3. Add items from inventory (click items, pick quantity)
+4. Click "Place Order"
+5. Order created with customer linked
+6. SMS sent to customer's phone number
+
+**If customer:**
+1. Go to shop
+2. Add items (no customer dropdown, it's assumed to be them)
+3. Click "Place Order"
+4. Order linked to their customer record
+5. SMS confirmation sent
+
+**If guest:**
+1. Can see inventory
+2. "Place Order" button is grayed out/hidden
+3. Shows message: "Sign in to place orders"
+
+## API Routes
+
+### Auth (`/auth`)
+- `GET /auth/login` — Start Google OAuth
+- `GET /auth/authorize` — Google sends you back here
+- `POST /auth/login/local` — Email/password signin
+- `POST /auth/customer-login` — Look up customer by code/email
+- `GET /auth/logout` — End session
 
 ### Inventory (`/inventory`)
-- `GET /api/inventory` — Get all products with stock
-- `POST /api/inventory` — Create product (admin+)
-- `PUT /api/inventory/<id>` — Update product (admin+)
-- `DELETE /api/inventory/<id>` — Delete product (superuser+)
-- `GET /api/inventory/search` — Search products
-- `POST /api/inventory/restock` — Add stock (admin+)
-- `GET /api/inventory/audit-trail` — View stock movements
+- `GET /api/inventory` — All products
+- `POST /api/inventory` — Create product (admin only)
+- `PUT /api/inventory/<id>` — Edit product (admin only)
+- `DELETE /api/inventory/<id>` — Delete product (superuser only)
+- `GET /api/inventory/search?q=term` — Search by name
+- `POST /api/inventory/restock` — Add stock (admin only)
+- `GET /api/inventory/audit-trail` — See all stock changes
 
 ### Orders (`/orders`)
 - `POST /api/orders/place_order` — Create order
-- `GET /api/orders/view_orders` — Get all orders (admin+)
-- `GET /api/orders/view_orders/<id>` — Get customer orders
-- `PUT /api/orders/<id>` — Update order status (admin+)
-- `DELETE /api/orders/<id>` — Delete order (admin+)
-- `POST /api/orders/<id>/receipt` — Generate receipt
-- `GET /api/orders/export/csv` — Export to CSV
+- `GET /api/orders/view_orders` — Get all orders (admin only)
+- `GET /api/orders/<id>` — Get specific order
+- `PUT /api/orders/<id>` — Change status (admin only)
+- `DELETE /api/orders/<id>` — Delete (admin only)
+- `GET /api/orders/<id>/receipt` — Generate receipt
+- `GET /api/orders/export/csv` — Download as CSV
 
 ### Customers (`/customers`)
-- `POST /api/customers/register` — Create customer (admin+)
-- `GET /api/customers/view_customers` — Get all customers (admin+)
-- `GET /api/customers/view_customers/<id>` — Get customer details
-- `PUT /api/customers/<id>` — Update customer (admin+)
-- `DELETE /api/customers/<id>` — Delete customer (superuser+)
+- `POST /api/customers/register` — Create (admin only)
+- `GET /api/customers` — Get all (admin only)
+- `GET /api/customers/<id>` — Get one
+- `PUT /api/customers/<id>` — Edit (admin only)
+- `DELETE /api/customers/<id>` — Delete (superuser only)
 
 ### Users (`/users`)
-- `GET /api/users/view_users` — Get all users (superuser+)
-- `PUT /api/users/<id>/role` — Change user role (superuser+)
-- `PUT /api/users/<id>/customer` — Link user to customer (superuser+)
-- `DELETE /api/users/<id>` — Delete user (superuser+)
+- `GET /api/users` — Get all (superuser only)
+- `PUT /api/users/<id>/role` — Change role (superuser only)
+- `PUT /api/users/<id>/customer` — Link to customer (superuser only)
+- `DELETE /api/users/<id>` — Delete (superuser only)
 
 ### Reports (`/reports`)
-- `GET /api/reports/revenue` — Revenue trends
-- `GET /api/reports/top-products` — Top selling products
-- `GET /api/reports/payment-breakdown` — Payment method analysis
-- `GET /api/reports/order-status` — Order distribution
+- `GET /api/reports/revenue` — Revenue by date
+- `GET /api/reports/top-products` — Top sellers
+- `GET /api/reports/payment-breakdown` — By payment type
+- `GET /api/reports/order-status` — Status distribution
 
-## Database Schema
-
-### Core Tables
+## Database Tables
 
 **users**
 - id, email, name, picture_url, role, customer_id, created_at, updated_at
@@ -199,116 +179,124 @@ Landing Page → "Continue as Guest" → Public Shop (no auth)
 **order_items**
 - id, order_id, inventory_id, quantity, unit_price, subtotal
 
-**stock_movements** (audit trail)
+**stock_movements**
 - id, inventory_id, movement_type, quantity_changed, reason, created_by, created_at
 
-## Features by Phase
+The stock_movements table logs everything: every sale removes units, every restock adds them, every cancel/refund restores them. Tied to the operator who did it so you can audit who changed what.
 
-**Phase 1-2:** Core order & customer management, Google OAuth, SMS notifications
+## Development Setup
 
-**Phase 3:** Inventory system with stock tracking, multiple categories, search
-
-**Phase 4:** Advanced analytics with Chart.js, revenue trends, product insights
-
-**Phase 5:** CSV exports for orders, inventory, and reports; bulk operations
-
-**Phase 6:** Digital receipts, audit trails, role-based UI, guest shop support
-
-## Getting Started
-
-### Prerequisites
+### What You Need
 
 - Python 3.8+
-- MySQL 5.7+ or MariaDB
-- Google OAuth 2.0 credentials
-- Africa's Talking account (optional)
+- MySQL running locally (or any MySQL service)
+- Google OAuth credentials (get from Google Cloud Console)
+- Africa's Talking account (optional, SMS just fails gracefully without it)
 
-### Installation
+### Setup Steps
 
+1. Clone the repo
 ```bash
-# Clone repository
 git clone https://github.com/Markkimotho/make-an-order.git
 cd make-an-order
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # macOS/Linux: or `venv\Scripts\activate` on Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure .env
-cp .env.example .env
-# Edit .env with your credentials:
-# - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-# - APP_URL (http://localhost:5001 for local dev)
-# - MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB
-# - AT_USERNAME, AT_API_KEY, AT_SENDER_ID
-
-# Initialize database
-python3 -c "from app import app, db; db.create_all()"
-
-# Start the app
-python3 app.py
 ```
 
-Access the app at `http://localhost:5001`
+2. Create virtual environment
+```bash
+python3 -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+```
 
-### Environment Variables
+3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
 
-```env
-# Application
+4. Create .env file
+```bash
+cp .env.example .env
+# Edit .env with your values
+```
+
+5. .env needs these
+```
 APP_URL=http://localhost:5001
-APP_SECRET_KEY=your-secret-key
+APP_SECRET_KEY=something-random
 
-# Google OAuth
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-secret
-# NOTE: Add APP_URL/auth/authorize to Google Console Authorized redirect URIs
 
-# MySQL Database
 MYSQL_HOST=127.0.0.1
 MYSQL_USER=root
 MYSQL_PASSWORD=your-password
 MYSQL_DB=customers_orders
 
-# Africa's Talking SMS
 AT_USERNAME=sandbox
-AT_API_KEY=your-api-key
+AT_API_KEY=your-key
 AT_SENDER_ID=your-sender-id
 ```
 
-## Deployment
+6. Important: Add redirect URI to Google Console
+   - Go to Google Cloud Console
+   - OAuth 2.0 Client IDs (Credentials)
+   - Add to "Authorized redirect URIs": `http://localhost:5001/auth/authorize`
 
-### Deploy to Render
-
+7. Initialize database and start
 ```bash
-# Create .gitignore for .env
-echo ".env" >> .gitignore
-
-# Push to GitHub
-git push origin main
-
-# On Render dashboard:
-# 1. Create new Web Service
-# 2. Connect GitHub repository
-# 3. Set environment variables (same as .env)
-# 4. Deploy
+python3 app.py
 ```
 
-### Deploy to Heroku
+Go to `http://localhost:5001`
 
-```bash
-# Add JawsDB MySQL add-on
-heroku addons:create jawsdb:kitefin -a your-app-name
+## Deploying to Production
 
-# Deploy
-git push heroku main
+### On Render
 
-# Set environment variables
-heroku config:set GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... -a your-app-name
-# Update APP_URL to your Heroku domain
-```
+1. Push to GitHub
+2. Go to Render dashboard
+3. Create new Web Service from repo
+4. Set these environment variables (same as .env):
+   - APP_URL=https://your-render-domain.com
+   - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc
+5. Add database (Render PostgreSQL or link external MySQL)
+6. Deploy
+
+Then add to Google Console OAuth:
+- `https://your-render-domain.com/auth/authorize`
+
+### On Heroku
+
+1. Install Heroku CLI
+2. Add JawsDB MySQL add-on: `heroku addons:create jawsdb:kitefin`
+3. Deploy: `git push heroku main`
+4. Set config: `heroku config:set APP_URL=https://your-app.herokuapp.com ...`
+5. Add to Google Console OAuth: `https://your-app.herokuapp.com/auth/authorize`
+
+## Why Users and Customers Are Separate
+
+This was a rough lesson learned. Originally I tried to make everything one "User" table. Staff and customers all in one model. Auto-created customer records when staff placed orders (USR-1, USR-2, etc).
+
+Then I built analytics showing "top customers" - and it was all staff test accounts. Had to rewrite everything.
+
+The fix: separate tables completely.
+
+**User** = staff account. Login email. Role-based permissions. Manages system.
+
+**Customer** = buyer record. Phone number. Places orders. Gets SMS.
+
+These are completely different things. Staff does not show up in customer analytics. Customer does not need an email. They do not have roles. They just buy things.
+
+## Project Phases
+
+**Phase 1-2:** Basic order and customer CRUD, Google OAuth, SMS notifications
+
+**Phase 3:** Inventory system, multiple categories, stock tracking, search
+
+**Phase 4:** Analytics with Chart.js, revenue trends, top products
+
+**Phase 5:** CSV exports, bulk operations, report downloads
+
+**Phase 6:** Digital receipts, stock audit trail, guest shop, role selection gateway
 
 ## Testing
 
@@ -316,141 +304,118 @@ heroku config:set GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... -a your-app-name
 # Run all tests
 pytest tests/
 
-# Run specific test file
+# Run specific test
 pytest tests/test_orders.py -v
 
-# Run with coverage
+# With coverage
 pytest --cov=api tests/
 ```
 
-## Project Structure
+## File Structure
 
 ```
 make-an-order/
 ├── api/
-│   ├── customers.py      # Customer CRUD endpoints
-│   ├── inventory.py      # Inventory & order endpoints
+│   ├── customers.py      # Customer endpoints
+│   ├── inventory.py      # Inventory + orders
 │   ├── orders.py         # Order management
-│   ├── reports.py        # Analytics endpoints
-│   └── users.py          # User management (superuser)
+│   ├── reports.py        # Analytics
+│   └── users.py          # User management
 ├── auth/
-│   └── auth_routes.py    # Google OAuth & session management
+│   └── auth_routes.py    # OAuth + login
 ├── services/
-│   ├── seed_service.py   # Database initialization
-│   └── sms_service.py    # Africa's Talking SMS
+│   ├── seed_service.py   # DB init
+│   └── sms_service.py    # SMS sending
 ├── templates/
-│   ├── landing.html      # Marketing landing page
-│   ├── role_select.html  # Role selection gateway
-│   ├── index.html        # Staff login form
-│   ├── customer_login.html # Customer login form
-│   ├── register.html     # Staff registration request
-│   ├── base.html         # Base layout with conditional nav
-│   ├── dashboard.html    # Role-specific dashboard
-│   ├── inventory.html    # Shop/POS interface
-│   ├── customers.html    # Customer management (admin+)
-│   ├── orders.html       # Order management (admin+)
-│   ├── reports.html      # Analytics dashboard (admin+)
-│   ├── users.html        # User management (superuser+)
-│   └── receipts.html     # Order receipts
+│   ├── landing.html        # Marketing page
+│   ├── role_select.html    # Pick staff or customer
+│   ├── index.html          # Staff login
+│   ├── customer_login.html # Customer lookup
+│   ├── base.html           # Main layout
+│   ├── inventory.html      # Shop/POS interface
+│   ├── customers.html      # Customer mgmt
+│   ├── orders.html         # Order mgmt
+│   ├── reports.html        # Analytics
+│   └── receipts.html       # Order receipts
 ├── static/
-│   ├── style.css         # Bootstrap overrides & custom styles
-│   └── icons/            # Font Awesome icons
-├── models.py             # SQLAlchemy ORM models
-├── config.py             # Configuration & settings
-├── app.py                # Flask app initialization & routes
-├── requirements.txt      # Python dependencies
-└── README.md             # Quick start guide
+│   └── style.css           # Styling
+├── models.py               # Database models
+├── config.py               # Settings
+├── app.py                  # Flask app
+└── requirements.txt        # Dependencies
 ```
 
-## Architecture Highlights
-
-### User vs Customer Separation
-
-A critical architectural decision: **Users are staff members; Customers are buyers.**
-
-- **User:** Staff account with email login via Google OAuth, role-based access, manages the platform
-- **Customer:** Buyer record with phone number, purchases orders, receives SMS notifications
-
-This separation prevents the misunderstanding where staff inadvertently become customers and see their own orders in the customer list.
-
-### Role-Based UI
-
-The same template (`inventory.html`) serves three different user types with conditional logic:
-
-```html
-{% if user_role == 'admin' %}
-  <!-- Show customer selector, place order button -->
-{% elif user_role == 'operator' %}
-  <!-- Show place order button, no customer selector -->
-{% else %}
-  <!-- Guest: show only browse, disable place order -->
-{% endif %}
-```
+## Important Architecture Details
 
 ### Stock Audit Trail
 
-Every inventory change is logged with:
-- Operator who made the change
-- Quantity changed
-- Reason (sale, restock, cancel, refund)
-- Timestamp
+Every inventory change gets logged to `stock_movements`:
 
-This provides complete traceability for audits and debugging.
+```python
+StockMovement(
+    inventory_id=product.id,
+    movement_type='sale',
+    quantity_changed=-5,
+    reason='order #123',
+    created_by=admin_user.id
+)
+```
 
-### OAuth Redirect URI Configuration
+This lets you answer: who changed this stock, when, and why. You can trace back any discrepancy.
 
-The app explicitly configures the OAuth redirect_uri to match Google Console registration:
+### Role Checks Happen in Two Places
+
+Frontend hides buttons/fields based on role.
+
+```html
+{% if user_role == 'admin' %}
+  <select><!-- customer selector --></select>
+{% endif %}
+```
+
+But backend also validates. API checks role before allowing action. Frontend hiding is UX. Backend check is security.
+
+### OAuth Configuration
+
+The app needs to know its own URL. You pass it in APP_URL environment variable.
 
 ```python
 app_url = os.getenv("APP_URL", "http://localhost:5001")
 redirect_uri = f"{app_url}/auth/authorize"
-google = oauth.register(
-    redirect_uri=redirect_uri,
-    ...
-)
+google = oauth.register(redirect_uri=redirect_uri, ...)
 ```
 
-This prevents `redirect_uri_mismatch` errors when deploying to different environments.
+This matches what's registered in Google Console. Prevents redirect_uri_mismatch errors when deploying to different environments.
 
-## Performance Considerations
+### SMS is Optional
 
-- **Inventory Search:** Full-text MySQL INDEX on product names
-- **Order Pagination:** 50 items per page with offset-based pagination
-- **Stock Audit Trail:** Indexed on inventory_id for fast lookups
-- **Session Caching:** 24-hour Flask session persistence
-- **SMS Fallback:** Non-blocking, graceful failure if Africa's Talking is unavailable
+If Africa's Talking is down or the API key is wrong, the order still goes through. SMS is a nice-to-have.
 
-## Security
+```python
+try:
+    send_sms(phone, message)
+except Exception as e:
+    logger.warning(f"SMS failed: {e}")
+    # Continue anyway
+```
 
-- CSRF protection via Flask-WTF (implicit in form submission)
-- SQL injection prevention via SQLAlchemy parameterized queries
-- XSS protection via Jinja2 auto-escaping
-- Role-based access control (RBAC) enforced at API layer
-- Session timeout after 24 hours of inactivity
-- Superuser account hardcoded and protected from deletion
+## Known Limitations
 
-## Known Limitations & Future Enhancements
+- SMS only supports Africa's Talking (no Twilio fallback)
+- No built-in payment processing (external reference supported)
+- No inventory forecasting yet
+- No multi-location/franchise support yet
+- UI theme is fixed (no white-label)
 
-- SMS notifications only supported via Africa's Talking (no Twilio fallback yet)
-- No built-in payment gateway integration (external reference supported)
-- No inventory forecasting based on trends
-- No customer loyalty points system
-- UI customization limited to CSS (no white-label support yet)
+## Contributing
 
-## Support & Contribution
-
-The project is open source. For bugs, feature requests, or contributions:
-
-1. Open an issue on [GitHub](https://github.com/Markkimotho/make-an-order)
-2. Fork the repo and submit a pull request
-3. Follow PEP 8 style guidelines
-4. Include tests for new features
+Open issues on [GitHub](https://github.com/Markkimotho/make-an-order) or submit PRs. Follow PEP 8. Include tests for new features.
 
 ## License
 
-MIT License — See LICENSE file in repository.
+MIT - See LICENSE file.
 
 ---
 
-**Last Updated:** March 31, 2026
+**Updated:** March 31, 2026
 **Maintainer:** [@Markkimotho](https://github.com/Markkimotho)
