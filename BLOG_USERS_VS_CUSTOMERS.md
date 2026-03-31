@@ -1,340 +1,223 @@
 ---
 layout: post
-title: "Data Model Mistakes Cost Hours. Getting It Right From the Start Takes 20 Minutes."
+title: "Separating Users from Customers: Building a Multi-Role POS System"
 date: 2026-03-31 10:00:00
-description: Why I had to rewrite my user and customer system, step by step, and what that taught me about schema design
-tags: architecture database design sqlalchemy python
+description: How a point of sale system separates staff accounts from customer records to keep operations clean and let each role do what it needs
+tags: architecture database design python sqlalchemy
 categories: projects
 giscus_comments: true
 related_posts: true
 ---
 
-I made a database design mistake. Not a catastrophic one. But the kind that costs you time later and forces a rewrite while the system is live.
+Building a system where both staff and customers use it means deciding early: are they the same type of entity or different?
 
-The mistake: trying to use one table for two completely different types of things.
+In a POS system, they're different. Here's why and how I built it that way.
 
-Let me walk through exactly what happened and what I learned.
+## The Classification Problem
 
-## The Initial Design
+A **User** in this system is a staff member. They have an email, log in via Google OAuth, belong to a role (admin, operator, superuser). They manage the system.
 
-I thought about it like this: there are entities in the system. They all have common properties (id, name, created_at). So I'll make one User table and use a role field to distinguish between them.
+A **Customer** is a buyer. They have a name, phone number, a unique code. They place orders. They get SMS notifications. They don't manage anything.
 
-```python
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120))
-    name = db.Column(db.String(120))
-    phone = db.Column(db.String(20))
-    role = db.Column(db.String(20), default='customer')  # customer, admin, superuser
-    created_at = db.Column(db.DateTime)
-```
+These are two different types of people with different needs and different data. Putting them in the same table creates problems.
 
-A staff member? `role='admin'`. A customer? `role='customer'`. One table. Clean.
+## Why Not One Table
 
-Except it was not clean. It was hiding problems.
+If you use one User table with a role field, you get confusion:
 
-## Where the Problems Started
+- What's the phone number for? Staff contact info or customer SMS? Both?
+- Email is required for Google OAuth login. But customers don't log in with email. Should email still be required?
+- When you make a report on "top customers," which records do you filter on? role='customer'? Then staff test orders pollute the results.
+- When an admin places an order, should it link to their user record or to an actual customer record?
 
-**Problem 1: What does phone mean?**
+The table starts holding data that only applies to some rows. You add special case code everywhere. Logic gets tangled.
 
-If it's a staff member, phone might be their work phone. If it's a customer, phone is for SMS notifications. Same field. Different meanings.
+## The Separation
 
-**Problem 2: What does email mean?**
-
-Staff members use email to log in. Customers don't have email logins in this system. They log in with a code. So why is email a required field?
-
-**Problem 3: What's a customer code?**
-
-I added `customer_code` field to handle auto-provisioning. When staff placed orders, they got `USR-{id}`. But staff also have emails. Customers have codes but not emails. The table was holding data that only applies to certain rows.
-
-**Problem 4: Orders got confusing**
-
-When I created the Order table, I linked it to User:
-
-```python
-class Order(db.Model):
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-```
-
-Now what does this mean? Did a staff member place this order? Did a customer? If an admin placed an order for someone else, which user_id gets stored? The admin who processed it or the "customer" user who has the order?
-
-I had to guess at semantics. The table was unclear.
-
-## The Cascade of Workarounds
-
-To deal with the confusion, I added code to handle special cases:
-
-```python
-def get_customer_for_user(user):
-    """Get the customer record for this user, or create one if needed"""
-    if user.role == 'admin' or user.role == 'superuser':
-        return None  # These are not customers
-
-    if not user.customer_code:
-        user.customer_code = f"USR-{user.id}"
-        db.session.add(user)
-
-    # Now find/create a customer record somehow
-    customer = Customer.query.filter_by(code=user.customer_code).first()
-    if not customer:
-        customer = Customer(code=user.customer_code, name=user.name)
-        db.session.add(customer)
-
-    return customer
-```
-
-This function checks role, handles special cases, creates phantom records. Every place that needed to know "who is the customer" had to call this and deal with None returns.
-
-The codebase was filling up with patches on top of a bad foundation.
-
-## Analytics Stopped Working
-
-The big breaking point was reporting.
-
-I built a "top customers" report:
-
-```python
-def top_customers():
-    return db.session.query(
-        User.customer_code,
-        func.count(Order.id).label('order_count'),
-        func.sum(Order.total).label('revenue')
-    ).join(Order).filter(
-        User.role == 'customer'
-    ).group_by(
-        User.customer_code
-    ).order_by(
-        func.sum(Order.total).desc()
-    ).limit(10)
-```
-
-The results:
-1. USR-1 - $2000 revenue (me testing)
-2. USR-2 - $1500 revenue (another staff member testing)
-3. USR-3 - $1200 revenue (superuser placing test orders)
-4. ... (actual customers way down the list)
-
-The system was reporting phantom staff accounts as top customers. The analytics were garbage because the data model was unclear about what a customer actually was.
-
-## Migration Blew It Up
-
-At some point, I realized I had to clean the data. I could not keep operating with US auto-provisioned accounts polluting everything.
-
-I had two options:
-
-1. Keep patching the code and hoping it works
-2. Separate User and Customer into different tables
-
-Option 1 meant indefinite complexity. Option 2 meant a migration.
-
-I did the migration.
-
-## Step 1: Create the Separate Tables
+The system has two tables:
 
 ```python
 class User(db.Model):
-    """A staff member"""
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     name = db.Column(db.String(120))
     role = db.Column(db.String(20))  # admin, user, superuser
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    created_at = db.Column(db.DateTime)
 
 class Customer(db.Model):
-    """A buyer"""
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(120))
-    phone = db.Column(db.String(20))  # For SMS
-    email = db.Column(db.String(120))  # Optional contact
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class Order(db.Model):
-    """Links a customer (who bought) and a user (who processed)"""
-    id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
-    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))  # Staff who put it in
-    total = db.Column(db.Float)
+    phone = db.Column(db.String(20))
+    email = db.Column(db.String(120))  # Optional contact, not login
     created_at = db.Column(db.DateTime)
 ```
 
-Now the tables are explicit. User holds staff. Customer holds buyers. Order has two relationships: who bought it (customer) and who processed it (user).
+User has email, role, and picture. Customer has code and phone. No overlap. Each table holds what makes sense for that entity.
 
-## Step 2: Migrate Existing Data
-
-I had old User records where role was 'customer'. These needed to become Customer records.
+When you order something:
 
 ```python
-from datetime import datetime
+class Order(db.Model):
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+```
 
-users_to_migrate = User.query.filter(User.role == 'customer').all()
+`customer_id` is who bought it. `created_by` is the staff member who processed it. Clear semantics.
 
-for user in users_to_migrate:
-    # Create a customer record from this user
-    customer = Customer(
-        code=user.customer_code or f"USR-{user.id}",
-        name=user.name,
-        phone=user.phone,
-        email=user.email,
-        created_at=user.created_at
-    )
-    db.session.add(customer)
+## Login Flows
 
-db.session.commit()
+Staff login goes through Google OAuth:
 
-# Store the mapping so we can update orders
-user_to_customer = {}
-for user in users_to_migrate:
-    customer = Customer.query.filter_by(
-        code=user.customer_code or f"USR-{user.id}"
+```python
+@app.route('/auth/login')
+def staff_login():
+    return google_client.authorize_redirect()
+
+@app.route('/auth/authorize')
+def auth_callback():
+    token = google_client.get_access_token()
+    user_info = google_client.get(...)
+    user = User.query.filter_by(email=user_info.email).first()
+    if not user:
+        user = User(email=user_info.email, name=user_info.name)
+        db.session.add(user)
+    session['user_id'] = user.id
+    session['role'] = user.role
+    return redirect('/dashboard')
+```
+
+Creates or updates a User. Session established. They're logged in as staff.
+
+Customer lookup is different:
+
+```python
+@app.route('/auth/customer-login', methods=['POST'])
+def customer_login():
+    code_or_email = request.json.get('code_or_email')
+    customer = Customer.query.filter(
+        (Customer.code == code_or_email) | (Customer.email == code_or_email)
     ).first()
-    if customer:
-        user_to_customer[user.id] = customer.id
-```
-
-## Step 3: Update Orders Table
-
-Orders had `user_id`. Now they need `customer_id` and `created_by`.
-
-```python
-for order in Order.query.all():
-    if order.user_id in user_to_customer:
-        order.customer_id = user_to_customer[order.user_id]
-        order.created_by = order.user_id  # The "user" became the processor
-    db.session.add(order)
-
-db.session.commit()
-```
-
-## Step 4: Delete Old User Records
-
-Once everything migrated, delete the customer-role users.
-
-```python
-User.query.filter(User.role == 'customer').delete()
-db.session.commit()
-```
-
-Took about an hour total. Tested everything. No data loss.
-
-## Step 5: Update the Code
-
-Now the code became straightforward.
-
-Before (messy):
-```python
-def place_order(user):
-    customer = get_customer_for_user(user)  # Guess and special case
     if not customer:
-        customer = auto_provision_customer(user)  # Create one somehow
-
-    order = Order(user_id=user.id, ...)  # Ambiguous
+        return {'error': 'Customer not found'}, 404
+    session['customer_id'] = customer.id
+    return redirect('/shop')
 ```
 
-After (clear):
-```python
-@admin_api_required
-def place_order():
-    customer_id = request.json['customer_id']  # Explicit
-    customer = db.session.get(Customer, customer_id)  # Direct lookup
+Looks up a Customer record. Different session variable. Different flow. Customers never log in with email/password or OAuth. They use their code.
 
-    order = Order(
-        customer_id=customer_id,  # Clear: who is buying
-        created_by=current_user.id,  # Clear: who is processing
-        ...
-    )
-```
+## Role-Based UI
 
-No special cases. No ambiguity. Just straightforward database operations.
-
-## Step 6: Fix the Reports
-
-Now the analytics worked:
-
-```python
-def top_customers():
-    return db.session.query(
-        Customer.name,
-        func.count(Order.id).label('order_count'),
-        func.sum(Order.total).label('revenue')
-    ).join(Order).group_by(
-        Customer.id
-    ).order_by(
-        func.sum(Order.total).desc()
-    ).limit(10)
-```
-
-This only touches the Customer table. No phantom staff accounts. Just real customers who bought things.
-
-## Step 7: Update the Frontend
-
-The UI had to change because staff and customers now have separate login flows.
+The inventory page (checkout interface) looks different depending on who's using it:
 
 ```html
-<div class="role-select">
-  <a href="/login?role=staff">Staff Sign In</a>
-  <a href="/login?role=customer">Customer Login</a>
-</div>
-```
-
-Staff goes through Google OAuth. Customer enters their code. Different flows. Clear intent.
-
-The inventory page showed conditional fields:
-
-```html
-{% if user_type == 'staff' %}
-  <select name="customer_id">
+{% if user_type == 'admin' %}
+  <select id="customer-selector">
+    <option value="">Select customer...</option>
     {% for customer in all_customers %}
       <option value="{{ customer.id }}">{{ customer.name }}</option>
     {% endfor %}
   </select>
 {% endif %}
+
+<button id="place-order-btn" {% if user_type == 'guest' %}disabled{% endif %}>
+  Place Order
+</button>
 ```
 
-Staff sees a dropdown (pick which customer). Customer sees nothing (it's them). Guest sees nothing.
+Admin sees the dropdown. Has to pick a customer. Operator doesn't see the dropdown. Operates under their own customer account. Guest sees the button is disabled with a sign-in prompt.
 
-## What This Fixed
+Same page. Different UI based on role. All backed by API validation too.
 
-**Reports** — Now actually show real customers. No staff test data pollution.
+## Why This Matters
 
-**Code clarity** — No more `get_customer_for_user()` function. No special cases. Just query the right table.
+**Reports are accurate.** Top customers query only the customers table:
 
-**Permissions** — A super clear separation. Users belong under user management. Customers belong under customer management. No overlap.
+```python
+db.session.query(
+    Customer.name,
+    func.sum(Order.total_amount)
+).join(Order).group_by(Customer.id)
+```
 
-**API contracts** — Endpoints take `customer_id` explicitly. No guessing about who's the buyer.
+No staff accounts mixed in. No pretesting data. Just actual customers.
 
-**Data integrity** — Staff and customers can never accidentally mix because they're different tables.
+**Permissions are clear.** Admin management is separate from customer management. `GET /api/users` returns staff. `GET /api/customers` returns buyers. No ambiguity.
 
-## The Principle
+**Code is straightforward.** No special case handling. No checking a role field to decide what a record means. A Customer is always a buyer. A User is always staff.
 
-Your database schema is not just storage. It's how you tell the code what is true about your system.
+```python
+# Clear and simple
+def place_order():
+    customer_id = request.json['customer_id']
+    customer = db.session.get(Customer, customer_id)
+    if not customer:
+        return error('Invalid customer')
+    order = Order(customer_id=customer_id, created_by=current_user.id)
+```
 
-If you say "staff and customers are the same table," you're telling the code "these are interchangeable." But they're not. Staff manages. Customers buy. Different responsibilities. Different data.
+No guessing. No defaults. No workarounds.
 
-Separating them into different tables is not just cleaner code. It's honest about what these entities actually are.
+**Scaling is easier.** If you add new features later—loyalty points, customer tiers, account statements—they all go in the Customer table. Staff features go in User. They don't interfere.
 
-## The Cost
+## The Audit Trail
 
-The rewrite took one hour of careful migration. But I had to stop shipping features while I did it. That was one hour I did not spend on new features.
+Because staff and customers are separate, the order audit trail is clean:
 
-If I had designed it correctly from the start (which would have taken five minutes extra), I would not have lost that hour.
+```python
+class Order(db.Model):
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+```
 
-And I would not have written all the special-case code and workarounds that I then had to rip out.
+You know exactly who created the order (which staff member) and for whom (which customer). This matters if something goes wrong. You can trace it back.
 
-The investment in getting the schema right up front pays dividends immediately.
+And stock movements reference the user who made the change:
 
-## For Your Next Project
+```python
+class StockMovement(db.Model):
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
+```
 
-When you're designing your schema, ask: "What are the different types of things in this system?"
+Every inventory change is attributed. Who restocked this? Who cancelled an order and restored stock? All traceable.
 
-For each type, ask: "What data do they have? What can they do? Are they the same type as another, or different?"
+## How It Works in Practice
 
-If they're different, separate them. Give them their own table. Give them their own code paths.
+Admin logs in. Sees the dashboard. Clicks Customers. Creates a new customer: name "John", code "CUST-001", phone "+254712345678".
 
-It feels like extra work. It's actually a time saver.
+Goes to inventory. Customer dropdown shows all customers including John. Selects John. Adds products to cart. Clicks place order.
+
+Order created with customer_id pointing to John's record. SMS fires to that phone number. Order appears in reports under "John".
+
+John never logs into the staff system. He never touches analytics. Staff never shows up in customer data.
+
+Clean separation. Each party sees what they need.
+
+## The Database Stays Consistent
+
+Because the schema reflects reality (users are staff, customers are buyers), the code stays consistent. You don't wake up three months later wondering why a report is including phantom user accounts. The table structure prevented that from happening.
+
+This is what good schema design does. It prevents bad code from working.
+
+## Practical Trade-Offs
+
+There's one place where they touch:
+
+```python
+class User(db.Model):
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'))
+```
+
+A staff member can optionally be linked to a customer account. If an admin is also a customer (sells products themselves), they can have both. But it's optional. The default is: users are staff, customers are buyers.
+
+## For Your Next System
+
+When you're building something with multiple actor types, ask: what data does each type need? What do they do? If actor A needs email login and roles, and actor B needs a phone number and SMS notifications, they're different types.
+
+Put them in separate tables. Give them separate code paths. It takes a few extra minutes upfront. It saves hours of special-case handling later.
+
+The schema is your contract with the codebase. Make it honest about what your entities actually are.
 
 ---
 
-Code is on [GitHub](https://github.com/Markkimotho/make-an-order) if you want to see the current structure. Look at how orders, users, and customers relate. That's the clarity I'm talking about.
+Code is on [GitHub](https://github.com/Markkimotho/make-an-order). Look at how orders relate to users and customers. That's the clarity.
