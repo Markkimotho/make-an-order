@@ -7,7 +7,7 @@ from api.inventory import inventory_bp
 from api.users import users_bp
 from api.reports import reports_bp
 from services.database_service import create_database
-from services.seed_service import seed_inventory, seed_customers
+from services.seed_service import seed_inventory
 from authlib.integrations.flask_client import OAuth # type: ignore
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -26,6 +26,13 @@ app.config.from_object(Config)
 app.secret_key = os.getenv("APP_SECRET_KEY")
 app.config['SESSION_COOKIE_NAME'] = 'google-login-session'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
+
+# Handle proxy (for HTTPS behind reverse proxy like Nginx/Heroku)
+# This tells Flask to trust X-Forwarded-Proto header
+app.config['PREFERRED_URL_SCHEME'] = 'https' if os.getenv("APP_URL", "").startswith("https") else 'http'
+# For production deployments behind a proxy, uncomment this:
+# from werkzeug.middleware.proxy_fix import ProxyFix
+# app = ProxyFix(app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
 # Configure logging
 if not app.debug:
@@ -91,11 +98,14 @@ with app.app_context():
     migrate_schema()
     print("[app.py] seeding...", flush=True)
     seed_inventory()
-    seed_customers()
     print("[app.py] startup complete", flush=True)
 
 # OAuth Setup
 oauth = OAuth(app)
+# Construct the redirect URI that matches what's registered in Google Console
+app_url = os.getenv("APP_URL", "http://localhost:5001").rstrip('/')
+redirect_uri = f"{app_url}/auth/authorize"
+
 google = oauth.register(
     name='google',
     client_id=os.getenv("GOOGLE_CLIENT_ID"),
@@ -104,9 +114,12 @@ google = oauth.register(
     authorize_url='https://accounts.google.com/o/oauth2/auth',
     api_base_url='https://www.googleapis.com/oauth2/v1/',
     userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
+    redirect_uri=redirect_uri,  # Explicitly set the redirect_uri
     client_kwargs={'scope': 'email profile'},
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration'
 )
+
+app.logger.info(f"OAuth redirect_uri configured: {redirect_uri}")
 
 # Register the endpoint blueprints
 app.register_blueprint(customers_bp, url_prefix='/customers')
@@ -114,7 +127,7 @@ app.register_blueprint(orders_bp, url_prefix='/orders')
 app.register_blueprint(inventory_bp, url_prefix='/inventory')
 app.register_blueprint(users_bp, url_prefix='/users')
 app.register_blueprint(reports_bp, url_prefix='/reports')
-app.register_blueprint(create_auth_blueprint(oauth))
+app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
 
 
 # --- User context helper ---
@@ -132,7 +145,31 @@ def get_user_context():
 def index():
     if 'profile' in session:
         return redirect(url_for('dashboard')) # Redirect to dashboard if logged in
-    return render_template('index.html') # Landing page with login button
+    return render_template('landing.html') # Landing page gateway
+
+
+@app.route('/role-select')
+def role_select():
+    if 'profile' in session:
+        return redirect(url_for('dashboard'))
+    return render_template('role_select.html') # Select operator vs customer
+
+
+@app.route('/login')
+def login_page():
+    if 'profile' in session:
+        return redirect(url_for('dashboard'))
+    role = request.args.get('role', 'operator') # Default to operator
+    if role == 'customer':
+        return render_template('customer_login.html') # Customer login page
+    return render_template('index.html') # Operator login form page
+
+
+@app.route('/register')
+def register_page():
+    if 'profile' in session:
+        return redirect(url_for('dashboard'))
+    return render_template('register.html') # Registration form page (for operators)
 
 @app.route('/dashboard')
 @login_required
@@ -153,6 +190,15 @@ def orders_page():
 @login_required
 def inventory_page():
     return render_template('inventory.html', **get_user_context())
+
+
+@app.route('/shop')
+def shop_page():
+    """Public shop for browsing without login."""
+    return render_template('inventory.html',
+                         user_email='Guest',
+                         user_name='Guest',
+                         user_role='guest')
 
 @app.route('/users-ui')
 @admin_required
