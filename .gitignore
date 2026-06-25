@@ -48,3 +48,5 @@ coverage.xml
 instance/
 
 logs/
+
+_site/
