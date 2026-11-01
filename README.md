@@ -20,6 +20,10 @@ A customer and order management system with role-based access control (RBAC), a 
   - [Customer Endpoints](#customer-endpoints)
   - [Order Endpoints](#order-endpoints)
   - [Inventory Endpoints](#inventory-endpoints)
+  - [POS Endpoints](#pos-endpoints)
+  - [Payment Endpoints](#payment-endpoints)
+  - [Pharmacy Endpoints](#pharmacy-endpoints)
+  - [Reports Endpoints](#reports-endpoints)
   - [User Management Endpoints](#user-management-endpoints)
   - [Common Errors](#common-errors)
 - [Project Structure](#project-structure)
@@ -30,15 +34,26 @@ A customer and order management system with role-based access control (RBAC), a 
 
 ## Overview
 
-**make-an-order** is a Flask-based RESTful service for managing customers, orders, and inventory. It uses Google OAuth 2.0 for authentication and enforces role-based access so that admins manage everything while regular users only interact with their own tab.
+**make-an-order** has grown beyond a customer/order tracker into a full **Point of Sale (POS) system** for SMEs (pharmacies, supermarkets, hardware shops, salons, general retail). It now combines:
+
+- Cashier-driven sales transactions with multiple payment methods (cash, M-Pesa STK, card via Flutterwave, store credit, split tender)
+- Shift / till management with Z-reports
+- Inventory with batches, expiry tracking, low-stock alerts, suppliers and purchase orders
+- Pharmacy module: prescription capture and controlled-drug ledger
+- Customer loyalty points and store credit
+- Daily reports dashboard with CSV export
+
+The legacy customer/order/SMS flows from earlier versions are preserved unchanged.
 
 **Features:**
-- Google OAuth 2.0 login
-- RBAC with three roles: `superuser`, `admin`, `user`
-- Customer and order management (admin+)
-- Live POS-style inventory shop (all users)
-- Automatic SMS notifications on order placement via Africa's Talking
-- Superuser panel to manage users, promote roles, and link accounts to customer profiles
+- Google OAuth 2.0 login + customer self-checkout flow
+- Six roles (`superuser`, `admin`, `user`, `cashier`, `pharmacist`, `stock_clerk`)
+- POS transactions with tax, discount, loyalty redemption, manager-OTP void
+- M-Pesa Daraja STK Push + callback (Safaricom)
+- Flutterwave card payments + webhook
+- Africa's Talking SMS (order/payment/low-stock/prescription/credit-reminder)
+- Receipts: SMS, thermal-printer (42-col), and HTML
+- Manager-override OTP via Redis (with in-memory fallback)
 
 ---
 
@@ -48,9 +63,12 @@ A customer and order management system with role-based access control (RBAC), a 
 |---|---|
 | Backend | Flask 3.0, SQLAlchemy 2.0 |
 | Database | MySQL (local) / JawsDB (production) |
+| Migrations | Flask-Migrate (Alembic) |
 | Auth | Google OAuth 2.0 (Authlib) |
+| Payments | M-Pesa Daraja, Flutterwave |
 | SMS | Africa's Talking API |
-| Frontend | Jinja2, Bootstrap 5.3, Font Awesome 6 |
+| OTP store | Redis (with in-memory fallback) |
+| Frontend | Jinja2, Bootstrap 5.3, Font Awesome 6, Chart.js 4 |
 | Server | Gunicorn (production) |
 | Testing | Pytest |
 
@@ -58,14 +76,17 @@ A customer and order management system with role-based access control (RBAC), a 
 
 ## Roles & Access
 
-| Feature | `user` | `admin` | `superuser` |
-|---|:---:|:---:|:---:|
-| View own orders | ✓ | ✓ | ✓ |
-| Browse inventory / place orders on tab | ✓ | ✓ | ✓ |
-| Manage customers (CRUD) | ✗ | ✓ | ✓ |
-| Manage all orders (CRUD) | ✗ | ✓ | ✓ |
-| User management (roles, customer linking) | ✗ | ✗ | ✓ |
-| Role badge in UI | none | Admin (blue) | Super (purple) |
+| Feature | `user` | `cashier` | `pharmacist` | `stock_clerk` | `admin` | `superuser` |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| View own orders / receipts | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Browse inventory / shop | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **POS** — open shift, sell, take payment | ✗ | ✓ | ✓ | ✗ | ✓ | ✓ |
+| **Pharmacy** — capture & dispense prescriptions | ✗ | ✗ | ✓ | ✗ | ✓ | ✓ |
+| **Stock** — purchase orders, receive, suppliers | ✗ | ✗ | ✗ | ✓ | ✓ | ✓ |
+| Manage customers / orders / reports | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
+| Manage users (roles, linking) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+
+Roles are stored on the `User` row and enforced by decorators in `auth/auth_middleware.py` (`cashier_required`, `pharmacist_required`, `stock_clerk_required`, `admin_required`, `superuser_required`, plus their `*_api_required` JSON variants).
 
 **Superuser:** `kimothomark93@gmail.com` — enforced on every login regardless of the database.
 
@@ -514,7 +535,81 @@ Content-Type: application/json
 | `403 Forbidden` | Logged in but insufficient role for this action |
 | `404 Not Found` | Resource does not exist |
 | `400 Bad Request` | Missing or invalid request data |
+| `409 Conflict` | Idempotency / state conflict (e.g. closing a closed shift) |
 | `500 Internal Server Error` | Unexpected server error |
+
+---
+
+### POS Endpoints
+
+> Requires `cashier`, `pharmacist`, `admin`, or `superuser` role.
+
+**Shifts**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/pos/shift/open` | Open a shift (one per cashier at a time). Body: `{opening_float}` |
+| `GET` | `/pos/shift/current` | Current open shift for the logged-in cashier |
+| `POST` | `/pos/shift/close` | Close shift. Body: `{closing_cash}`. Returns Z-report |
+| `POST` | `/pos/shift/cash_movement` | Record cash in/out. Body: `{movement_type, amount, reason}` |
+
+**Transactions**
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/pos/transaction/new` | Start a new open transaction. Optional `customer_id` |
+| `GET` | `/pos/transaction/<id>` | Fetch transaction with items |
+| `POST` | `/pos/transaction/<id>/add_item` | Add line. Body: `{inventory_item_id, quantity, unit_price?}` |
+| `POST` | `/pos/transaction/<id>/remove_item` | Body: `{transaction_item_id}` |
+| `POST` | `/pos/transaction/<id>/apply_discount` | Body: `{amount}` or `{percent}` |
+| `POST` | `/pos/transaction/<id>/complete` | Body: `{payment_method, ...}`. Deducts stock, awards loyalty, sends SMS |
+| `POST` | `/pos/transaction/<id>/void` | Manager-OTP void. 1st call sends OTP → returns `202`. 2nd call with `{otp}` voids |
+| `POST` | `/pos/transaction/<id>/refund` | Body: `{items: [...], reason}`. Partial refunds keep status; full → `refunded` |
+| `GET` | `/pos/transaction/<id>/receipt?format=html\|sms\|thermal` | Render receipt in 3 formats |
+
+---
+
+### Payment Endpoints
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `POST` | `/payments/mpesa/stk_push` | cashier+ | Body: `{transaction_id, phone}`. Triggers Safaricom STK |
+| `POST` | `/payments/mpesa/callback` | **public** | Daraja callback. Idempotent. Always returns `ResultCode: 0` |
+| `GET` | `/payments/mpesa/status/<checkout_request_id>` | cashier+ | Query STK status |
+| `POST` | `/payments/card/initiate` | cashier+ | Body: `{transaction_id}`. Returns Flutterwave hosted link |
+| `POST` | `/payments/card/webhook` | **public** | Validates `verif-hash` then re-verifies via Flutterwave API |
+| `GET` | `/payments/card/verify/<flw_ref>` | cashier+ | Manual verification fallback |
+
+---
+
+### Pharmacy Endpoints
+
+> Requires `pharmacist`, `admin`, or `superuser`.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/pharmacy/prescriptions` | Create. Body: `{customer_id, doctor_name, items: [...]}` |
+| `GET` | `/pharmacy/prescriptions?customer_id=&open=true` | List with filters |
+| `GET` | `/pharmacy/prescriptions/<id>` | Get one with items |
+| `POST` | `/pharmacy/prescriptions/<id>/dispense` | Body: `{transaction_id, items: [{prescription_item_id, quantity_dispensed}]}` |
+| `GET` | `/pharmacy/controlled_drugs` | Full dispensing ledger per controlled drug |
+
+---
+
+### Reports Endpoints
+
+> Requires `admin` or `superuser`. All accept `?from=&to=` (defaults to last 30 days). Endpoints with `?format=csv` return a downloadable CSV.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/reports/sales_summary` | Total, count, avg basket, by-method breakdown |
+| `GET` | `/reports/shift/<id>` | Z-report for one shift |
+| `GET` | `/reports/inventory_valuation` | Cost vs retail value, projected margin |
+| `GET` | `/reports/stock_movement` | Movement audit |
+| `GET` | `/reports/low_stock` | Items at/under reorder level |
+| `GET` | `/reports/expiry?days=30` | Expiring soon + cost at risk |
+| `GET` | `/reports/top_products?limit=10` | Best sellers |
+| `GET` | `/reports/cashier_performance` | Per-cashier sales / refunds / net |
 
 ---
 
@@ -522,39 +617,47 @@ Content-Type: application/json
 
 ```
 make-an-order/
-├── app.py                    # App factory, routes, blueprints
+├── app.py                    # App factory, routes, blueprints, UI shims
 ├── config.py                 # Environment-based configuration
-├── models.py                 # SQLAlchemy models: User, InventoryItem, Customer, Order
+├── models.py                 # SQLAlchemy models — legacy + POS extensions
 ├── requirements.txt
 ├── Procfile                  # Gunicorn entry point (production)
 │
 ├── api/
-│   ├── customers.py          # /customers/* — admin+ only
-│   ├── orders.py             # /orders/*   — admin+ (my_orders open to all)
-│   ├── inventory.py          # /inventory/* — all users
-│   └── users.py              # /users/*    — superuser only
+│   ├── customers.py          # /customers/* + loyalty / credit endpoints
+│   ├── orders.py             # legacy /orders/*
+│   ├── inventory.py          # /inventory/* + suppliers / POs / low-stock / expiry
+│   ├── users.py              # /users/* — superuser only
+│   ├── pos.py                # /pos/* — shifts + transactions (cashier+)
+│   ├── payments.py           # /payments/mpesa/* + /payments/card/* (+ webhooks)
+│   ├── pharmacy.py           # /pharmacy/* — prescriptions, controlled-drug ledger
+│   └── reports.py            # /reports/* — sales, inventory, expiry, performance, CSV
 │
 ├── auth/
-│   ├── auth_routes.py        # /login, /authorize, /logout + User record sync
-│   └── auth_middleware.py    # login_required, admin_required, superuser_required,
-│                             # admin_api_required, superuser_api_required
+│   ├── auth_routes.py        # /login, /authorize, /logout + customer login
+│   └── auth_middleware.py    # login/admin/superuser/cashier/pharmacist/stock_clerk
+│                             # decorators (UI + *_api_required JSON variants)
 │
 ├── services/
 │   ├── database_service.py   # MySQL database creation helper
 │   ├── seed_service.py       # Mock inventory seeding (runs once on startup)
-│   └── sms_service.py        # Africa's Talking SMS integration
+│   ├── sms_service.py        # Africa's Talking SMS (order, payment, low-stock, etc.)
+│   ├── mpesa_service.py      # Daraja STK Push, status, callback parser
+│   ├── flutterwave_service.py# Card payment links + webhook validation
+│   ├── receipt_service.py    # build / SMS / 42-col thermal receipts
+│   ├── loyalty_service.py    # award / redeem / balance
+│   ├── audit_service.py      # AuditLog writer (never re-raises)
+│   └── otp_service.py        # Manager OTPs — Redis with in-memory fallback
 │
 ├── templates/
 │   ├── base.html             # Navbar (role-aware tabs + role badges)
-│   ├── index.html            # Login page
-│   ├── dashboard.html        # Admin: 3-card overview | User: My Account + orders
-│   ├── customers.html        # Customer management (admin+)
-│   ├── orders.html           # Order management (admin+)
-│   ├── inventory.html        # POS shop — all users (role-aware cart)
-│   ├── users.html            # User management (superuser only)
-│   ├── customer_detail.html
-│   ├── customer_edit.html
-│   ├── order_edit.html
+│   ├── pos.html              # Cashier POS surface
+│   ├── shift.html            # Shift open / close + Z-report
+│   ├── pharmacy.html         # Capture / dispense / controlled-drug ledger
+│   ├── purchase_orders.html  # Suppliers + POs + receive flow
+│   ├── reports_dashboard.html# KPIs + charts + CSV export
+│   ├── inventory.html        # Live shop
+│   ├── customers.html, orders.html, users.html, dashboard.html ...
 │   └── 404.html
 │
 ├── static/
@@ -564,27 +667,36 @@ make-an-order/
     ├── test_auth.py
     ├── test_customers.py
     ├── test_models.py
-    └── test_orders.py
+    ├── test_orders.py
+    └── test_pos_services.py  # Phone formatting, STK callback parser, OTP, receipts
 ```
 
 ---
 
 ## Environment Variables
 
+See [.env.example](.env.example) for the full template. Key variables:
+
 | Variable | Description |
 |---|---|
-| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 credentials |
 | `APP_SECRET_KEY` | Flask session secret key |
-| `MYSQL_HOST` | MySQL host (e.g. `localhost`) |
-| `MYSQL_USER` | MySQL username |
-| `MYSQL_PASSWORD` | MySQL password |
-| `MYSQL_DB` | MySQL database name |
-| `AT_USERNAME` | Africa's Talking username (`sandbox` for testing) |
-| `AT_API_KEY` | Africa's Talking API key |
-| `AT_SENDER_ID` | Africa's Talking sender ID |
+| `MYSQL_HOST` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB` | Local MySQL |
+| `JAWSDB_URL` | Production MySQL URL (overrides the four above) |
+| `AT_USERNAME` / `AT_API_KEY` / `AT_SENDER_ID` | Africa's Talking SMS |
+| `MPESA_ENV` | `sandbox` or `production` |
+| `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja credentials |
+| `MPESA_BUSINESS_SHORT_CODE` / `MPESA_PASSKEY` | STK Push config |
+| `MPESA_CALLBACK_URL` | Public HTTPS URL for the STK callback |
+| `FLW_PUBLIC_KEY` / `FLW_SECRET_KEY` / `FLW_WEBHOOK_SECRET` | Flutterwave |
+| `BUSINESS_NAME` | Receipt header |
+| `LOYALTY_POINTS_RATIO` | KES spent per 1 loyalty point (default `10`) |
+| `TAX_RATE` | VAT rate added on top of subtotal (default `0.16`) |
+| `LOW_STOCK_DAYS` | Near-expiry window in days (default `30`) |
+| `MANAGER_OTP_TTL` | Manager-override OTP lifetime in seconds (default `300`) |
+| `REDIS_URL` | Optional — for OTP storage. Falls back to in-memory if absent |
 
-> In production, `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
+> `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
 
 ---
 
@@ -594,4 +706,9 @@ make-an-order/
 pytest tests/
 ```
 
-Covers customer endpoints, order endpoints, auth routes, and models.
+Covers:
+- `test_auth.py` — auth routes
+- `test_customers.py` — customer endpoints
+- `test_orders.py` — legacy order endpoints
+- `test_models.py` — Customer/Order ORM
+- `test_pos_services.py` — phone normalisation, M-Pesa callback parser, OTP service, receipt formatting (pure unit tests)

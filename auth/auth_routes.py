@@ -1,6 +1,7 @@
 from flask import Blueprint, redirect, url_for, session, request, render_template
 from auth.auth_middleware import login_required
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,13 @@ def create_auth_blueprint(oauth):
             logger.info("User already in session, redirecting to dashboard")
             return redirect(url_for('dashboard'))
         try:
-            logger.info("Creating redirect to Google OAuth")
-            # Let Authlib use the pre-configured redirect_uri from app config
-            # This ensures it matches what's registered in Google Console
-            return google_client.authorize_redirect(prompt='select_account')
+            app_url = os.getenv("APP_URL", "http://127.0.0.1:5001").rstrip('/')
+            redirect_uri = f"{app_url}/auth/authorize"
+            logger.info(f"Redirecting to Google OAuth, callback={redirect_uri}")
+            return google_client.authorize_redirect(redirect_uri, prompt='select_account')
         except Exception as e:
             logger.error(f"Failed to initiate Google login: {type(e).__name__}: {str(e)}", exc_info=True)
-            return redirect(url_for('login_page', message=f"Could not connect to Google: {str(e)}"))
+            return redirect(url_for('index', message=f"Could not connect to Google: {str(e)}"))
 
     @auth_bp.route('/authorize')
     def authorize():
@@ -93,44 +94,10 @@ def create_auth_blueprint(oauth):
 
     @auth_bp.route('/logout')
     def logout():
-        user_email = session.get('profile', {}).get('email', 'unknown')
+        identifier = (session.get('profile') or {}).get('email') or 'unknown'
         session.clear()
-        logger.info(f"User {user_email} logged out.")
+        logger.info(f"User {identifier} logged out.")
         return redirect(url_for('index'))
-
-    # ── Customer login ──────────────────────────────────────────────────
-
-    @auth_bp.route('/customer-login', methods=['POST'])
-    def customer_login():
-        """Customer lookup by code or email."""
-        identifier = request.form.get('identifier', '').strip()
-        password   = request.form.get('password', '').strip()
-        from models import Customer
-
-        # Look up by code or email
-        customer = Customer.query.filter(
-            (Customer.code == identifier) | (Customer.email == identifier)
-        ).first()
-
-        if not customer:
-            return render_template('customer_login.html',
-                                 message="Customer not found. Please check your code or email.")
-
-        # For customers, password is optional (admin can set it)
-        # For now, just allow access if customer exists
-        if password and not hasattr(customer, 'password_hash'):
-            # Add simple validation if needed
-            pass
-
-        # Set session for customer
-        session['customer_id'] = customer.id
-        session['customer_code'] = customer.code
-        session['customer_name'] = customer.name
-        session.permanent = True
-        logger.info(f"Customer login: {identifier} (code={customer.code})")
-
-        # Redirect to inventory/dashboard
-        return redirect(url_for('inventory_page'))
 
     # ── Shared helpers ──────────────────────────────────────────────────
 

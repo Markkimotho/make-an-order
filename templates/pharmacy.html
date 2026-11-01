@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block title %}Pharmacy{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h2 class="mb-0"><i class="fas fa-prescription-bottle-medical me-2"></i>Pharmacy</h2>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#captureTab">Capture prescription</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#openTab">Open prescriptions</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ledgerTab">Controlled drugs</button></li>
+</ul>
+
+<div class="tab-content">
+  <!-- Capture -->
+  <div class="tab-pane fade show active" id="captureTab">
+    <div class="card">
+      <div class="card-body">
+        <div class="row g-2 mb-3">
+          <div class="col-md-4">
+            <label class="form-label small">Customer (search)</label>
+            <input type="text" class="form-control form-control-sm" id="rxCustSearch">
+            <div class="small mt-1" id="rxCustResults"></div>
+            <div class="small text-muted mt-1" id="rxCustSelected">No customer selected</div>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Doctor name</label>
+            <input type="text" class="form-control form-control-sm" id="rxDoctor">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Doctor phone</label>
+            <input type="text" class="form-control form-control-sm" id="rxDoctorPhone">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small">Date</label>
+            <input type="date" class="form-control form-control-sm" id="rxDate">
+          </div>
+        </div>
+
+        <h6>Items</h6>
+        <table class="table table-sm">
+          <thead><tr><th>Drug</th><th style="width:130px;">Qty prescribed</th><th>Dosage</th><th></th></tr></thead>
+          <tbody id="rxItems"></tbody>
+        </table>
+        <div class="d-flex gap-2 align-items-end flex-wrap">
+          <div style="flex:2;min-width:220px;">
+            <input type="text" class="form-control form-control-sm" id="rxItemSearch" placeholder="Search drug to add…">
+            <div class="small" id="rxItemResults"></div>
+          </div>
+        </div>
+
+        <div class="mt-3 d-flex gap-2">
+          <button class="btn btn-success" id="btnRxSave">Save prescription</button>
+          <textarea class="form-control form-control-sm" id="rxNotes" placeholder="Notes (optional)" rows="1" style="flex:1;"></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Open prescriptions / dispense -->
+  <div class="tab-pane fade" id="openTab">
+    <div class="card">
+      <div class="card-body">
+        <button class="btn btn-sm btn-outline-secondary mb-2" id="btnLoadOpen">
+          <i class="fas fa-rotate-right me-1"></i>Refresh
+        </button>
+        <div class="table-responsive">
+          <table class="table table-sm">
+            <thead><tr>
+              <th>ID</th><th>Customer</th><th>Doctor</th><th>Date</th><th>Items</th><th>Linked txn</th><th></th>
+            </tr></thead>
+            <tbody id="openRxList"><tr><td colspan="7" class="text-muted">Click Refresh.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controlled drugs -->
+  <div class="tab-pane fade" id="ledgerTab">
+    <div class="card">
+      <div class="card-body">
+        <button class="btn btn-sm btn-outline-secondary mb-2" id="btnLoadLedger">
+          <i class="fas fa-rotate-right me-1"></i>Load
+        </button>
+        <div id="ledgerBody"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Dispense modal -->
+<div class="modal fade" id="dispenseModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Dispense prescription</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <div class="mb-2">
+      <label class="form-label small">Open POS transaction ID (must contain the drugs)</label>
+      <input type="number" class="form-control form-control-sm" id="dispTxnId">
+    </div>
+    <table class="table table-sm">
+      <thead><tr><th>Drug</th><th>Prescribed</th><th>Already dispensed</th><th>Now</th></tr></thead>
+      <tbody id="dispItems"></tbody>
+    </table>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-success" id="btnDispenseConfirm">Dispense</button>
+  </div>
+</div></div></div>
+
+<script>
+'use strict';
+(function () {
+  const $ = s => document.querySelector(s);
+  let inv = [], customer = null, rxItems = [], dispenseRx = null;
+
+  async function api(method, url, body) {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    let d = null; try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error((d&&d.error)||`HTTP ${r.status}`);
+    return d;
+  }
+
+  // ---- inventory autocomplete ----
+  async function loadInv() {
+    try {
+      const list = await api('GET', '/inventory/items');
+      inv = (Array.isArray(list)?list:list.items||[])
+        .filter(i => i.is_drug);
+    } catch (e) { console.error(e); }
+  }
+
+  $('#rxItemSearch').addEventListener('input', e => {
+    const t = e.target.value.trim().toLowerCase();
+    if (!t) { $('#rxItemResults').innerHTML = ''; return; }
+    const matches = inv.filter(i => i.name.toLowerCase().includes(t)).slice(0,5);
+    $('#rxItemResults').innerHTML = matches.map(i =>
+      `<div><a href="#" data-id="${i.id}" data-name="${i.name}">${i.name} (stock ${i.stock})</a></div>`
+    ).join('');
+    $('#rxItemResults').querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        rxItems.push({
+          inventory_item_id: parseInt(a.dataset.id,10),
+          name: a.dataset.name,
+          quantity_prescribed: 1,
+          dosage_instructions: '',
+        });
+        renderRxItems();
+        $('#rxItemSearch').value = ''; $('#rxItemResults').innerHTML = '';
+      });
+    });
+  });
+
+  function renderRxItems() {
+    $('#rxItems').innerHTML = rxItems.map((it, idx) => `
+      <tr>
+        <td>${it.name}</td>
+        <td><input type="number" min="1" class="form-control form-control-sm"
+                   value="${it.quantity_prescribed}" onchange="window.PharmRx.qty(${idx}, this.value)"></td>
+        <td><input type="text" class="form-control form-control-sm"
+                   value="${it.dosage_instructions||''}" placeholder="e.g. 1 cap TID x 5d"
+                   onchange="window.PharmRx.dose(${idx}, this.value)"></td>
+        <td><button class="btn btn-sm btn-link text-danger p-0" onclick="window.PharmRx.del(${idx})">
+              <i class="fas fa-times"></i></button></td>
+      </tr>`).join('');
+  }
+  window.PharmRx = {
+    qty: (i, v) => { rxItems[i].quantity_prescribed = parseInt(v,10) || 1; },
+    dose: (i, v) => { rxItems[i].dosage_instructions = v; },
+    del: i => { rxItems.splice(i,1); renderRxItems(); },
+  };
+
+  // ---- customer autocomplete ----
+  $('#rxCustSearch').addEventListener('input', async e => {
+    const t = e.target.value.trim().toLowerCase();
+    if (!t) { $('#rxCustResults').innerHTML = ''; return; }
+    try {
+      const list = await api('GET', '/customers/view_customers');
+      const matches = list.filter(c =>
+        (c.name||'').toLowerCase().includes(t) ||
+        (c.phone_number||'').includes(t)
+      ).slice(0,5);
+      $('#rxCustResults').innerHTML = matches.map(c =>
+        `<div><a href="#" data-cid="${c.id}" data-cname="${c.name}">
+          ${c.name} · ${c.phone_number}</a></div>`).join('');
+      $('#rxCustResults').querySelectorAll('a').forEach(a => {
+        a.addEventListener('click', ev => {
+          ev.preventDefault();
+          customer = { id: parseInt(a.dataset.cid,10), name: a.dataset.cname };
+          $('#rxCustSelected').innerHTML = `<strong>${customer.name}</strong>`;
+          $('#rxCustResults').innerHTML = ''; $('#rxCustSearch').value = '';
+        });
+      });
+    } catch (err) { console.error(err); }
+  });
+
+  // ---- save prescription ----
+  $('#btnRxSave').addEventListener('click', async () => {
+    if (!customer) return alert('Select a customer.');
+    if (!rxItems.length) return alert('Add at least one drug.');
+    const body = {
+      customer_id: customer.id,
+      doctor_name:  $('#rxDoctor').value.trim(),
+      doctor_phone: $('#rxDoctorPhone').value.trim(),
+      prescription_date: $('#rxDate').value || null,
+      notes: $('#rxNotes').value.trim() || null,
+      items: rxItems.map(it => ({
+        inventory_item_id: it.inventory_item_id,
+        quantity_prescribed: it.quantity_prescribed,
+        dosage_instructions: it.dosage_instructions,
+      })),
+    };
+    try {
+      const r = await api('POST', '/pharmacy/prescriptions', body);
+      alert('Prescription #' + r.prescription.id + ' saved.');
+      rxItems = []; renderRxItems();
+      customer = null; $('#rxCustSelected').textContent = 'No customer selected';
+      $('#rxDoctor').value=''; $('#rxDoctorPhone').value=''; $('#rxNotes').value='';
+    } catch (e) { alert(e.message); }
+  });
+
+  // ---- open prescriptions ----
+  $('#btnLoadOpen').addEventListener('click', async () => {
+    try {
+      const list = await api('GET', '/pharmacy/prescriptions?open=true');
+      $('#openRxList').innerHTML = list.length ? list.map(rx => `
+        <tr>
+          <td>${rx.id}</td>
+          <td>${rx.customer_name || rx.customer_id}</td>
+          <td>${rx.doctor_name||'—'}</td>
+          <td>${rx.prescription_date||''}</td>
+          <td>${(rx.items||[]).length}</td>
+          <td>${rx.transaction_id||'—'}</td>
+          <td><button class="btn btn-sm btn-success" onclick="window.PharmRx.openDisp(${rx.id})">
+            <i class="fas fa-pills me-1"></i>Dispense</button></td>
+        </tr>`).join('') : '<tr><td colspan="7" class="text-muted">No open prescriptions.</td></tr>';
+    } catch (e) { alert(e.message); }
+  });
+
+  window.PharmRx.openDisp = async function (rxId) {
+    try {
+      const rx = await api('GET', '/pharmacy/prescriptions/' + rxId);
+      dispenseRx = rx;
+      $('#dispTxnId').value = rx.transaction_id || '';
+      $('#dispItems').innerHTML = (rx.items||[]).map(it => `
+        <tr data-pid="${it.id}">
+          <td>${it.item_name || it.inventory_item_id}</td>
+          <td>${it.quantity_prescribed}</td>
+          <td>${it.quantity_dispensed||0}</td>
+          <td><input type="number" min="0" max="${it.quantity_prescribed}" class="form-control form-control-sm disp-qty"
+                     value="${(it.quantity_prescribed||0) - (it.quantity_dispensed||0)}"></td>
+        </tr>`).join('');
+      new bootstrap.Modal($('#dispenseModal')).show();
+    } catch (e) { alert(e.message); }
+  };
+
+  $('#btnDispenseConfirm').addEventListener('click', async () => {
+    const txnId = parseInt($('#dispTxnId').value,10);
+    if (!txnId) return alert('Transaction ID is required.');
+    const items = [];
+    document.querySelectorAll('#dispItems tr').forEach(tr => {
+      const pid = parseInt(tr.dataset.pid, 10);
+      const qty = parseFloat(tr.querySelector('.disp-qty').value || 0);
+      if (qty > 0) items.push({ prescription_item_id: pid, quantity_dispensed: qty });
+    });
+    if (!items.length) return alert('Nothing to dispense.');
+    try {
+      await api('POST', `/pharmacy/prescriptions/${dispenseRx.id}/dispense`,
+                { transaction_id: txnId, items });
+      bootstrap.Modal.getInstance($('#dispenseModal')).hide();
+      alert('Dispensed.');
+      $('#btnLoadOpen').click();
+    } catch (e) { alert(e.message); }
+  });
+
+  // ---- controlled drug ledger ----
+  $('#btnLoadLedger').addEventListener('click', async () => {
+    try {
+      const list = await api('GET', '/pharmacy/controlled_drugs');
+      $('#ledgerBody').innerHTML = list.length ? list.map(item => `
+        <details class="mb-2">
+          <summary><strong>${item.name}</strong> · stock ${item.stock} ·
+            <span class="text-muted">${(item.dispensing_history||[]).length} dispense events</span></summary>
+          <table class="table table-sm mt-2">
+            <thead><tr><th>Date</th><th>Customer</th><th>Phone</th><th>Qty</th><th>Batch</th><th>Txn</th></tr></thead>
+            <tbody>${(item.dispensing_history||[]).map(h => `
+              <tr><td>${(h.date||'').slice(0,19).replace('T',' ')}</td>
+                  <td>${h.customer||'—'}</td><td>${h.customer_phone||'—'}</td>
+                  <td>${h.quantity}</td><td>${h.batch_number||'—'}</td>
+                  <td>${h.transaction_ref||''}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </details>`).join('') : '<div class="text-muted">No controlled drugs configured.</div>';
+    } catch (e) { alert(e.message); }
+  });
+
+  // init
+  loadInv();
+  $('#rxDate').valueAsDate = new Date();
+})();
+</script>
+{% endblock %}

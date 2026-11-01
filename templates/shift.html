@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Shift{% endblock %}
+
+{% block content %}
+<style>
+  .kpi { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+  .kpi .v { font-size: 22px; font-weight:600; }
+  .kpi .l { font-size: 12px; color:#666; text-transform:uppercase; letter-spacing:.5px; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h2 class="mb-0"><i class="fas fa-business-time me-2"></i>Shift</h2>
+  <div id="shiftBadge"></div>
+</div>
+
+<!-- No open shift -->
+<div id="openShiftCard" class="card mb-3 d-none">
+  <div class="card-body">
+    <h5 class="card-title">Open a new shift</h5>
+    <div class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small">Opening float (KES)</label>
+        <input type="number" step="0.01" class="form-control" id="openingFloat" value="0">
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-success" id="btnOpenShift">
+          <i class="fas fa-play me-1"></i>Open shift
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Active shift -->
+<div id="activeShiftCard" class="d-none">
+  <div class="row g-3 mb-3">
+    <div class="col-md-3"><div class="kpi"><div class="l">Opening float</div><div class="v" id="kpiFloat">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Cash sales</div><div class="v" id="kpiCash">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">M-Pesa sales</div><div class="v" id="kpiMpesa">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Card sales</div><div class="v" id="kpiCard">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Cash in</div><div class="v" id="kpiIn">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Cash out</div><div class="v" id="kpiOut">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Refunds</div><div class="v" id="kpiRefund">0.00</div></div></div>
+    <div class="col-md-3"><div class="kpi"><div class="l">Expected cash</div><div class="v text-success" id="kpiExpected">0.00</div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Cash movement</h5>
+          <div class="mb-2">
+            <select class="form-select form-select-sm" id="moveType">
+              <option value="cash_in">Cash in (e.g. petty cash float top-up)</option>
+              <option value="cash_out">Cash out (e.g. supplier payment)</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <input type="number" step="0.01" class="form-control form-control-sm" id="moveAmount" placeholder="Amount">
+          </div>
+          <div class="mb-2">
+            <input type="text" class="form-control form-control-sm" id="moveReason" placeholder="Reason (optional)">
+          </div>
+          <button class="btn btn-sm btn-primary" id="btnMove">Log movement</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title text-danger">Close shift</h5>
+          <p class="small text-muted">Count the cash drawer and enter the actual amount. Variance against the system-expected total will be logged.</p>
+          <div class="mb-2">
+            <label class="form-label small">Closing cash counted</label>
+            <input type="number" step="0.01" class="form-control" id="closingCash" placeholder="0.00">
+          </div>
+          <button class="btn btn-danger" id="btnCloseShift">
+            <i class="fas fa-power-off me-1"></i>Close shift
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Z-report -->
+  <div id="zReportCard" class="card mt-3 d-none">
+    <div class="card-body">
+      <h5 class="card-title">Z-Report</h5>
+      <pre id="zReport" style="font-family: ui-monospace, monospace; white-space: pre-wrap;"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+(function () {
+  const $ = s => document.querySelector(s);
+  const fmt = n => Number(n||0).toFixed(2);
+
+  async function api(method, url, body) {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    let d = null; try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error((d&&d.error)||`HTTP ${r.status}`);
+    return d;
+  }
+
+  async function loadCurrent() {
+    const r = await api('GET', '/pos/shift/current');
+    const s = r.shift;
+    if (s) {
+      $('#shiftBadge').innerHTML = `<span class="badge bg-success">Open · #${s.id}</span>`;
+      $('#openShiftCard').classList.add('d-none');
+      $('#activeShiftCard').classList.remove('d-none');
+      // Use sales_summary to populate KPIs (filter by cashier).
+      // Quick approach: fetch own shift Z-report endpoint.
+      try {
+        const z = await api('GET', `/reports/shift/${s.id}`);
+        $('#kpiFloat').textContent    = fmt(z.opening_float);
+        $('#kpiCash').textContent     = fmt(z.cash_sales);
+        $('#kpiMpesa').textContent    = fmt(z.mpesa_sales);
+        $('#kpiCard').textContent     = fmt(z.card_sales);
+        $('#kpiIn').textContent       = fmt(z.cash_in);
+        $('#kpiOut').textContent      = fmt(z.cash_out);
+        $('#kpiRefund').textContent   = fmt(z.refund_total);
+        $('#kpiExpected').textContent = fmt(z.expected_cash);
+      } catch (e) { /* admin-only endpoint; non-admins just see zeros */ }
+    } else {
+      $('#shiftBadge').innerHTML = `<span class="badge bg-danger">Closed</span>`;
+      $('#openShiftCard').classList.remove('d-none');
+      $('#activeShiftCard').classList.add('d-none');
+    }
+  }
+
+  $('#btnOpenShift').addEventListener('click', async () => {
+    try {
+      const opening = parseFloat($('#openingFloat').value || 0);
+      await api('POST', '/pos/shift/open', { opening_float: opening });
+      loadCurrent();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnMove').addEventListener('click', async () => {
+    try {
+      const body = {
+        type: $('#moveType').value,
+        amount: parseFloat($('#moveAmount').value || 0),
+        reason: $('#moveReason').value.trim() || undefined,
+      };
+      await api('POST', '/pos/shift/cash_movement', body);
+      $('#moveAmount').value = ''; $('#moveReason').value = '';
+      loadCurrent();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnCloseShift').addEventListener('click', async () => {
+    try {
+      const closing = parseFloat($('#closingCash').value || 0);
+      if (!confirm('Close this shift?')) return;
+      const r = await api('POST', '/pos/shift/close', { closing_cash: closing });
+      const z = r.z_report;
+      const lines = [
+        'Z-REPORT',
+        `Shift #${z.shift.id}`,
+        '--------------------------------',
+        `Opening float : ${fmt(z.opening_float)}`,
+        `Cash sales    : ${fmt(z.cash_sales)}`,
+        `M-Pesa sales  : ${fmt(z.mpesa_sales)}`,
+        `Card sales    : ${fmt(z.card_sales)}`,
+        `Cash in       : ${fmt(z.cash_in)}`,
+        `Cash out      : ${fmt(z.cash_out)}`,
+        `Refunds       : ${fmt(z.refund_total)}`,
+        '--------------------------------',
+        `Expected cash : ${fmt(z.expected_cash)}`,
+        `Counted cash  : ${fmt(z.closing_cash)}`,
+        `Variance      : ${fmt(z.cash_variance)}`,
+      ];
+      $('#zReport').textContent = lines.join('\n');
+      $('#zReportCard').classList.remove('d-none');
+      loadCurrent();
+    } catch (e) { alert(e.message); }
+  });
+
+  loadCurrent();
+})();
+</script>
+{% endblock %}

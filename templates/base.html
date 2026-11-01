@@ -11,7 +11,7 @@
 <body>
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid">
-            <a class="navbar-brand" href="{{ url_for('dashboard') }}">
+            <a class="navbar-brand" href="{% if user_role == 'guest' %}{{ url_for('index') }}{% else %}{{ url_for('dashboard') }}{% endif %}">
                 <i class="fas fa-cube"></i>Make-An-Order
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
@@ -20,13 +20,15 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+                    {% if user_role != 'guest' %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}"
                            href="{{ url_for('dashboard') }}">
                             <i class="fas fa-house me-1"></i> Dashboard
                         </a>
                     </li>
-                    {% if user_role in ('admin', 'superuser') %}
+                    {% endif %}
+                    {% if user_role in ('admin', 'superuser') and 'customers' in features %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'customers_page' %}active{% endif %}"
                            href="{{ url_for('customers_page') }}">
@@ -40,13 +42,45 @@
                         </a>
                     </li>
                     {% endif %}
+                    {% if user_role != 'guest' and 'inventory' in features %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'inventory_page' %}active{% endif %}"
                            href="{{ url_for('inventory_page') }}">
-                            <i class="fas fa-store me-1"></i> {% if user_role in ('admin', 'superuser') %}Inventory{% else %}Shop{% endif %}
+                            <i class="fas fa-store me-1"></i> {% if user_role in ('admin', 'superuser') %}Inventory{% else %}Stock{% endif %}
                         </a>
                     </li>
-                    {% if user_role in ('admin', 'superuser') %}
+                    {% endif %}
+                    {% if user_role in ('cashier', 'pharmacist', 'admin', 'superuser') and 'pos' in features %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'pos_page' %}active{% endif %}"
+                           href="{{ url_for('pos_page') }}">
+                            <i class="fas fa-cash-register me-1"></i> POS
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'shift_page' %}active{% endif %}"
+                           href="{{ url_for('shift_page') }}">
+                            <i class="fas fa-business-time me-1"></i> Shift
+                        </a>
+                    </li>
+                    {% endif %}
+                    {% if user_role in ('pharmacist', 'admin', 'superuser') and 'pharmacy' in features %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'pharmacy_page' %}active{% endif %}"
+                           href="{{ url_for('pharmacy_page') }}">
+                            <i class="fas fa-prescription-bottle-medical me-1"></i> Pharmacy
+                        </a>
+                    </li>
+                    {% endif %}
+                    {% if user_role in ('stock_clerk', 'admin', 'superuser') and 'purchase_orders' in features %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'purchase_orders_page' %}active{% endif %}"
+                           href="{{ url_for('purchase_orders_page') }}">
+                            <i class="fas fa-truck me-1"></i> Purchase Orders
+                        </a>
+                    </li>
+                    {% endif %}
+                    {% if user_role in ('admin', 'superuser') and 'reports' in features %}
                     <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'reports_page' %}active{% endif %}"
                            href="{{ url_for('reports_page') }}">
@@ -54,10 +88,26 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'reports_dashboard_page' %}active{% endif %}"
+                           href="{{ url_for('reports_dashboard_page') }}">
+                            <i class="fas fa-chart-pie me-1"></i> Analytics
+                        </a>
+                    </li>
+                    {% endif %}
+                    {% if user_role in ('admin', 'superuser') %}
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'users_page' %}active{% endif %}"
                            href="{{ url_for('users_page') }}">
                             <i class="fas fa-shield-halved me-1"></i> {% if user_role == 'superuser' %}Users{% else %}Approvals{% endif %}
                             <span id="navPendingBadge" class="badge bg-danger d-none" style="font-size:9px;vertical-align:middle;"></span>
+                        </a>
+                    </li>
+                    {% endif %}
+                    {% if user_role == 'superuser' %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'onboarding' %}active{% endif %}"
+                           href="{{ url_for('onboarding') }}" title="Business Settings">
+                            <i class="fas fa-gear me-1"></i> Settings
                         </a>
                     </li>
                     {% endif %}
@@ -71,19 +121,39 @@
                     <li class="nav-item">
                         <span class="role-badge role-admin me-1"><i class="fas fa-shield me-1"></i>Admin</span>
                     </li>
+                    {% elif user_role == 'cashier' %}
+                    <li class="nav-item">
+                        <span class="badge bg-info me-1"><i class="fas fa-cash-register me-1"></i>Cashier</span>
+                    </li>
+                    {% elif user_role == 'pharmacist' %}
+                    <li class="nav-item">
+                        <span class="badge bg-success me-1"><i class="fas fa-prescription-bottle-medical me-1"></i>Pharmacist</span>
+                    </li>
+                    {% elif user_role == 'stock_clerk' %}
+                    <li class="nav-item">
+                        <span class="badge bg-warning text-dark me-1"><i class="fas fa-boxes-stacked me-1"></i>Stock</span>
+                    </li>
                     {% endif %}
-                    {% if user_email %}
+                    {% if user_email and user_role != 'guest' %}
                     <li class="nav-item">
                         <span class="nav-link nav-user-email">
                             <i class="fas fa-circle-user me-1"></i>{{ user_email }}
                         </span>
                     </li>
                     {% endif %}
+                    {% if user_role and user_role != 'guest' %}
                     <li class="nav-item">
-                        <a class="btn-mac-logout" href="/logout">
+                        <a class="btn-mac-logout" href="{{ url_for('logout') }}">
                             <i class="fas fa-arrow-right-from-bracket me-1"></i>Sign Out
                         </a>
                     </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="btn-mac-logout" href="{{ url_for('login_page') }}">
+                            <i class="fas fa-arrow-right-to-bracket me-1"></i>Sign In
+                        </a>
+                    </li>
+                    {% endif %}
                 </ul>
             </div>
         </div>

@@ -1,7 +1,14 @@
-from flask import Blueprint, request, jsonify  # type: ignore
-from models import db, Customer
+from flask import Blueprint, request, jsonify, session  # type: ignore
+from models import (
+    db, Customer, Transaction, LoyaltyTransaction,
+    PAY_CASH, PAY_MPESA, PAY_CARD,
+)
 from sqlalchemy.exc import IntegrityError
-from auth.auth_middleware import admin_api_required, superuser_api_required
+from auth.auth_middleware import (
+    admin_api_required, superuser_api_required, cashier_api_required, login_required,
+)
+from services import audit_service, loyalty_service
+from decimal import Decimal
 import logging
 
 customers_bp = Blueprint('customers', __name__)
@@ -132,3 +139,133 @@ def delete_customer(id):
         db.session.rollback()
         logger.error(f"Error deleting customer {id}: {e}", exc_info=True)
         return jsonify({"error": "An internal server error occurred"}), 500
+
+
+# ===========================================================================
+# Loyalty
+# ===========================================================================
+
+@customers_bp.route('/<int:id>/loyalty', methods=['GET'])
+@login_required
+def customer_loyalty(id):
+    """Loyalty balance + recent ledger entries."""
+    customer = db.session.get(Customer, id)
+    if not customer:
+        return jsonify({'error': 'Customer not found'}), 404
+    history = (LoyaltyTransaction.query.filter_by(customer_id=id)
+               .order_by(LoyaltyTransaction.created_at.desc())
+               .limit(50).all())
+    return jsonify({
+        'customer_id': customer.id,
+        'balance': int(customer.loyalty_points or 0),
+        'history': [h.to_dict() for h in history],
+    }), 200
+
+
+@customers_bp.route('/<int:id>/loyalty/redeem', methods=['POST'])
+@cashier_api_required
+def customer_loyalty_redeem(id):
+    """Redeem loyalty points as a discount on an open transaction.
+
+    Body: ``{"points": 50, "transaction_id": 12}``.
+    Each point = KES 1 of discount (this matches the simple ratio used by
+    :func:`services.loyalty_service.award_points` in reverse — adjust if
+    business rule changes).
+    """
+    customer = db.session.get(Customer, id)
+    if not customer:
+        return jsonify({'error': 'Customer not found'}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        points = int(body.get('points', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'points must be an integer'}), 400
+    txn_id = body.get('transaction_id')
+    if points <= 0 or not txn_id:
+        return jsonify({'error': 'points (>0) and transaction_id are required'}), 400
+
+    txn = db.session.get(Transaction, txn_id)
+    if not txn:
+        return jsonify({'error': 'Transaction not found'}), 404
+    if txn.customer_id != customer.id:
+        return jsonify({'error': 'Transaction does not belong to this customer'}), 400
+
+    try:
+        loyalty_service.redeem_points(customer.id, txn.id, points)
+    except loyalty_service.LoyaltyError as e:
+        return jsonify({'error': str(e)}), 400
+
+    # Apply as transaction-level discount (1 point = 1 KES).
+    from api.pos import _recalc_totals  # local import to avoid cycle
+    existing = Decimal(str(txn.discount_amount or 0))
+    _recalc_totals(txn, discount_override=existing + Decimal(points))
+
+    audit_service.log(session.get('user_id'), 'loyalty.redeem',
+                      'Customer', customer.id, None,
+                      {'points': points, 'transaction_id': txn.id})
+    db.session.commit()
+    return jsonify({'message': 'Points redeemed',
+                    'balance': int(customer.loyalty_points or 0),
+                    'transaction': txn.to_dict()}), 200
+
+
+# ===========================================================================
+# Credit
+# ===========================================================================
+
+@customers_bp.route('/<int:id>/credit', methods=['GET'])
+@login_required
+def customer_credit(id):
+    """Customer credit summary: limit, balance, recent credit-paid transactions."""
+    customer = db.session.get(Customer, id)
+    if not customer:
+        return jsonify({'error': 'Customer not found'}), 404
+    recent = (Transaction.query
+              .filter(Transaction.customer_id == id,
+                      Transaction.payment_method == 'credit')
+              .order_by(Transaction.created_at.desc()).limit(50).all())
+    return jsonify({
+        'customer_id': customer.id,
+        'credit_limit':   float(customer.credit_limit or 0),
+        'credit_balance': float(customer.credit_balance or 0),
+        'available':      float((customer.credit_limit or 0) - (customer.credit_balance or 0)),
+        'recent_credit_sales': [t.to_dict() for t in recent],
+    }), 200
+
+
+@customers_bp.route('/<int:id>/credit/payment', methods=['POST'])
+@cashier_api_required
+def customer_credit_payment(id):
+    """Record a payment against a customer's credit balance.
+
+    Body: ``{"amount": 500.00, "payment_method": "cash"|"mpesa"|"card",
+             "mpesa_ref": "..."}``.
+    """
+    customer = db.session.get(Customer, id)
+    if not customer:
+        return jsonify({'error': 'Customer not found'}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        amount = Decimal(str(body.get('amount', 0)))
+    except Exception:
+        return jsonify({'error': 'amount must be numeric'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'amount must be > 0'}), 400
+    method = (body.get('payment_method') or '').lower()
+    if method not in (PAY_CASH, PAY_MPESA, PAY_CARD):
+        return jsonify({'error': 'payment_method must be cash, mpesa, or card'}), 400
+
+    current = Decimal(str(customer.credit_balance or 0))
+    if amount > current:
+        return jsonify({'error': f'amount exceeds outstanding balance ({current})'}), 400
+    customer.credit_balance = (current - amount).quantize(Decimal('0.01'))
+
+    audit_service.log(session.get('user_id'), 'credit.payment',
+                      'Customer', customer.id,
+                      {'credit_balance': float(current)},
+                      {'amount': float(amount), 'method': method,
+                       'mpesa_ref': body.get('mpesa_ref'),
+                       'credit_balance': float(customer.credit_balance)})
+    db.session.commit()
+    return jsonify({'message': 'Payment recorded',
+                    'credit_balance': float(customer.credit_balance)}), 200

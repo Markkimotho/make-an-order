@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Reports Dashboard{% endblock %}
+
+{% block content %}
+<style>
+  .kpi { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+  .kpi .v { font-size: 22px; font-weight:600; }
+  .kpi .l { font-size: 12px; color:#666; text-transform:uppercase; letter-spacing:.5px; }
+  .chart-card { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); height: 320px; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <h2 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Reports Dashboard</h2>
+  <div class="d-flex gap-2 align-items-end">
+    <div><label class="form-label small mb-0">From</label><input type="date" class="form-control form-control-sm" id="dFrom"></div>
+    <div><label class="form-label small mb-0">To</label><input type="date" class="form-control form-control-sm" id="dTo"></div>
+    <button class="btn btn-sm btn-primary" id="btnApply"><i class="fas fa-filter me-1"></i>Apply</button>
+    <a class="btn btn-sm btn-outline-secondary" id="csvLink" href="#"><i class="fas fa-file-csv me-1"></i>CSV</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-3"><div class="kpi"><div class="l">Sales total</div><div class="v" id="kpiSales">0.00</div></div></div>
+  <div class="col-md-3"><div class="kpi"><div class="l">Transactions</div><div class="v" id="kpiCount">0</div></div></div>
+  <div class="col-md-3"><div class="kpi"><div class="l">Avg basket</div><div class="v" id="kpiAvg">0.00</div></div></div>
+  <div class="col-md-3"><div class="kpi"><div class="l">Tax collected</div><div class="v" id="kpiTax">0.00</div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6"><div class="chart-card"><canvas id="byMethodChart"></canvas></div></div>
+  <div class="col-md-6"><div class="chart-card"><canvas id="topProductsChart"></canvas></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h5>Cashier performance</h5>
+      <div class="table-responsive"><table class="table table-sm">
+        <thead><tr><th>Cashier</th><th>Txns</th><th>Sales</th><th>Refunds</th><th>Net</th></tr></thead>
+        <tbody id="cashierBody"><tr><td colspan="5" class="text-muted">—</td></tr></tbody>
+      </table></div>
+    </div></div>
+  </div>
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h5>Inventory value</h5>
+      <div class="d-flex justify-content-between"><span>Cost value:</span><strong id="invCost">0.00</strong></div>
+      <div class="d-flex justify-content-between"><span>Retail value:</span><strong id="invRetail">0.00</strong></div>
+      <div class="d-flex justify-content-between"><span>Projected margin:</span><strong id="invMargin">0.00</strong></div>
+      <div class="d-flex justify-content-between"><span>Total units:</span><strong id="invUnits">0</strong></div>
+    </div></div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h5>Low stock <span class="badge bg-danger" id="lowCount">0</span></h5>
+      <div class="table-responsive" style="max-height:260px;overflow-y:auto;"><table class="table table-sm">
+        <thead><tr><th>Item</th><th>Stock</th><th>Reorder</th></tr></thead>
+        <tbody id="lowBody"><tr><td colspan="3" class="text-muted">—</td></tr></tbody>
+      </table></div>
+    </div></div>
+  </div>
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <h5>Expiring soon <span class="badge bg-warning text-dark" id="expCount">0</span></h5>
+      <div class="d-flex justify-content-between mb-2">
+        <span>Cost at risk:</span><strong id="expRisk">0.00</strong>
+      </div>
+      <div class="table-responsive" style="max-height:220px;overflow-y:auto;"><table class="table table-sm">
+        <thead><tr><th>Item</th><th>Stock</th><th>Expiry</th><th>Days</th></tr></thead>
+        <tbody id="expBody"><tr><td colspan="4" class="text-muted">—</td></tr></tbody>
+      </table></div>
+    </div></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+'use strict';
+(function () {
+  const $ = s => document.querySelector(s);
+  const fmt = n => Number(n||0).toFixed(2);
+  let charts = {};
+
+  async function api(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  function dateRange() {
+    const f = $('#dFrom').value, t = $('#dTo').value;
+    return (f && t) ? `?from=${f}&to=${t}` : '';
+  }
+
+  function ensureChart(id, type, data, options) {
+    const ctx = document.getElementById(id);
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(ctx, { type, data, options });
+  }
+
+  async function loadAll() {
+    const range = dateRange();
+    $('#csvLink').href = '/reports/sales_summary' + (range ? range + '&format=csv' : '?format=csv');
+
+    try {
+      const s = await api('/reports/sales_summary' + range);
+      $('#kpiSales').textContent = fmt(s.total);
+      $('#kpiCount').textContent = s.transaction_count || 0;
+      $('#kpiAvg').textContent   = fmt(s.average_basket);
+      $('#kpiTax').textContent   = fmt(s.tax);
+
+      const labels = Object.keys(s.by_method||{});
+      const values = labels.map(k => s.by_method[k]);
+      ensureChart('byMethodChart', 'doughnut',
+        { labels, datasets: [{ data: values,
+            backgroundColor: ['#198754','#0dcaf0','#0d6efd','#ffc107','#6f42c1','#adb5bd']}] },
+        { plugins: { title: { display: true, text: 'Sales by payment method' } } });
+    } catch (e) { console.error('summary', e); }
+
+    try {
+      const top = await api('/reports/top_products' + range);
+      ensureChart('topProductsChart', 'bar',
+        { labels: top.map(t => t.item),
+          datasets: [{ label: 'Revenue', data: top.map(t => t.revenue), backgroundColor: '#0d6efd' }] },
+        { plugins: { title: { display: true, text: 'Top products (revenue)' } },
+          scales: { y: { beginAtZero: true } } });
+    } catch (e) { console.error('top', e); }
+
+    try {
+      const rows = await api('/reports/cashier_performance' + range);
+      $('#cashierBody').innerHTML = rows.length ? rows.map(r => `
+        <tr><td>${r.cashier_name||r.cashier_id||'—'}</td>
+            <td>${r.transaction_count}</td>
+            <td>${fmt(r.sales_total)}</td>
+            <td>${fmt(r.refund_total)}</td>
+            <td><strong>${fmt(r.net)}</strong></td></tr>`).join('')
+        : '<tr><td colspan="5" class="text-muted">No data.</td></tr>';
+    } catch (e) { console.error('cashier', e); }
+
+    try {
+      const v = await api('/reports/inventory_valuation');
+      $('#invCost').textContent = fmt(v.cost_value);
+      $('#invRetail').textContent = fmt(v.retail_value);
+      $('#invMargin').textContent = fmt(v.projected_margin);
+      $('#invUnits').textContent = v.total_units || 0;
+    } catch (e) { console.error('val', e); }
+
+    try {
+      const low = await api('/reports/low_stock');
+      $('#lowCount').textContent = low.length;
+      $('#lowBody').innerHTML = low.length ? low.map(r =>
+        `<tr><td>${r.name}</td><td>${r.stock}</td><td>${r.reorder_level}</td></tr>`).join('')
+        : '<tr><td colspan="3" class="text-muted">All good.</td></tr>';
+    } catch (e) { console.error('low', e); }
+
+    try {
+      const exp = await api('/reports/expiry?days=60');
+      $('#expCount').textContent = (exp.items||[]).length;
+      $('#expRisk').textContent = fmt(exp.cost_at_risk);
+      $('#expBody').innerHTML = (exp.items||[]).length ? exp.items.map(r =>
+        `<tr><td>${r.name}</td><td>${r.stock}</td><td>${r.expiry_date||''}</td>
+             <td><span class="badge bg-${r.days_to_expiry<=0?'danger':r.days_to_expiry<=14?'warning text-dark':'secondary'}">
+             ${r.days_to_expiry}</span></td></tr>`).join('')
+        : '<tr><td colspan="4" class="text-muted">Nothing expiring.</td></tr>';
+    } catch (e) { console.error('exp', e); }
+  }
+
+  // default range: last 30 days
+  const today = new Date();
+  const thirty = new Date(); thirty.setDate(today.getDate() - 30);
+  $('#dFrom').valueAsDate = thirty;
+  $('#dTo').valueAsDate   = today;
+  $('#btnApply').addEventListener('click', loadAll);
+  loadAll();
+})();
+</script>
+{% endblock %}

@@ -26,7 +26,7 @@
                 using your email and password. You may also receive an SMS confirmation on the
                 phone number you provided.
             </div>
-            <a href="/" class="btn btn-primary w-100" style="font-size: 13px; padding: 8px;">
+            <a href="/login" class="btn btn-primary w-100" style="font-size: 13px; padding: 8px;">
                 <i class="fas fa-arrow-left me-2"></i>Back to Sign In
             </a>
         {% else %}
@@ -42,7 +42,7 @@
             </div>
             {% endif %}
 
-            <form action="/register" method="POST" style="text-align: left;">
+            <form action="/auth/register" method="POST" style="text-align: left;">
                 <div class="mb-2">
                     <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
                         Full name <span style="color: var(--mac-red);">*</span>
@@ -88,7 +88,7 @@
 
             <p style="font-size: 12px; color: var(--mac-text-muted); text-align: center; margin: 0;">
                 Already have an account?
-                <a href="/" style="color: var(--mac-blue); text-decoration: none; font-weight: 600;">Sign in</a>
+                <a href="/login" style="color: var(--mac-blue); text-decoration: none; font-weight: 600;">Sign in</a>
             </p>
         {% endif %}
     </div>

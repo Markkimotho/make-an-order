@@ -65,7 +65,7 @@
                         <div class="mb-2">
                             <label class="form-label" style="font-size:11px;">Customer</label>
                             <select class="form-select form-select-sm" id="cartCustomer">
-                                <option value="">Select a customer&hellip;</option>
+                                <option value="">Select a customer…</option>
                             </select>
                         </div>
                         <button class="btn-place-order" id="placeOrderBtn" disabled>
@@ -463,8 +463,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function canPlaceOrder() {
         if (!Object.keys(cart).length) return false;
-        if (isAdmin) return cartCustomer && !!cartCustomer.value;
-        return true;
+        if ('{{ user_role }}' === 'guest') return false;  // Guests cannot place orders
+        return cartCustomer && !!cartCustomer.value;  // All operators must select a customer
     }
 
     function renderCart() {
@@ -503,15 +503,20 @@ document.addEventListener('DOMContentLoaded', function () {
         placeOrderBtn.disabled = !canPlaceOrder();
     }
 
-    /* ── customer selector (admin only) ─────────────── */
-    if (isAdmin && cartCustomer) {
+    /* ── hide place order for guests ─────────────────── */
+    if ('{{ user_role }}' === 'guest' && placeOrderBtn) {
+        placeOrderBtn.style.display = 'none';
+    }
+
+    /* ── customer selector (operators only) ─────────────── */
+    if (cartCustomer && '{{ user_role }}' !== 'guest') {
         async function fetchCustomers() {
             try {
                 const r = await fetch('/customers/view_customers');
                 if (!r.ok) { if (r.status === 401) window.location.href = '/login'; return; }
                 const data = await r.json();
                 const cs = data.customers || data;  // Support both old and new format
-                cartCustomer.innerHTML = '<option value="">Select a customer\u2026</option>';
+                cartCustomer.innerHTML = '<option value="">Select a customer…</option>';
                 cs.forEach(c => cartCustomer.appendChild(new Option(`${c.name}  (${c.code})`, c.id)));
             } catch (e) {
                 showToast('Failed to load customers.', false);
@@ -519,19 +524,25 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         cartCustomer.addEventListener('change', () => { placeOrderBtn.disabled = !canPlaceOrder(); });
         fetchCustomers();
+    } else if (cartCustomer && '{{ user_role }}' === 'guest') {
+        // Hide customer selector for guests
+        cartCustomer.parentElement.style.display = 'none';
     }
 
     /* ── place order ─────────────────────────────────── */
     placeOrderBtn.addEventListener('click', async () => {
         if (!canPlaceOrder()) {
-            showToast(isAdmin ? 'Please select a customer first.' : 'Add items to your cart first.', false);
+            if ('{{ user_role }}' === 'guest') {
+                showToast('Please sign in or create an account to place an order.', false);
+            } else {
+                showToast('Please select a customer and add items to the cart.', false);
+            }
             return;
         }
         const items = Object.values(cart).map(({ item, qty }) => ({ id: item.id, quantity: qty }));
         placeOrderBtn.disabled = true;
-        placeOrderBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Placing\u2026';
-        const payload = { items };
-        if (isAdmin) payload.customer_id = parseInt(cartCustomer.value);
+        placeOrderBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Placing…';
+        const payload = { items, customer_id: parseInt(cartCustomer.value) };
 
         try {
             const r = await fetch('/inventory/place_order', {

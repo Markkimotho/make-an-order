@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}Purchase Orders{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h2 class="mb-0"><i class="fas fa-truck me-2"></i>Purchase Orders</h2>
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newPoModal">
+    <i class="fas fa-plus me-1"></i>New PO
+  </button>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#poListTab">Purchase Orders</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#supplierTab">Suppliers</button></li>
+</ul>
+
+<div class="tab-content">
+  <!-- PO list -->
+  <div class="tab-pane fade show active" id="poListTab">
+    <div class="card">
+      <div class="card-body">
+        <div class="d-flex gap-2 mb-2 align-items-end flex-wrap">
+          <select class="form-select form-select-sm" id="poStatusFilter" style="max-width:180px;">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="sent">Sent</option>
+            <option value="partial">Partial</option>
+            <option value="received">Received</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button class="btn btn-sm btn-outline-secondary" id="btnLoadPos">
+            <i class="fas fa-rotate-right me-1"></i>Refresh
+          </button>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm">
+            <thead><tr>
+              <th>PO #</th><th>Supplier</th><th>Status</th>
+              <th>Items</th><th>Total</th><th>Expected</th><th></th>
+            </tr></thead>
+            <tbody id="poList"><tr><td colspan="7" class="text-muted">Click Refresh.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Suppliers -->
+  <div class="tab-pane fade" id="supplierTab">
+    <div class="card">
+      <div class="card-body">
+        <h6>Add supplier</h6>
+        <div class="row g-2 mb-3">
+          <div class="col-md-3"><input class="form-control form-control-sm" id="supName" placeholder="Name"></div>
+          <div class="col-md-3"><input class="form-control form-control-sm" id="supContact" placeholder="Contact person"></div>
+          <div class="col-md-2"><input class="form-control form-control-sm" id="supPhone" placeholder="Phone"></div>
+          <div class="col-md-2"><input class="form-control form-control-sm" id="supEmail" placeholder="Email"></div>
+          <div class="col-md-2"><button class="btn btn-sm btn-success w-100" id="btnSupAdd">Add</button></div>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm">
+            <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Email</th></tr></thead>
+            <tbody id="supList"><tr><td colspan="4" class="text-muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New PO modal -->
+<div class="modal fade" id="newPoModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">New Purchase Order</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <div class="row g-2 mb-2">
+      <div class="col-md-6">
+        <label class="form-label small">Supplier</label>
+        <select class="form-select form-select-sm" id="poSupplier"></select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Expected delivery</label>
+        <input type="date" class="form-control form-control-sm" id="poExpected">
+      </div>
+    </div>
+    <h6>Items</h6>
+    <table class="table table-sm">
+      <thead><tr><th>Item</th><th>Qty</th><th>Unit cost</th><th>Line total</th><th></th></tr></thead>
+      <tbody id="poItems"></tbody>
+    </table>
+    <div class="d-flex gap-2 align-items-end">
+      <div style="flex:1;"><input class="form-control form-control-sm" id="poItemSearch" placeholder="Search inventory…">
+        <div class="small" id="poItemResults"></div>
+      </div>
+    </div>
+    <div class="mt-2">Total: <strong id="poTotal">0.00</strong></div>
+    <textarea class="form-control form-control-sm mt-2" id="poNotes" placeholder="Notes" rows="1"></textarea>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-primary" id="btnPoCreate">Create draft PO</button>
+  </div>
+</div></div></div>
+
+<!-- Receive modal -->
+<div class="modal fade" id="receiveModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Receive PO</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <table class="table table-sm">
+      <thead><tr><th>Item</th><th>Ordered</th><th>Already</th><th>Receive now</th><th>Batch #</th><th>Expiry</th></tr></thead>
+      <tbody id="recvItems"></tbody>
+    </table>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-success" id="btnRecvConfirm">Confirm receipt</button>
+  </div>
+</div></div></div>
+
+<script>
+'use strict';
+(function () {
+  const $ = s => document.querySelector(s);
+  const fmt = n => Number(n||0).toFixed(2);
+  let inv = [], suppliers = [], poItems = [], receivingPo = null;
+
+  async function api(method, url, body) {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    let d = null; try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error((d&&d.error)||`HTTP ${r.status}`);
+    return d;
+  }
+
+  async function loadInv() {
+    const list = await api('GET', '/inventory/items');
+    inv = Array.isArray(list)?list:list.items||[];
+  }
+
+  async function loadSuppliers() {
+    suppliers = await api('GET', '/inventory/suppliers');
+    $('#supList').innerHTML = suppliers.length ? suppliers.map(s =>
+      `<tr><td>${s.name}</td><td>${s.contact_person||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td></tr>`
+    ).join('') : '<tr><td colspan="4" class="text-muted">No suppliers.</td></tr>';
+    $('#poSupplier').innerHTML = suppliers.map(s =>
+      `<option value="${s.id}">${s.name}</option>`).join('');
+  }
+
+  async function loadPos() {
+    const status = $('#poStatusFilter').value;
+    const list = await api('GET', '/inventory/purchase_orders' + (status?`?status=${status}`:''));
+    $('#poList').innerHTML = list.length ? list.map(po => `
+      <tr>
+        <td>${po.po_number}</td>
+        <td>${po.supplier_name||po.supplier_id}</td>
+        <td><span class="badge bg-${badgeColor(po.status)}">${po.status}</span></td>
+        <td>${(po.items||[]).length}</td>
+        <td>${fmt(po.total)}</td>
+        <td>${po.expected_delivery_date||'—'}</td>
+        <td>
+          ${po.status==='draft'  ? `<button class="btn btn-sm btn-outline-primary me-1" onclick="window.PO.send(${po.id})">Send</button>` : ''}
+          ${po.status==='sent'||po.status==='partial' ? `<button class="btn btn-sm btn-success me-1" onclick="window.PO.recv(${po.id})">Receive</button>` : ''}
+          ${po.status!=='received'&&po.status!=='cancelled' ? `<button class="btn btn-sm btn-outline-danger" onclick="window.PO.cancel(${po.id})">Cancel</button>` : ''}
+        </td>
+      </tr>`).join('') : '<tr><td colspan="7" class="text-muted">No purchase orders.</td></tr>';
+  }
+
+  function badgeColor(s) {
+    return ({draft:'secondary', sent:'primary', partial:'warning', received:'success', cancelled:'danger'})[s] || 'secondary';
+  }
+
+  // ---- new PO ----
+  $('#poItemSearch').addEventListener('input', e => {
+    const t = e.target.value.trim().toLowerCase();
+    if (!t) { $('#poItemResults').innerHTML=''; return; }
+    const matches = inv.filter(i => i.name.toLowerCase().includes(t)).slice(0,5);
+    $('#poItemResults').innerHTML = matches.map(i =>
+      `<div><a href="#" data-id="${i.id}" data-name="${i.name}" data-cost="${i.cost_price||0}">${i.name}</a></div>`).join('');
+    $('#poItemResults').querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        poItems.push({
+          inventory_item_id: parseInt(a.dataset.id,10),
+          name: a.dataset.name,
+          quantity_ordered: 1,
+          unit_cost: parseFloat(a.dataset.cost) || 0,
+        });
+        renderPoItems();
+        $('#poItemSearch').value=''; $('#poItemResults').innerHTML='';
+      });
+    });
+  });
+
+  function renderPoItems() {
+    let total = 0;
+    $('#poItems').innerHTML = poItems.map((it, idx) => {
+      const lt = (it.quantity_ordered||0) * (it.unit_cost||0);
+      total += lt;
+      return `<tr>
+        <td>${it.name}</td>
+        <td><input type="number" min="1" class="form-control form-control-sm"
+                   value="${it.quantity_ordered}" onchange="window.PO.qty(${idx}, this.value)"></td>
+        <td><input type="number" step="0.01" class="form-control form-control-sm"
+                   value="${it.unit_cost}" onchange="window.PO.cost(${idx}, this.value)"></td>
+        <td>${fmt(lt)}</td>
+        <td><button class="btn btn-sm btn-link text-danger p-0" onclick="window.PO.del(${idx})">
+              <i class="fas fa-times"></i></button></td></tr>`;
+    }).join('');
+    $('#poTotal').textContent = fmt(total);
+  }
+
+  window.PO = {
+    qty: (i,v)  => { poItems[i].quantity_ordered = parseInt(v,10)||1; renderPoItems(); },
+    cost: (i,v) => { poItems[i].unit_cost = parseFloat(v)||0; renderPoItems(); },
+    del:  i     => { poItems.splice(i,1); renderPoItems(); },
+    send: async id => {
+      try { await api('PUT', `/inventory/purchase_orders/${id}/status`, { status: 'sent' }); loadPos(); }
+      catch (e) { alert(e.message); }
+    },
+    cancel: async id => {
+      if (!confirm('Cancel this PO?')) return;
+      try { await api('PUT', `/inventory/purchase_orders/${id}/status`, { status: 'cancelled' }); loadPos(); }
+      catch (e) { alert(e.message); }
+    },
+    recv: async id => {
+      try {
+        const po = await api('GET', `/inventory/purchase_orders/${id}`);
+        receivingPo = po;
+        $('#recvItems').innerHTML = (po.items||[]).map(li =>
+          `<tr data-pid="${li.id}">
+            <td>${li.item_name||li.inventory_item_id}</td>
+            <td>${li.quantity_ordered}</td>
+            <td>${li.quantity_received||0}</td>
+            <td><input type="number" min="0" max="${li.quantity_ordered - (li.quantity_received||0)}"
+                       class="form-control form-control-sm rcv-qty"
+                       value="${li.quantity_ordered - (li.quantity_received||0)}"></td>
+            <td><input type="text" class="form-control form-control-sm rcv-batch" placeholder="Batch"></td>
+            <td><input type="date" class="form-control form-control-sm rcv-exp"></td>
+          </tr>`).join('');
+        new bootstrap.Modal($('#receiveModal')).show();
+      } catch (e) { alert(e.message); }
+    },
+  };
+
+  $('#btnPoCreate').addEventListener('click', async () => {
+    if (!poItems.length) return alert('Add at least one item.');
+    try {
+      const body = {
+        supplier_id: parseInt($('#poSupplier').value,10),
+        expected_delivery_date: $('#poExpected').value || null,
+        notes: $('#poNotes').value.trim() || null,
+        items: poItems.map(it => ({
+          inventory_item_id: it.inventory_item_id,
+          quantity_ordered: it.quantity_ordered,
+          unit_cost: it.unit_cost,
+        })),
+      };
+      await api('POST', '/inventory/purchase_orders', body);
+      bootstrap.Modal.getInstance($('#newPoModal')).hide();
+      poItems = []; renderPoItems(); $('#poNotes').value=''; $('#poExpected').value='';
+      loadPos();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnRecvConfirm').addEventListener('click', async () => {
+    const items = [];
+    document.querySelectorAll('#recvItems tr').forEach(tr => {
+      const pid = parseInt(tr.dataset.pid,10);
+      const qty = parseInt(tr.querySelector('.rcv-qty').value||0,10);
+      if (qty > 0) {
+        items.push({
+          po_item_id: pid, quantity_received: qty,
+          batch_number: tr.querySelector('.rcv-batch').value.trim() || null,
+          expiry_date:  tr.querySelector('.rcv-exp').value || null,
+        });
+      }
+    });
+    if (!items.length) return alert('Nothing to receive.');
+    try {
+      await api('POST', `/inventory/purchase_orders/${receivingPo.id}/receive`, { items });
+      bootstrap.Modal.getInstance($('#receiveModal')).hide();
+      loadPos();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnSupAdd').addEventListener('click', async () => {
+    const body = {
+      name: $('#supName').value.trim(),
+      contact_person: $('#supContact').value.trim() || null,
+      phone: $('#supPhone').value.trim() || null,
+      email: $('#supEmail').value.trim() || null,
+    };
+    if (!body.name) return alert('Name is required.');
+    try {
+      await api('POST', '/inventory/suppliers', body);
+      $('#supName').value=$('#supContact').value=$('#supPhone').value=$('#supEmail').value='';
+      loadSuppliers();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnLoadPos').addEventListener('click', loadPos);
+  $('#poStatusFilter').addEventListener('change', loadPos);
+
+  loadInv(); loadSuppliers(); loadPos();
+})();
+</script>
+{% endblock %}

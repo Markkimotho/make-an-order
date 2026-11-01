@@ -26,3 +26,30 @@ class Config:
     MYSQL_USER=os.environ.get("MYSQL_USER")
     MYSQL_PASSWORD=os.environ.get("MYSQL_PASSWORD")
     MYSQL_DB=os.environ.get("MYSQL_DB")
+
+    # ------------------------------------------------------------------
+    # POS extensions
+    # ------------------------------------------------------------------
+
+    # M-Pesa Daraja (Safaricom)
+    MPESA_CONSUMER_KEY        = os.environ.get("MPESA_CONSUMER_KEY")
+    MPESA_CONSUMER_SECRET     = os.environ.get("MPESA_CONSUMER_SECRET")
+    MPESA_BUSINESS_SHORT_CODE = os.environ.get("MPESA_BUSINESS_SHORT_CODE")
+    MPESA_PASSKEY             = os.environ.get("MPESA_PASSKEY")
+    MPESA_CALLBACK_URL        = os.environ.get("MPESA_CALLBACK_URL")
+    MPESA_ENV                 = os.environ.get("MPESA_ENV", "sandbox")  # 'sandbox' | 'production'
+
+    # Flutterwave
+    FLW_SECRET_KEY    = os.environ.get("FLW_SECRET_KEY")
+    FLW_PUBLIC_KEY    = os.environ.get("FLW_PUBLIC_KEY")
+    FLW_WEBHOOK_SECRET = os.environ.get("FLW_WEBHOOK_SECRET")
+
+    # Business / POS settings
+    BUSINESS_NAME        = os.environ.get("BUSINESS_NAME", "Make-An-Order POS")
+    LOYALTY_POINTS_RATIO = int(os.environ.get("LOYALTY_POINTS_RATIO", "10"))   # KES per point
+    TAX_RATE             = float(os.environ.get("TAX_RATE", "0.16"))           # 16% VAT
+    LOW_STOCK_DAYS       = int(os.environ.get("LOW_STOCK_DAYS", "30"))         # default expiring window
+    MANAGER_OTP_TTL      = int(os.environ.get("MANAGER_OTP_TTL", "300"))       # seconds
+
+    # Redis (for OTPs / future caching). Falls back to in-memory if unreachable.
+    REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
