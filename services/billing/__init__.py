@@ -67,6 +67,24 @@ def possible_missed_payments():
     return hints
 
 
+def pay_url(invoice):
+    """The absolute public link where a customer pays ``invoice`` by M-Pesa.
+
+    Uses PUBLIC_BASE_URL; inside a request it falls back to the request's
+    host. Outside a request (SMS jobs) without PUBLIC_BASE_URL it raises,
+    since a relative link in a text message is useless.
+    """
+    from flask import current_app, has_request_context, request
+    from models import Tenant, db
+    tenant = db.session.get(Tenant, invoice.tenant_id)
+    base = current_app.config.get("PUBLIC_BASE_URL")
+    if not base:
+        if not has_request_context():
+            raise BillingError("PUBLIC_BASE_URL is not set; cannot build a pay link")
+        base = request.host_url
+    return f"{base.rstrip('/')}/o/{tenant.slug}/pay/{invoice.pay_token}"
+
+
 def credit_due_date(customer, today):
     return today + timedelta(days=int(customer.credit_term_days or 30))
 

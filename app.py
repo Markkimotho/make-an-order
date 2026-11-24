@@ -21,6 +21,7 @@ from flask import (Flask, Response, g, jsonify, redirect, render_template, reque
 from flask_migrate import Migrate
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from public import limiter, public_bp
 from api.customers import customers_bp
 from api.daraja import daraja_bp
 from api.inventory import inventory_bp
@@ -231,6 +232,8 @@ def create_app(config_override=None):
     app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
     app.register_blueprint(settings_bp, url_prefix='/settings')
+    app.register_blueprint(public_bp, url_prefix='/o')
+    limiter.init_app(app)
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
 
     app.before_request(bind_request_tenant)
@@ -242,10 +245,12 @@ def create_app(config_override=None):
 
 
 class RedactCallbackTokens(logging.Filter):
-    """Webhook URLs carry each business's callback token; keep it out of
-    request logs (werkzeug, gunicorn access log, app logs)."""
+    """Webhook URLs carry each business's callback token, and pay links an
+    invoice's pay token; keep both out of request logs (werkzeug, gunicorn
+    access log, app logs)."""
 
-    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/)[^/\s?\"]+")
+    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/|/o/[^/\s]+/pay/)"
+                          r"[^/\s?\"]+")
 
     def filter(self, record):
         try:
@@ -261,7 +266,7 @@ class RedactCallbackTokens(logging.Filter):
 def _configure_logging(app):
     token_filter = RedactCallbackTokens()
     for name in ("werkzeug", "gunicorn.access", "gunicorn.error", "api.daraja",
-                 "services.billing.stk", app.logger.name):
+                 "services.billing.stk", "public.routes", app.logger.name):
         target = logging.getLogger(name)
         if not any(isinstance(f, RedactCallbackTokens) for f in target.filters):
             target.addFilter(token_filter)

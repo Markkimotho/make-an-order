@@ -72,3 +72,9 @@ class Config:
 
     # Redis (for OTPs / future caching). Falls back to in-memory if unreachable.
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    # Rate limits on the public pages: Redis when configured (shared by all
+    # workers), else per-process memory.
+    RATELIMIT_STORAGE_URI = (os.environ.get("RATELIMIT_STORAGE_URI")
+                             or os.environ.get("REDIS_URL") or "memory://")
+    # Absolute base for links sent by SMS (pay links), e.g. https://app.example.co.ke
+    PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL")

@@ -50,6 +50,7 @@ def database_url(tmp_path):
 def make_app(database_url, **extra):
     return app_module.create_app({
         "TESTING": True,
+        "RATELIMIT_STORAGE_URI": "memory://",
         "SECRET_KEY": "test",
         "SQLALCHEMY_DATABASE_URI": database_url,
         **extra,

@@ -10,7 +10,7 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCANNED = [ROOT / "app.py", *(ROOT / d for d in ("api", "auth", "services"))]
+SCANNED = [ROOT / "app.py", *(ROOT / d for d in ("api", "auth", "public", "services"))]
 
 BANNED_CALLS = {"text", "insert", "bulk_insert_mappings", "bulk_update_mappings",
                 "bulk_save_objects", "connection", "exec_driver_sql", "merge",
@@ -35,6 +35,7 @@ UNSCOPED_ALLOWLIST = {
     ("auth/auth_routes.py", "login_local"),
     ("auth/auth_routes.py", "register"),        # create tenant + owner
     ("services/sms_service.py", "_message_tenant"),  # delivery reports: one global URL
+    ("public/routes.py", "_business"),          # public link slug -> business
 }
 
 
