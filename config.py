@@ -48,7 +48,6 @@ class Config:
     MPESA_CONSUMER_SECRET     = os.environ.get("MPESA_CONSUMER_SECRET")
     MPESA_BUSINESS_SHORT_CODE = os.environ.get("MPESA_BUSINESS_SHORT_CODE")
     MPESA_PASSKEY             = os.environ.get("MPESA_PASSKEY")
-    MPESA_CALLBACK_URL        = os.environ.get("MPESA_CALLBACK_URL")
     MPESA_ENV                 = os.environ.get("MPESA_ENV", "sandbox")  # 'sandbox' | 'production'
 
     # Flutterwave (cards). Off by default: card money settles to the platform's

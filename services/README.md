@@ -11,7 +11,9 @@ call into `services/*` and translate domain errors to HTTP responses.
 
 | Module | Talks to | Raises | Safe to call without external deps? |
 |---|---|---|---|
-| [`mpesa_service`](mpesa_service.py)           | Safaricom Daraja                | `MpesaError`        | No — needs network + creds |
+| [`daraja`](daraja/)                           | Safaricom Daraja, per business  | `DarajaError`       | No — needs network + the business's creds |
+| [`billing`](billing/)                         | Invoices, payments, allocation  | `BillingError`      | Yes (database) |
+| [`mpesa_service`](mpesa_service.py)           | Phone format, STK callback parse | `ValueError`       | Yes |
 | [`flutterwave_service`](flutterwave_service.py) | Flutterwave v3                  | `FlutterwaveError`  | No — needs network + creds |
 | [`sms_service`](sms_service.py)               | Africa's Talking                | never (returns bool) | Yes — gracefully logs & returns False |
 | [`receipt_service`](receipt_service.py)       | DB (read-only)                  | `ValueError`        | Yes |
@@ -36,91 +38,45 @@ call into `services/*` and translate domain errors to HTTP responses.
 3. **Money is `Decimal`.** Receipts cast to `float` only at the very edge
    (JSON output / printer). Internal arithmetic uses `Decimal` to avoid
    floating-point drift on prices.
-4. **Phone numbers use `mpesa_service.format_phone()`** before any AT or
+4. **Phone numbers use `services.phone.normalize_ke_phone()`** before any AT or
    Daraja call. Accepts `+254...`, `07...`, `01...`, `7...`, `1...`, `254...`.
 
 ---
 
-## `mpesa_service.py` — Daraja (M-Pesa STK Push)
+## `billing/` — invoices and payments (the only writer)
 
-Encapsulates all calls to Safaricom's Lipa-Na-M-Pesa-Online API. Switches
-between sandbox and production based on `Config.MPESA_ENV`.
+Every sale is an `Invoice`; money received is a `Payment` allocated to
+invoices (`PaymentAllocation`); credit notes are `InvoiceAdjustment`; STK
+pushes are `PaymentIntent`. See `models/billing.py` for the money model.
 
-### Required config
-- `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET` — from the Daraja portal app
-- `MPESA_BUSINESS_SHORT_CODE` — Paybill / Till number (sandbox default `174379`)
-- `MPESA_PASSKEY` — Lipa Na M-Pesa Online passkey
-- `MPESA_CALLBACK_URL` — **must be HTTPS and publicly reachable**; Daraja will
-  POST the result here. For local dev use ngrok / cloudflared.
-- `MPESA_ENV` — `sandbox` (default) or `production`
-
-### API
 ```python
-from services.mpesa_service import (
-    get_access_token, stk_push, query_stk_status,
-    parse_stk_callback, format_phone, MpesaError,
-)
+from services import billing
+inv = billing.create_invoice(total=1500, kind="credit", customer_id=c.id, due_date=d)
+billing.record_payment(method="mpesa_c2b", amount=1500, receipt="SJK82910PL",
+                       bill_ref=inv.invoice_number)       # idempotent on the receipt
+billing.adjust(inv, 200, "return")                         # credit note
+billing.void_invoice(inv); billing.reallocate(p, other); billing.reverse_payment(p)
+billing.customer_exposure(c.id); billing.review_queue()
 ```
 
-| Function | Purpose | Returns |
-|---|---|---|
-| `get_access_token(force_refresh=False)` | OAuth bearer; cached for ~55 min in module state | `str` |
-| `stk_push(phone, amount, account_ref, description="Payment")` | Push the prompt to the customer's phone | Daraja JSON incl. `CheckoutRequestID` |
-| `query_stk_status(checkout_request_id)` | Poll a previous push | Daraja JSON |
-| `parse_stk_callback(body)` | Flatten Daraja's nested callback payload | dict (see below) |
-| `format_phone(phone)` | Normalise to `2547XXXXXXXX` | `str` |
+Runs in the bound tenant; callers commit. `billing.stk` handles STK pushes,
+Daraja callbacks, Paybill confirmations and the sweep
+(`flask payments-sweep`, every 10 minutes). Regression stories:
+`tests/evals/reconciliation_cases.json`.
 
-### Checkout flow
-```
-            +------------------+
-POST /pos/  | api/payments.py  |  call mpesa_service.stk_push(...)
-mpesa/      |                  |--------------------------------------+
-stk_push    |                  |        store CheckoutRequestID on    |
-            |                  |        Transaction.checkout_request_id
-            +------------------+                                       |
-                     ^                                                  v
-                     |                                       +------------------+
-                     |                                       |  Safaricom       |
-                     |                                       |  pushes prompt   |
-                     |       +---------------------+         |  to customer     |
-                     +-------| /payments/mpesa/    |<--------|                  |
-                             | callback (POST)     |  POST   +------------------+
-                             | parse_stk_callback  |  JSON
-                             | mark txn confirmed  |
-                             +---------------------+
-```
+## `daraja/` — Safaricom Daraja, one business at a time
 
-### Parsed callback shape
-```python
-{
-    "checkout_request_id": "ws_CO_...",
-    "result_code":         0,
-    "result_desc":         "The service request is processed successfully.",
-    "success":             True,
-    "amount":              1500.0,
-    "mpesa_receipt":       "QH12345678",
-    "phone_number":        "254712345678",
-    "transaction_date":    "20260502143015",
-}
-```
+`DarajaClient(tenant)` uses that business's own shortcode, keys and
+environment: `stk_push`, `query` (paid / failed / processing),
+`register_c2b` (always `ResponseType: Completed`). Paybill pushes use
+`CustomerPayBillOnline`; Till pushes `CustomerBuyGoodsOnline` with the store
+number as shortcode and the till as PartyB. Tokens are cached in Redis per
+business (`daraja:token:<id>`, TTL `expires_in - 120`), memory fallback.
+Callback URLs: `/api/payments/daraja/{stk|c2b}/<slug>/<callback_token>`.
 
-### Error handling
-Every function raises `MpesaError` on network failure, non-200 response, or
-malformed JSON. Blueprints should map `MpesaError` → `502 Bad Gateway`.
+## `mpesa_service.py` — helpers
 
-### Testing
-Patch at the module boundary with `pytest-mock`:
-```python
-def test_stk_push(mocker):
-    mocker.patch("services.mpesa_service.get_access_token", return_value="tok")
-    mocker.patch("services.mpesa_service.requests.post", return_value=mocker.Mock(
-        status_code=200, json=lambda: {"ResponseCode": "0", "CheckoutRequestID": "ws_CO_x"}
-    ))
-    res = stk_push("0712345678", 100, "TXN-1")
-    assert res["CheckoutRequestID"] == "ws_CO_x"
-```
-
----
+`format_phone()` (Daraja's `2547XXXXXXXX`) and `parse_stk_callback()`.
 
 ## `flutterwave_service.py` — Card payments
 
@@ -333,8 +289,8 @@ per-process, so an OTP generated by worker A won't be visible to worker B.
 
 All external HTTP calls go through one of these symbols:
 
-- `services.mpesa_service.requests.get` / `.post`
-- `services.mpesa_service.get_access_token` (cached; patch to skip OAuth)
+- `services.daraja.client.requests.get` / `.post` (see `tests/daraja_fakes.py`)
+- `services.daraja.tokens._get_redis` (return `None` for the memory cache)
 - `services.flutterwave_service.requests.get` / `.post`
 - `services.sms_service._client` (returns the Africa's Talking SMS client, or `None`
   when unconfigured; patch it to return a fake with a `send` method)

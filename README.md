@@ -203,6 +203,9 @@ Other commands:
 ```bash
 flask create-platform-admin you@example.com   # operator account with no business
 flask grant-platform-admin you@example.com    # make an existing user an operator
+flask tenants import-env-credentials <slug>   # old MPESA_* settings into a business
+flask tenants register-c2b <slug>             # register Paybill URLs with Safaricom
+flask payments-sweep                          # every 10 min: finish silent STK pushes
 flask seed-demo <tenant-slug>                  # demo inventory for an empty business
 ```
 
@@ -623,14 +626,27 @@ Content-Type: application/json
 
 ### Payment Endpoints
 
+Every sale is an invoice (`INV000123`); money is recorded once per M-Pesa
+receipt and allocated to invoices, oldest first, with any excess kept as
+the customer's credit. Each business's M-Pesa settles to its own Till or
+Paybill (set up at `/settings`).
+
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/payments/mpesa/stk_push` | cashier+ | Body: `{transaction_id, phone}`. Triggers Safaricom STK |
-| `POST` | `/payments/mpesa/callback` | **public** | Daraja callback. Idempotent. Always returns `ResultCode: 0` |
-| `GET` | `/payments/mpesa/status/<checkout_request_id>` | cashier+ | Query STK status |
-| `POST` | `/payments/card/initiate` | cashier+ | Body: `{transaction_id}`. Returns Flutterwave hosted link |
-| `POST` | `/payments/card/webhook` | **public** | Validates `verif-hash` then re-verifies via Flutterwave API |
-| `GET` | `/payments/card/verify/<flw_ref>` | cashier+ | Manual verification fallback |
+| `POST` | `/payments/mpesa/stk_push` | cashier+ | Body: `{transaction_id or invoice_id, phone_number}`. One prompt per phone per 90 s |
+| `GET` | `/payments/intents/<id>` | cashier+ | Poll a push; asks Daraja itself after 30 s of silence |
+| `POST` | `/payments/manual` | cashier+ | Typed M-Pesa code `{transaction_id or invoice_id, receipt, amount}`; unverified until Daraja confirms |
+| `GET` | `/payments/review` | admin+ | Unmatched money, unverified codes, amount mismatches, possible missed Paybill payments |
+| `POST` | `/payments/<id>/assign` | owner | Move a payment to the right invoice |
+| `POST` | `/payments/<id>/reverse` | owner | Safaricom reversed it; invoices reopen |
+| `POST` | `/api/payments/daraja/stk/<slug>/<token>` | **public** | STK result; verified with Daraja before money is recorded |
+| `POST` | `/api/payments/daraja/c2b/<slug>/<token>` | **public** | Paybill/Till confirmation; matched by account reference |
+| `POST` | `/api/payments/daraja/c2b/<slug>/<token>/validate` | **public** | Always accepts |
+| `POST`/`GET` | `/payments/card/...` | — | Flutterwave cards, off unless `CARD_PAYMENTS_ENABLED=1` |
+
+The POS completes a sale as M-Pesa only once the money is recorded. Run
+`flask payments-sweep` every 10 minutes (Heroku Scheduler or cron): it finds
+payments whose Safaricom callback never arrived.
 
 ---
 
@@ -743,10 +759,6 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `MYSQL_HOST` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB` | Local MySQL |
 | `JAWSDB_URL` | Production MySQL URL (overrides the four above) |
 | `AT_USERNAME` / `AT_API_KEY` / `AT_SENDER_ID` | Africa's Talking SMS |
-| `MPESA_ENV` | `sandbox` or `production` |
-| `MPESA_CONSUMER_KEY` / `MPESA_CONSUMER_SECRET` | Daraja credentials |
-| `MPESA_BUSINESS_SHORT_CODE` / `MPESA_PASSKEY` | STK Push config |
-| `MPESA_CALLBACK_URL` | Public HTTPS URL for the STK callback |
 | `FLW_PUBLIC_KEY` / `FLW_SECRET_KEY` / `FLW_WEBHOOK_SECRET` | Flutterwave |
 | `BUSINESS_NAME` | Receipt header |
 | `LOYALTY_POINTS_RATIO` | KES spent per 1 loyalty point (default `10`) |
@@ -757,6 +769,8 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `PROXY_FIX_X_FOR` / `PROXY_FIX_X_PROTO` | Reverse-proxy hops to trust (default `1`, Heroku's router; add one per CDN/WAF) |
 | `TENANT_SECRETS_KEY` | Fernet key encrypting each business's Daraja/eTIMS secrets. Required before any secret is saved; losing it makes them unreadable |
 | `PLATFORM_ADMIN_EMAILS` | Operator emails allowed platform-admin rights. The flag itself is set only by `flask create-platform-admin` / `flask grant-platform-admin`; login removes it if the email is not listed |
+| `MPESA_*` | Old single-business Daraja settings; only read by `flask tenants import-env-credentials`. Each business now enters its own at `/settings` |
+| `DARAJA_ALLOWED_IPS` | Optional: only accept Daraja webhooks from these IPs (needs `PROXY_FIX_X_FOR` right) |
 | `CARD_PAYMENTS_ENABLED` | `1` turns on Flutterwave card payments. Off by default: card money settles to the platform's account, not the business's |
 
 > `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
