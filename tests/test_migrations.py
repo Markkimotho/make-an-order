@@ -65,14 +65,40 @@ def test_every_constraint_named(tmp_path):
             assert insp.get_pk_constraint(table)["name"], f"unnamed PK on {table}"
 
 
-def test_create_all_database_stamps_clean(tmp_path):
-    """An existing database built by the old startup create_all() is stamped."""
+def test_legacy_database_stamps_with_only_unique_name_drift(tmp_path):
+    """A database built by the pre-Alembic create_all() (unnamed constraints).
+
+    Stamping must work and leave no table, column or type drift. The one
+    known difference is the nine single-column unique constraints, unnamed
+    there and convention-named in the models; 0003 normalises them.
+    """
+    from tests.legacy_schema import LEGACY_UNIQUE_COLUMNS, create_legacy_schema
+
     app = _app(tmp_path)
     with app.app_context():
-        db.create_all()
+        create_legacy_schema(db.engine)
         stamp(revision="0001_baseline")
         upgrade()  # already at head: must be a no-op
         assert _tables() == BASELINE_TABLES | {"alembic_version"}
+
+    diff = _diff(app)
+    unique_drift = set()
+    for op in diff:
+        assert isinstance(op, tuple) and op[0] == "add_constraint", f"unexpected drift: {op}"
+        constraint = op[1]
+        assert len(constraint.columns) == 1, f"unexpected drift: {op}"
+        column = next(iter(constraint.columns))
+        unique_drift.add((constraint.table.name, column.name))
+    assert unique_drift == LEGACY_UNIQUE_COLUMNS
+
+
+def test_fresh_database_has_no_drift_after_stamp(tmp_path):
+    """Stamping a database already built by the baseline is a no-op."""
+    app = _app(tmp_path)
+    with app.app_context():
+        upgrade()
+        stamp(revision="0001_baseline")
+        upgrade()
     assert _diff(app) == []
 
 

@@ -25,6 +25,30 @@ def app(tmp_path):
         downgrade(revision="base")
 
 
+class FakeSMS:
+    """Stands in for the Africa's Talking SMS client. Records every send."""
+
+    def __init__(self):
+        self.sent = []
+        self.fail = False
+
+    def send(self, message, recipients, sender_id=None):
+        if self.fail:
+            raise RuntimeError("simulated Africa's Talking outage")
+        self.sent.append({"message": message, "to": list(recipients), "sender_id": sender_id})
+        return {"SMSMessageData": {"Recipients": [{"status": "Success"}]}}
+
+
+@pytest.fixture(autouse=True)
+def sms_outbox(monkeypatch):
+    """Every test gets a fake SMS client, so no test can text a real phone,
+    whatever credentials CI or a local .env provides."""
+    import services.sms_service as sms_service
+    fake = FakeSMS()
+    monkeypatch.setattr(sms_service, "_client", lambda: fake)
+    return fake
+
+
 @pytest.fixture
 def client(app):
     return app.test_client()

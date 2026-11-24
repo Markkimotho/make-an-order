@@ -4,14 +4,22 @@ import sys
 
 
 def _fresh_sms(monkeypatch, **env):
+    """Import a fresh copy of the service with exactly this environment.
+
+    monkeypatch restores the original modules afterwards, so the rest of the
+    suite keeps the copy that the API blueprints (and the conftest SMS fake)
+    are bound to.
+    """
+    import services
     for key in ("AT_USERNAME", "AT_API_KEY", "AT_SENDER_ID"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    # Config reads env at class definition, so reload it and the service.
+    # Config reads env at class definition, so re-import it and the service.
     monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
-    sys.modules.pop("config", None)
-    sys.modules.pop("services.sms_service", None)
+    monkeypatch.delitem(sys.modules, "config", raising=False)
+    monkeypatch.delitem(sys.modules, "services.sms_service", raising=False)
+    monkeypatch.setattr(services, "sms_service", None, raising=False)
     return importlib.import_module("services.sms_service")
 
 

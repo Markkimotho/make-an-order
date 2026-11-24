@@ -21,15 +21,26 @@ def _order(c, customer_id, item="Laptop", amount=1500.0):
     return response.get_json()["id"]
 
 
-def test_place_order(admin):
+def test_place_order(admin, sms_outbox):
     customer_id = _customer(admin)
     response = admin.post("/orders/place_order",
                           json={"customer_id": customer_id, "item": "Laptop", "amount": 1500.0})
     assert response.status_code == 201
     body = response.get_json()
     assert body["message"] == "Order placed successfully!"
-    # Africa's Talking is not configured in tests: the order still succeeds.
-    assert body["sms_status"] == "SMS sending failed"
+    assert body["sms_status"] == "SMS sent successfully"
+    assert len(sms_outbox.sent) == 1
+    assert sms_outbox.sent[0]["to"] == ["+25756098389"]
+    assert "Laptop" in sms_outbox.sent[0]["message"]
+
+
+def test_place_order_survives_sms_outage(admin, sms_outbox):
+    sms_outbox.fail = True
+    customer_id = _customer(admin)
+    response = admin.post("/orders/place_order",
+                          json={"customer_id": customer_id, "item": "Laptop", "amount": 1500.0})
+    assert response.status_code == 201
+    assert response.get_json()["sms_status"] == "SMS sending failed"
 
 
 def test_place_order_unauthorized(client):
@@ -71,7 +82,10 @@ def test_view_all_orders(admin):
     _order(admin, second, item="Keyboard", amount=150.0)
     response = admin.get("/orders/view_orders")
     assert response.status_code == 200
-    assert response.get_json()["pagination"]["total"] == 2
+    body = response.get_json()
+    assert body["pagination"]["total"] == 2
+    returned = {(o["customer_name"], o["item"]) for o in body["orders"]}
+    assert returned == {("Alice", "Laptop"), ("Bob", "Keyboard")}
 
 
 def test_view_orders_unauthorized(client):
