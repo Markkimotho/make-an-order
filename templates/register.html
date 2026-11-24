@@ -15,24 +15,9 @@
             <i class="fas fa-user-plus"></i>
         </div>
 
-        {% if success %}
-            <h1 style="font-size: 17px;">Request Received</h1>
-            <p class="lead" style="margin-bottom: 20px;">Your account is pending approval.</p>
-            <div style="background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px;
-                        padding: 16px; text-align: left; margin-bottom: 24px; font-size: 12px; color: #1b5e20;">
-                <i class="fas fa-circle-check me-1"></i>
-                <strong>Registration successful.</strong><br><br>
-                An administrator will review your request. Once approved, you'll be able to sign in
-                using your email and password. You may also receive an SMS confirmation on the
-                phone number you provided.
-            </div>
-            <a href="/login" class="btn btn-primary w-100" style="font-size: 13px; padding: 8px;">
-                <i class="fas fa-arrow-left me-2"></i>Back to Sign In
-            </a>
-        {% else %}
-            <h1 style="font-size: 17px;">Create Account</h1>
+            <h1 style="font-size: 17px;">Set up your business</h1>
             <p class="lead" style="margin-bottom: 18px;">
-                Fill in your details to request access. An admin will approve your account.
+                Start a 14-day free trial. You will be the owner and can add staff later.
             </p>
 
             {% if error %}
@@ -45,7 +30,26 @@
             <form action="/auth/register" method="POST" style="text-align: left;">
                 <div class="mb-2">
                     <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
-                        Full name <span style="color: var(--mac-red);">*</span>
+                        Business name <span style="color: var(--mac-red);">*</span>
+                    </label>
+                    <input type="text" name="business_name" class="form-control form-control-sm"
+                           placeholder="Kilimani Chemist" required maxlength="120"
+                           value="{{ form_data.business_name if form_data else '' }}"
+                           style="font-size: 13px;">
+                </div>
+                <div class="mb-2">
+                    <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
+                        Type of business <span style="color: var(--mac-red);">*</span>
+                    </label>
+                    <select name="vertical" class="form-select form-select-sm" required style="font-size: 13px;">
+                        {% for slug, cfg in BUSINESS_CONFIGS.items() %}
+                        <option value="{{ slug }}" {% if form_data and form_data.vertical == slug %}selected{% endif %}>{{ cfg.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
+                        Your full name <span style="color: var(--mac-red);">*</span>
                     </label>
                     <input type="text" name="name" class="form-control form-control-sm"
                            placeholder="Jane Muthoni" required autocomplete="name"
@@ -70,7 +74,7 @@
                            value="{{ form_data.phone_number if form_data else '' }}"
                            style="font-size: 13px;">
                     <div style="font-size: 11px; color: var(--mac-text-muted); margin-top: 3px;">
-                        Used to receive order notifications via SMS.
+                        Kenyan mobile number, used for SMS alerts.
                     </div>
                 </div>
                 <div class="mb-3">
@@ -82,7 +86,7 @@
                            style="font-size: 13px;" minlength="8">
                 </div>
                 <button type="submit" class="btn btn-primary w-100" style="font-size: 13px; padding: 8px; margin-bottom: 14px;">
-                    <i class="fas fa-user-plus me-2"></i>Request Access
+                    <i class="fas fa-store me-2"></i>Start free trial
                 </button>
             </form>
 
@@ -90,7 +94,6 @@
                 Already have an account?
                 <a href="/login" style="color: var(--mac-blue); text-decoration: none; font-weight: 600;">Sign in</a>
             </p>
-        {% endif %}
     </div>
 </body>
 </html>

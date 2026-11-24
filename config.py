@@ -18,6 +18,13 @@ class Config:
     PROXY_FIX_X_FOR   = int(os.environ.get("PROXY_FIX_X_FOR", "1"))
     PROXY_FIX_X_PROTO = int(os.environ.get("PROXY_FIX_X_PROTO", "1"))
 
+    # Multi-tenancy
+    # Fernet key for tenant secrets (Daraja keys, eTIMS token). Generate with
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    TENANT_SECRETS_KEY = os.environ.get("TENANT_SECRETS_KEY")
+    # Comma-separated emails that get platform-admin rights at login.
+    PLATFORM_ADMIN_EMAILS = os.environ.get("PLATFORM_ADMIN_EMAILS", "")
+
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 

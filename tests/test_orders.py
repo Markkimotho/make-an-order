@@ -7,7 +7,7 @@ def admin(login_as):
     return login_as("admin")
 
 
-def _customer(c, phone="+25756098389", code="XYZ789", name="Alice"):
+def _customer(c, phone="0722000389", code="XYZ789", name="Alice"):
     response = c.post("/customers/register",
                       json={"name": name, "phone_number": phone, "code": code})
     assert response.status_code == 201
@@ -30,7 +30,7 @@ def test_place_order(admin, sms_outbox):
     assert body["message"] == "Order placed successfully!"
     assert body["sms_status"] == "SMS sent successfully"
     assert len(sms_outbox.sent) == 1
-    assert sms_outbox.sent[0]["to"] == ["+25756098389"]
+    assert sms_outbox.sent[0]["to"] == ["254722000389"]
     assert "Laptop" in sms_outbox.sent[0]["message"]
 
 
@@ -77,7 +77,7 @@ def test_view_orders(admin):
 
 def test_view_all_orders(admin):
     first = _customer(admin)
-    second = _customer(admin, phone="+254712345678", code="CUST2", name="Bob")
+    second = _customer(admin, phone="0712345678", code="CUST2", name="Bob")
     _order(admin, first)
     _order(admin, second, item="Keyboard", amount=150.0)
     response = admin.get("/orders/view_orders")

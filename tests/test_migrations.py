@@ -1,4 +1,5 @@
-"""Alembic baseline: round trip, parity with models, named constraints."""
+"""Migrations: round trip, parity with the models, named constraints,
+and upgrading a database built by the pre-Alembic app."""
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
@@ -15,6 +16,7 @@ BASELINE_TABLES = {
     "transaction_items", "purchase_orders", "purchase_order_items", "prescriptions",
     "prescription_items", "loyalty_transactions", "audit_logs", "system_config",
 }
+HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"}
 
 
 @pytest.fixture
@@ -26,7 +28,7 @@ def mapp(database_url):
         db.engine.dispose()
 
 
-def _diff(app):
+def diff_against_models(app):
     with app.app_context(), db.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={
             "render_as_batch": True,
@@ -36,34 +38,33 @@ def _diff(app):
         return compare_metadata(ctx, db.metadata)
 
 
-def _tables():
+def table_names():
     return set(db.inspect(db.engine).get_table_names())
 
 
 def test_round_trip(mapp):
-    app = mapp
-    with app.app_context():
+    with mapp.app_context():
         upgrade()
-        assert _tables() == BASELINE_TABLES | {"alembic_version"}
+        assert table_names() == HEAD_TABLES | {"alembic_version"}
+        downgrade(revision="0001_baseline")
+        assert table_names() == BASELINE_TABLES | {"alembic_version"}
         downgrade(revision="base")
-        assert _tables() == {"alembic_version"}
+        assert table_names() == {"alembic_version"}
         upgrade()
-        assert _tables() == BASELINE_TABLES | {"alembic_version"}
+        assert table_names() == HEAD_TABLES | {"alembic_version"}
 
 
-def test_baseline_matches_models(mapp):
-    app = mapp
-    with app.app_context():
+def test_head_matches_models(mapp):
+    with mapp.app_context():
         upgrade()
-    assert _diff(app) == []
+    assert diff_against_models(mapp) == []
 
 
 def test_every_constraint_named(mapp):
-    app = mapp
-    with app.app_context():
+    with mapp.app_context():
         upgrade()
         insp = db.inspect(db.engine)
-        for table in BASELINE_TABLES:
+        for table in HEAD_TABLES:
             for fk in insp.get_foreign_keys(table):
                 assert fk["name"], f"unnamed FK on {table}: {fk}"
             for uq in insp.get_unique_constraints(table):
@@ -74,51 +75,27 @@ def test_every_constraint_named(mapp):
                 assert insp.get_pk_constraint(table)["name"], f"unnamed PK on {table}"
 
 
-def test_legacy_database_stamps_with_only_unique_name_drift(mapp):
-    """A database built by the pre-Alembic create_all() (unnamed constraints).
+def test_legacy_database_upgrades_to_models_with_no_drift(mapp):
+    """A database built by the pre-Alembic create_all(), with unnamed
+    constraints (SQLite) or MySQL's column-named ones. Stamped at the
+    baseline and upgraded, it must end exactly like the models: 0003 finds
+    the legacy uniques by column and replaces them."""
+    from tests.legacy_schema import create_legacy_schema
 
-    Stamping must work and leave no table, column or type drift. The one
-    known difference is the nine single-column unique constraints, unnamed
-    there and convention-named in the models; 0003 normalises them.
-    """
-    from tests.legacy_schema import LEGACY_UNIQUE_COLUMNS, create_legacy_schema
-
-    app = mapp
-    with app.app_context():
+    with mapp.app_context():
         create_legacy_schema(db.engine)
         stamp(revision="0001_baseline")
-        upgrade()  # already at head: must be a no-op
-        assert _tables() == BASELINE_TABLES | {"alembic_version"}
-
-    # SQLite reflects the legacy uniques unnamed, so they show as "add".
-    # MySQL names them after the column, so they show as remove + add.
-    added, removed = set(), set()
-    for op in _diff(app):
-        assert isinstance(op, tuple), f"unexpected drift: {op}"
-        kind, obj = op[0], op[1]
-        cols = [c.name for c in (obj.columns if hasattr(obj, "columns") else obj.expressions)]
-        assert len(cols) == 1, f"unexpected drift: {op}"
-        key = (obj.table.name, cols[0])
-        if kind == "add_constraint":
-            added.add(key)
-        elif kind in ("remove_constraint", "remove_index"):
-            removed.add(key)
-        else:
-            raise AssertionError(f"unexpected drift: {op}")
-    assert added == LEGACY_UNIQUE_COLUMNS
-    assert removed <= LEGACY_UNIQUE_COLUMNS
-    if on_mysql():
-        assert removed == LEGACY_UNIQUE_COLUMNS
-
-
-def test_fresh_database_has_no_drift_after_stamp(mapp):
-    """Stamping a database already built by the baseline is a no-op."""
-    app = mapp
-    with app.app_context():
         upgrade()
-        stamp(revision="0001_baseline")
+        assert table_names() == HEAD_TABLES | {"alembic_version"}
+    assert diff_against_models(mapp) == []
+
+
+def test_upgrade_is_idempotent_at_head(mapp):
+    with mapp.app_context():
         upgrade()
-    assert _diff(app) == []
+        upgrade()
+        stamp(revision="head")
+    assert diff_against_models(mapp) == []
 
 
 @pytest.mark.skipif(on_mysql(), reason="SQLite PRAGMA only")
@@ -149,6 +126,9 @@ def test_disable_foreign_keys_ignores_other_dialects():
     ("CURRENT_TIMESTAMP", "now()", False),            # MySQL reflection vs model
     ("(CURRENT_TIMESTAMP)", "(CURRENT_TIMESTAMP)", False),  # SQLite
     ("current_timestamp()", "now()", False),
+    ("'0'", "false", False),                          # MySQL boolean default
+    ("0", "0", False),                                # SQLite boolean default
+    ("'1'", "false", None),                           # a real change
     ("'0'", "now()", None),                           # a real change: let Alembic decide
     (None, "now()", None),
 ])

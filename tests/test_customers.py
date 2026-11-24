@@ -1,7 +1,7 @@
 """Customer API. Register/view need admin; update/delete need superuser."""
 import pytest
 
-JANE = {"name": "Jane Doe", "phone_number": "+25756098388", "code": "DEF456"}
+JANE = {"name": "Jane Doe", "phone_number": "0722000388", "code": "DEF456"}
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def _register(c, data=JANE):
 
 
 def test_register_customer(admin):
-    data = {"name": "John Doe", "phone_number": "+25756098389", "code": "ABC123"}
+    data = {"name": "John Doe", "phone_number": "0722000389", "code": "ABC123"}
     response = admin.post("/customers/register", json=data)
     assert response.status_code == 201
     assert response.get_json()["message"] == "Customer registered successfully"

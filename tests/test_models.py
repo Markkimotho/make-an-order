@@ -3,7 +3,7 @@ from models import db, Customer, Order
 
 # Test customer creation
 def test_create_customer(client):
-    customer = Customer(name='John Doe', phone_number='1234567890', code='CUST001')
+    customer = Customer(name='John Doe', phone_number='0711000001', code='CUST001')
     db.session.add(customer)
     db.session.commit()
 
@@ -11,12 +11,12 @@ def test_create_customer(client):
     fetched_customer = db.session.get(Customer, customer.id)  # Use db.session.get instead of query.get
     assert fetched_customer is not None
     assert fetched_customer.name == 'John Doe'
-    assert fetched_customer.phone_number == '1234567890'
+    assert fetched_customer.phone_number == '254711000001'
     assert fetched_customer.code == 'CUST001'
 
 # Test order creation linked to a customer
 def test_create_order(client):
-    customer = Customer(name='Jane Doe', phone_number='9876543210', code='CUST002')
+    customer = Customer(name='Jane Doe', phone_number='0711000002', code='CUST002')
     db.session.add(customer)
     db.session.commit()
 
@@ -34,7 +34,7 @@ def test_create_order(client):
 
 # Test to_dict method of Customer
 def test_customer_to_dict(client):
-    customer = Customer(name='Alice', phone_number='1112223333', code='CUST003')
+    customer = Customer(name='Alice', phone_number='0711000003', code='CUST003')
     db.session.add(customer)
     db.session.commit()
 
@@ -43,7 +43,7 @@ def test_customer_to_dict(client):
         "id": customer.id,
         "name": "Alice",
         "email": None,
-        "phone_number": "1112223333",
+        "phone_number": "254711000003",
         "code": "CUST003",
         "loyalty_points": 0,
         "credit_limit": 0.0,
@@ -53,7 +53,7 @@ def test_customer_to_dict(client):
 
 # Test to_dict method of Order
 def test_order_to_dict(client):
-    customer = Customer(name='Bob', phone_number='4445556666', code='CUST004')
+    customer = Customer(name='Bob', phone_number='0711000004', code='CUST004')
     db.session.add(customer)
     db.session.commit()
 
@@ -71,7 +71,7 @@ def test_order_to_dict(client):
 
 # Test that customer and order delete works
 def test_delete_customer_and_order(client):
-    customer = Customer(name='Charlie', phone_number='7778889999', code='CUST005')
+    customer = Customer(name='Charlie', phone_number='0711000005', code='CUST005')
     db.session.add(customer)
     db.session.commit()
 

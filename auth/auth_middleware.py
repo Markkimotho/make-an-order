@@ -1,7 +1,15 @@
-from functools import wraps
-from flask import redirect, url_for, session, jsonify
+"""Login, tenant and role decorators.
 
-# Role groupings — keep in sync with models.py constants.
+Every decorator here first runs the tenant check: the request must have a
+bound tenant (set by app.bind_request_tenant from the session). A platform
+admin with no tenant chosen is sent to /platform/tenants. Role checks then
+apply within that tenant; 'superuser' is the tenant owner.
+"""
+from functools import wraps
+
+from flask import g, jsonify, redirect, session, url_for
+
+# Role groupings — keep in sync with models.core constants.
 ADMIN_ROLES     = ('admin', 'superuser')
 POS_ROLES       = ('cashier', 'pharmacist', 'admin', 'superuser')
 PHARMACY_ROLES  = ('pharmacist', 'admin', 'superuser')
@@ -12,110 +20,85 @@ def _role() -> str:
     return session.get('role') or 'user'
 
 
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'profile' not in session:
-            return redirect(url_for('auth.login'))
-        return f(*args, **kwargs)
-    return decorated
-
-def admin_required(f):
-    """UI routes — redirects non-admins to dashboard."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'profile' not in session:
-            return redirect(url_for('auth.login'))
-        if _role() not in ADMIN_ROLES:
-            return redirect(url_for('dashboard'))
-        return f(*args, **kwargs)
-    return decorated
-
-def superuser_required(f):
-    """UI routes — redirects non-superusers to dashboard."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'profile' not in session:
-            return redirect(url_for('auth.login'))
-        if _role() != 'superuser':
-            return redirect(url_for('dashboard'))
-        return f(*args, **kwargs)
-    return decorated
-
-def admin_api_required(f):
-    """API routes — returns JSON 403 if not admin/superuser."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'profile' not in session:
-            return jsonify({'error': 'Unauthorized'}), 401
-        if _role() not in ADMIN_ROLES:
-            return jsonify({'error': 'Forbidden'}), 403
-        return f(*args, **kwargs)
-    return decorated
-
-def superuser_api_required(f):
-    """API routes — returns JSON 403 if not superuser."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if 'profile' not in session:
-            return jsonify({'error': 'Unauthorized'}), 401
-        if _role() != 'superuser':
-            return jsonify({'error': 'Forbidden'}), 403
-        return f(*args, **kwargs)
-    return decorated
+def _ui_gate():
+    """None if the request may proceed, else the redirect to send."""
+    if 'profile' not in session:
+        return redirect(url_for('auth.login'))
+    if g.get('current_tenant') is None:
+        if g.get('is_platform_admin'):
+            return redirect(url_for('platform.tenants'))
+        session.clear()
+        return redirect(url_for('auth.login'))
+    return None
 
 
-# ---------------------------------------------------------------------------
-# POS role decorators
-# ---------------------------------------------------------------------------
+def _api_gate():
+    """None if the API request may proceed, else the JSON error response."""
+    if 'profile' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if g.get('current_tenant') is None:
+        if g.get('is_platform_admin'):
+            return jsonify({'error': 'Choose a tenant first'}), 403
+        return jsonify({'error': 'Unauthorized'}), 401
+    return None
 
-def _make_role_decorators(allowed_roles, label):
-    """Return (ui_decorator, api_decorator) that gate on ``allowed_roles``."""
-    def ui_decorator(f):
+
+def _ui(allowed_roles=None):
+    def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
-            if 'profile' not in session:
-                return redirect(url_for('auth.login'))
-            if _role() not in allowed_roles:
+            blocked = _ui_gate()
+            if blocked is not None:
+                return blocked
+            if allowed_roles is not None and _role() not in allowed_roles:
                 return redirect(url_for('dashboard'))
             return f(*args, **kwargs)
-        decorated.__doc__ = f"{label} (UI). Allowed roles: {allowed_roles}"
         return decorated
+    return decorator
 
-    def api_decorator(f):
+
+def _api(allowed_roles=None):
+    def decorator(f):
         @wraps(f)
         def decorated(*args, **kwargs):
-            if 'profile' not in session:
-                return jsonify({'error': 'Unauthorized'}), 401
-            if _role() not in allowed_roles:
+            blocked = _api_gate()
+            if blocked is not None:
+                return blocked
+            if allowed_roles is not None and _role() not in allowed_roles:
                 return jsonify({'error': 'Forbidden',
                                 'required_roles': list(allowed_roles)}), 403
             return f(*args, **kwargs)
-        decorated.__doc__ = f"{label} (API). Allowed roles: {allowed_roles}"
         return decorated
+    return decorator
 
-    return ui_decorator, api_decorator
 
+tenant_required      = _ui()
+tenant_api_required  = _api()
+login_required       = tenant_required
 
-# Cashier or higher (covers cashier, pharmacist, admin, superuser)
-cashier_required,     cashier_api_required     = _make_role_decorators(POS_ROLES,      'Cashier')
-pos_required,         pos_api_required         = cashier_required, cashier_api_required  # alias
+admin_required       = _ui(ADMIN_ROLES)
+superuser_required   = _ui(('superuser',))
+admin_api_required   = _api(ADMIN_ROLES)
+superuser_api_required = _api(('superuser',))
 
-pharmacist_required,  pharmacist_api_required  = _make_role_decorators(PHARMACY_ROLES, 'Pharmacist')
-stock_clerk_required, stock_clerk_api_required = _make_role_decorators(STOCK_ROLES,    'Stock clerk')
+cashier_required,     cashier_api_required     = _ui(POS_ROLES),      _api(POS_ROLES)
+pos_required,         pos_api_required         = cashier_required,   cashier_api_required
+pharmacist_required,  pharmacist_api_required  = _ui(PHARMACY_ROLES), _api(PHARMACY_ROLES)
+stock_clerk_required, stock_clerk_api_required = _ui(STOCK_ROLES),    _api(STOCK_ROLES)
 
 
 def roles_required(*allowed_roles):
     """Generic API decorator: ``@roles_required('cashier', 'admin')``."""
-    def wrapper(f):
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            if 'profile' not in session:
-                return jsonify({'error': 'Unauthorized'}), 401
-            if _role() not in allowed_roles:
-                return jsonify({'error': 'Forbidden',
-                                'required_roles': list(allowed_roles)}), 403
-            return f(*args, **kwargs)
-        return decorated
-    return wrapper
+    return _api(allowed_roles)
 
+
+def platform_admin_required(f):
+    """Platform operators only. Works with or without a tenant chosen."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'profile' not in session:
+            return redirect(url_for('auth.login'))
+        if not g.get('is_platform_admin'):
+            return jsonify({'error': 'Forbidden'}), 403
+        return f(*args, **kwargs)
+    return decorated

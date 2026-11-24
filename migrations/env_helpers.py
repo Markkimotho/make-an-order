@@ -18,21 +18,28 @@ def _normalise_default(text):
     while t.startswith("(") and t.endswith(")") and t.count("(") == t.count(")"):
         t = t[1:-1].strip()
     t = re.sub(r"\s+", "", t)
-    return "current_timestamp" if t in _NOW_FORMS else t
+    if t in _NOW_FORMS:
+        return "current_timestamp"
+    return _BOOLEAN_FORMS.get(t, t)
+
+
+_BOOLEAN_FORMS = {"false": "0", "true": "1"}
 
 
 def compare_server_default(context, inspected_column, metadata_column,
                            inspected_default, metadata_default,
                            rendered_metadata_default):
-    """Alembic hook: treat now() and CURRENT_TIMESTAMP as the same default.
+    """Alembic hook: ignore defaults that differ only in spelling.
 
-    Models declare server_default=func.now(). MySQL stores it and reports it
-    back as CURRENT_TIMESTAMP; SQLite as (CURRENT_TIMESTAMP). Without this,
-    autogenerate reports a change on every timestamp column on MySQL.
-    Returns False (same) for that pair, None to let Alembic decide otherwise.
+    Models declare server_default=func.now() and sa.false(). MySQL reports
+    them back as CURRENT_TIMESTAMP and '0'; SQLite as (CURRENT_TIMESTAMP)
+    and 0. Without this, autogenerate reports a change on every such column
+    on MySQL. Returns False (same) when both sides normalise to the same
+    value, None to let Alembic decide otherwise.
     """
-    if (_normalise_default(inspected_default) == "current_timestamp"
-            and _normalise_default(rendered_metadata_default) == "current_timestamp"):
+    if inspected_default is None or rendered_metadata_default is None:
+        return None
+    if _normalise_default(inspected_default) == _normalise_default(rendered_metadata_default):
         return False
     return None
 

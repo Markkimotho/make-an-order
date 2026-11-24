@@ -8,6 +8,7 @@ from auth.auth_middleware import (
     admin_api_required, superuser_api_required, cashier_api_required, login_required,
 )
 from services import audit_service, loyalty_service
+from services.phone import InvalidPhone
 from decimal import Decimal
 import logging
 
@@ -33,6 +34,9 @@ def register_customer():
         db.session.commit()
         logger.info(f"Customer {customer.id} registered.")
         return jsonify({"message": "Customer registered successfully", "customer_id": customer.id}), 201
+    except InvalidPhone:
+        db.session.rollback()
+        return jsonify({"error": "Invalid Kenyan phone number"}), 400
     except IntegrityError:
         db.session.rollback()
         return jsonify({"error": "Phone number or code already exists"}), 400
@@ -115,6 +119,9 @@ def update_customer(id):
         db.session.commit()
         logger.info(f"Customer {id} updated.")
         return jsonify({"message": "Customer updated successfully"}), 200
+    except InvalidPhone:
+        db.session.rollback()
+        return jsonify({"error": "Invalid Kenyan phone number"}), 400
     except IntegrityError:
         db.session.rollback()
         return jsonify({"error": "Phone number or code already exists for another customer"}), 400

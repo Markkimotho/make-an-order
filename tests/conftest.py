@@ -11,14 +11,16 @@ Database backend:
                         both lanes; locally use scripts/local_mysql.sh.
 """
 import os
+import shutil
 import uuid
 
 import pytest
-from flask_migrate import downgrade, upgrade
+from flask_migrate import upgrade
 from sqlalchemy import create_engine
 
 import app as app_module
-from models import db
+from auth.tenancy import bind_tenant, reset_tenant, tenant_scope, unscoped
+from models import Tenant, User, db
 
 MYSQL_SERVER_URL = os.environ.get("TEST_MYSQL_URL", "").rstrip("/")
 
@@ -54,16 +56,59 @@ def make_app(database_url, **extra):
     })
 
 
+def create_tenant(name, slug, vertical="pharmacy", **fields):
+    """Create a tenant (outside any scope) and return its id."""
+    with unscoped():
+        tenant = Tenant(name=name, slug=slug, vertical=vertical, **fields)
+        db.session.add(tenant)
+        db.session.commit()
+        return tenant.id
+
+
+@pytest.fixture(scope="session")
+def sqlite_template(tmp_path_factory):
+    """A SQLite file migrated to head once per test session.
+
+    Each test copies it instead of re-running every migration. The
+    migrations themselves are exercised from empty in test_migrations*.py.
+    """
+    path = tmp_path_factory.mktemp("template") / "head.sqlite"
+    template_app = make_app(f"sqlite:///{path}")
+    with template_app.app_context():
+        upgrade()
+        db.engine.dispose()
+    return path
+
+
 @pytest.fixture
-def app(database_url):
-    """Fresh app whose schema is built by the real migrations, not create_all."""
+def app(database_url, request):
+    """Fresh app on a migrated database, with tenant 'acme' bound.
+
+    Tests run as tenant acme unless they bind another one. ``app.acme_id``
+    is its id. SQLite starts from a copy of the session template; MySQL
+    runs the migrations into the test's own database.
+    """
+    if not on_mysql():
+        template = request.getfixturevalue("sqlite_template")
+        shutil.copyfile(template, database_url.removeprefix("sqlite:///"))
     flask_app = make_app(database_url)
     with flask_app.app_context():
-        upgrade()
-        yield flask_app
-        db.session.remove()
-        downgrade(revision="base")
-        db.engine.dispose()
+        if on_mysql():
+            upgrade()
+        flask_app.acme_id = create_tenant("Acme Pharmacy", "acme", "pharmacy")
+        token = bind_tenant(flask_app.acme_id)
+        try:
+            yield flask_app
+        finally:
+            reset_tenant(token)
+            db.session.remove()
+            db.engine.dispose()
+
+
+@pytest.fixture
+def other_tenant(app):
+    """A second business, 'globex'. Returns its id; acme stays bound."""
+    return create_tenant("Globex Distributors", "globex", "distributor")
 
 
 class FakeSMS:
@@ -96,12 +141,25 @@ def client(app):
 
 
 @pytest.fixture
-def login_as(client):
-    """Return a function that logs ``client`` in with a role and returns it."""
-    def _login(role="admin", email="test@example.com", user_id=1):
+def login_as(app, client):
+    """Return ``login(role, email=None, tenant_id=None)``: creates a real,
+    approved user with that role in the tenant (default acme), puts them in
+    ``client``'s session and returns the client."""
+    def _login(role="admin", email=None, tenant_id=None):
+        tenant_id = tenant_id or app.acme_id
+        email = email or f"{role}-{tenant_id}@example.com"
+        with tenant_scope(tenant_id):
+            user = User.query.filter_by(email=email).first()
+            if user is None:
+                user = User(email=email, name=f"Test {role}", role=role, status="approved")
+                db.session.add(user)
+                db.session.commit()
+            user_id = user.id
         with client.session_transaction() as sess:
-            sess["profile"] = {"email": email, "name": "Test User"}
+            sess.clear()
+            sess["profile"] = {"email": email, "name": f"Test {role}"}
             sess["role"] = role
             sess["user_id"] = user_id
+            sess["tenant_id"] = tenant_id
         return client
     return _login

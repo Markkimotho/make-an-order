@@ -15,7 +15,7 @@ from logging.handlers import RotatingFileHandler
 import click
 from authlib.integrations.flask_client import OAuth  # type: ignore
 from dotenv import load_dotenv
-from flask import (Flask, Response, jsonify, redirect, render_template, request,
+from flask import (Flask, Response, g, jsonify, redirect, render_template, request,
                    session, url_for)
 from flask_migrate import Migrate
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -25,15 +25,17 @@ from api.inventory import inventory_bp
 from api.orders import orders_bp
 from api.payments import payments_bp
 from api.pharmacy import pharmacy_bp
+from api.platform import platform_bp
 from api.pos import pos_bp
 from api.reports import reports_bp
 from api.users import users_bp
 from auth.auth_middleware import (admin_required, cashier_required,
                                   login_required, pharmacist_required,
-                                  stock_clerk_required)
+                                  stock_clerk_required, superuser_required)
 from auth.auth_routes import create_auth_blueprint
+from auth.tenancy import bind_tenant, reset_tenant, unscoped
 from config import Config
-from models import Customer, Order, SystemConfig, db
+from models import VERTICALS, Customer, Order, Tenant, User, db
 
 load_dotenv()
 
@@ -41,93 +43,59 @@ migrate = Migrate()
 
 
 # ---------------------------------------------------------------------------
-# Business-type feature map
+# Verticals
 # ---------------------------------------------------------------------------
-# Each key is a business_type slug.  ``features`` is a set of capability
-# names that drive nav visibility, dashboard cards and seed data.
+# One entry per tenant vertical (models.VERTICALS). ``features`` drives nav
+# visibility and dashboard cards; ``seed`` names the demo catalogue used by
+# ``flask seed-demo``.
 BUSINESS_CONFIGS = {
     'pharmacy': {
-        'label':       'Pharmacy',
+        'label':       'Pharmacy / Agro-vet',
         'icon':        'fa-prescription-bottle-medical',
         'color':       '#198754',
-        'tagline':     'Prescriptions · Dispensing · Controlled drugs',
-        'description': 'For licensed pharmacies. Handles prescription capture, '
-                       'dispensing, batch/expiry tracking and controlled-drug ledger.',
+        'tagline':     'Prescriptions · Expiry · Controlled drugs · Refills',
+        'description': 'For chemists and agro-vets. Prescription capture, batch and '
+                       'expiry tracking, the controlled-drug register and refill reminders.',
         'features':    {'pos', 'shift', 'pharmacy', 'purchase_orders',
                         'inventory', 'reports', 'customers'},
+        'seed':        'pharmacy',
     },
-    'supermarket': {
-        'label':       'Supermarket / Grocery',
-        'icon':        'fa-cart-shopping',
+    'distributor': {
+        'label':       'Distributor / Wholesaler',
+        'icon':        'fa-truck',
         'color':       '#0d6efd',
-        'tagline':     'FMCG · Perishables · Loyalty points',
-        'description': 'For supermarkets and grocers. Fast checkout, expiry '
-                       'tracking, loyalty programme and bulk purchase orders.',
+        'tagline':     'Trade credit · Route orders · Collections',
+        'description': 'For FMCG, gas and hardware distributors selling to dukas on '
+                       'credit, with M-Pesa collections and credit limits.',
         'features':    {'pos', 'shift', 'purchase_orders', 'inventory',
                         'reports', 'customers'},
+        'seed':        'supermarket',
     },
-    'hardware': {
-        'label':       'Hardware & Building',
-        'icon':        'fa-hammer',
-        'color':       '#fd7e14',
-        'tagline':     'Tools · Materials · Trade accounts',
-        'description': 'For hardware and building-material shops. Trade credit, '
-                       'bulk items, purchase orders and stock management.',
-        'features':    {'pos', 'shift', 'purchase_orders', 'inventory',
-                        'reports', 'customers'},
-    },
-    'salon': {
-        'label':       'Salon & Beauty',
-        'icon':        'fa-scissors',
-        'color':       '#d63384',
-        'tagline':     'Services · Retail products · Client profiles',
-        'description': 'For hair salons, barbershops and beauty studios. '
-                       'Service-based POS, retail product sales and client loyalty.',
-        'features':    {'pos', 'shift', 'inventory', 'reports', 'customers'},
-    },
-    'restaurant': {
-        'label':       'Restaurant / Café',
-        'icon':        'fa-utensils',
-        'color':       '#dc3545',
-        'tagline':     'Food · Beverages · Table service',
-        'description': 'For restaurants, cafés and fast-food outlets. '
-                       'Menu-based POS and daily sales reporting.',
-        'features':    {'pos', 'shift', 'inventory', 'reports', 'customers'},
-    },
-    'general': {
-        'label':       'General Retail',
-        'icon':        'fa-store',
-        'color':       '#6c757d',
-        'tagline':     'Any product · Any customer',
-        'description': 'A flexible setup for any retail business. '
-                       'Full POS, inventory and purchase orders.',
-        'features':    {'pos', 'shift', 'purchase_orders', 'inventory',
-                        'reports', 'customers'},
+    'institution': {
+        'label':       'School / Estate / Chama',
+        'icon':        'fa-school',
+        'color':       '#6f42c1',
+        'tagline':     'Pre-orders · M-Pesa collection · Pickup',
+        'description': 'For schools, gated estates and chamas collecting payments '
+                       'for uniforms, bundles and levies against a student or house number.',
+        'features':    {'inventory', 'reports', 'customers'},
+        'seed':        'general',
     },
 }
-
-
-def _get_business_type():
-    """Return the configured business_type slug, or None if onboarding not done."""
-    try:
-        return SystemConfig.get('business_type')
-    except Exception:
-        return None
+assert set(BUSINESS_CONFIGS) == set(VERTICALS)
 
 
 def get_user_context():
-    btype    = _get_business_type()
-    features = BUSINESS_CONFIGS.get(btype or 'general',
-                                    BUSINESS_CONFIGS['general'])['features']
-    biz_name = ''
-    try:
-        biz_name = SystemConfig.get('business_name') or ''
-    except Exception:
-        pass
+    """Template context. Business name and vertical come from the bound tenant."""
+    tenant   = g.get('current_tenant')
+    vertical = tenant.vertical if tenant else None
+    features = BUSINESS_CONFIGS[vertical]['features'] if vertical else set()
     base = {
-        'business_type':  btype or 'general',
-        'biz_configured': btype is not None,
-        'biz_name':       biz_name,
+        'business_type':  vertical or 'distributor',
+        'biz_configured': tenant is not None,
+        'biz_name':       tenant.name if tenant else '',
+        'tenant':         tenant,
+        'is_platform_admin': bool(g.get('is_platform_admin')),
         'features':       features,
         'BUSINESS_CONFIGS': BUSINESS_CONFIGS,
     }
@@ -142,13 +110,67 @@ def get_user_context():
     return {**base, 'user_email': '', 'user_name': '', 'user_role': 'guest'}
 
 
-_ONBOARDING_EXEMPT = frozenset({
-    'static', 'onboarding', 'onboarding_save',
-    'index', 'logout', 'login_page', 'register_page',
-})
 _API_PREFIXES = ('/pos/', '/payments/', '/pharmacy/', '/inventory/',
-                 '/customers/', '/orders/', '/users/', '/reports/',
-                 '/auth/', '/static/')
+                 '/customers/', '/orders/', '/users/', '/reports/')
+
+# Endpoints that still work when the tenant's subscription has lapsed.
+_SUBSCRIPTION_EXEMPT = frozenset({'static', 'logout', 'auth.logout', 'index'})
+
+
+def _wants_json():
+    return any(request.path.startswith(p) for p in _API_PREFIXES)
+
+
+def bind_request_tenant():
+    """Bind the logged-in user's tenant for this request (before_request).
+
+    Every request with a session is re-checked against the database: a user
+    who was deleted, disabled or moved to another tenant is logged out, and
+    a tenant whose subscription lapsed gets 402. Platform admins may have no
+    tenant and are exempt from the membership and subscription checks.
+    """
+    g.current_tenant = None
+    g.is_platform_admin = False
+    g.tenant_token = None
+    user_id = session.get('user_id')
+    if not user_id:
+        return None
+
+    tenant_id = session.get('tenant_id')
+    with unscoped():
+        user = db.session.get(User, user_id)
+        if user is None or user.status != 'approved':
+            session.clear()
+            return None
+        is_platform_admin = bool(user.is_platform_admin)
+        if not is_platform_admin and (tenant_id is None or user.tenant_id != tenant_id):
+            session.clear()
+            return None
+        tenant = db.session.get(Tenant, tenant_id) if tenant_id else None
+        if tenant_id and tenant is None:
+            session.clear()
+            return None
+        db.session.expunge_all()   # keep the loaded tenant usable after unscoped()
+
+    g.is_platform_admin = is_platform_admin
+    if tenant is None:
+        return None
+
+    if (not is_platform_admin and not tenant.is_active_subscription()
+            and request.endpoint not in _SUBSCRIPTION_EXEMPT):
+        if _wants_json():
+            return jsonify({'error': 'Subscription inactive'}), 402
+        return render_template('trial_ended.html', tenant=tenant), 402
+
+    g.current_tenant = tenant
+    g.tenant_token = bind_tenant(tenant.id)
+    return None
+
+
+def unbind_request_tenant(exc=None):
+    token = g.pop('tenant_token', None)
+    if token is not None:
+        reset_tenant(token)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +207,11 @@ def create_app(config_override=None):
     app.register_blueprint(pos_bp, url_prefix='/pos')
     app.register_blueprint(payments_bp, url_prefix='/payments')
     app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
+    app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
+
+    app.before_request(bind_request_tenant)
+    app.teardown_request(unbind_request_tenant)
 
     _register_core_routes(app)
     _register_cli(app)
@@ -237,6 +263,42 @@ def _register_cli(app):
         create_database()
         click.echo('Database checked/created. Next: flask db upgrade')
 
+    @app.cli.command('create-platform-admin')
+    @click.argument('email')
+    @click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)
+    @click.option('--name', default=None)
+    def create_platform_admin_command(email, password, name):
+        """Create a platform operator who belongs to no business."""
+        from auth.tenancy import tenant_scope
+        email = email.strip().lower()
+        if len(password) < 8:
+            raise click.ClickException('Password must be at least 8 characters')
+        with unscoped(), tenant_scope(None):
+            if User.query.filter_by(email=email).first() is not None:
+                raise click.ClickException(f'A user with email {email} already exists')
+            user = User(email=email, name=name, role='superuser', status='approved',
+                        is_platform_admin=True)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+        click.echo(f'Created platform admin {email}. Add it to PLATFORM_ADMIN_EMAILS, '
+                   'or the flag is cleared at their next login.')
+
+    @app.cli.command('seed-demo')
+    @click.argument('slug')
+    def seed_demo_command(slug):
+        """Fill an empty tenant's inventory with the demo catalogue for its vertical."""
+        from auth.tenancy import tenant_scope
+        from services.seed_service import seed_inventory
+        with unscoped():
+            tenant = Tenant.query.filter_by(slug=slug).first()
+            if tenant is None:
+                raise click.ClickException(f'No tenant with slug {slug!r}')
+            tenant_id, vertical = tenant.id, tenant.vertical
+        with tenant_scope(tenant_id):
+            seed_inventory(BUSINESS_CONFIGS[vertical]['seed'])
+        click.echo(f'Seeded demo inventory for {slug} (skipped if it already had items).')
+
 
 def _safe_render(template, **ctx):
     """Render template; if missing, return a minimal placeholder."""
@@ -259,46 +321,27 @@ def _register_core_routes(app):
     module, because templates resolve them with ``url_for``.
     """
 
-    @app.before_request
-    def check_onboarding():
-        """Send superuser/admin to /onboarding when business type is not yet set."""
-        if request.endpoint in _ONBOARDING_EXEMPT or request.endpoint is None:
-            return
-        if any(request.path.startswith(p) for p in _API_PREFIXES):
-            return
-        if session.get('role') in ('superuser', 'admin'):
-            try:
-                if SystemConfig.get('business_type') is None:
-                    return redirect(url_for('onboarding'))
-            except Exception:
-                pass
-
     @app.route('/onboarding', methods=['GET', 'POST'])
+    @superuser_required
     def onboarding():
-        """First-run (and re-run) business-type selection."""
+        """Owner's business settings: name and vertical."""
+        tenant = g.current_tenant
         if request.method == 'POST':
-            if 'profile' not in session:
-                return redirect(url_for('index'))
-            btype = request.form.get('business_type', '').strip()
-            bname = request.form.get('business_name', '').strip()
-            if btype not in BUSINESS_CONFIGS:
+            vertical = request.form.get('business_type', '').strip()
+            name = request.form.get('business_name', '').strip()
+            if vertical not in BUSINESS_CONFIGS:
                 ctx = get_user_context()
                 ctx['error'] = 'Please select a valid business type.'
                 return render_template('onboarding.html', **ctx)
-            SystemConfig.set_value('business_type', btype)
-            if bname:
-                SystemConfig.set_value('business_name', bname)
+            row = db.session.get(Tenant, tenant.id)
+            row.vertical = vertical
+            if name:
+                row.name = name
             db.session.commit()
-            from services.seed_service import seed_inventory
-            seed_inventory(btype)
-            app.logger.info(f"Business configured as '{btype}' by "
+            app.logger.info(f"Tenant {row.slug} settings updated by "
                             f"{session.get('profile', {}).get('email')}")
             return redirect(url_for('dashboard'))
-
-        ctx = get_user_context()
-        if _get_business_type() and session.get('role') not in ('superuser', 'admin'):
-            return redirect(url_for('dashboard'))
-        return render_template('onboarding.html', **ctx)
+        return render_template('onboarding.html', **get_user_context())
 
     @app.route('/')
     def index():
@@ -323,13 +366,14 @@ def _register_core_routes(app):
     def login_page():
         if 'profile' in session:
             return redirect(url_for('dashboard'))
-        return render_template('index.html')
+        return render_template('index.html', message=request.args.get('message'))
 
     @app.route('/register')
     def register_page():
         if 'profile' in session:
             return redirect(url_for('dashboard'))
-        return render_template('register.html')
+        return render_template('register.html', BUSINESS_CONFIGS=BUSINESS_CONFIGS,
+                               error=request.args.get('message'))
 
     @app.route('/dashboard')
     @login_required
