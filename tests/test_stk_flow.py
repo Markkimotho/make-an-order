@@ -63,6 +63,18 @@ def test_push_creates_invoice_and_pending_intent(till):
     assert (sent["Amount"], sent["AccountReference"]) == (100, body["invoice"]["invoice_number"])
 
 
+def test_push_rounds_cents_up(till, app):
+    from models import TransactionItem
+    line = TransactionItem.query.one()
+    line.line_total = D("100.50")
+    db.session.get(Transaction, till["txn"]).total = D("100.50")
+    db.session.commit()
+    r = push(till)
+    assert r.status_code == 201
+    assert till["fake"].posts("/processrequest")[0]["Amount"] == 101
+    assert r.get_json()["intent"]["amount"] == 101.0
+
+
 def test_one_prompt_per_phone_at_a_time(till):
     assert push(till).status_code == 201
     r = push(till)
@@ -128,7 +140,11 @@ def test_duplicate_callback_counts_once(till):
     till["fake"].default("/query", 200, {"ResultCode": "0"})
     callback(till)
     callback(till)
-    assert Payment.query.count() == 1
+    p = Payment.query.one()
+    assert (p.amount, p.unallocated_amount) == (D("100.00"), D("0.00"))
+    from models import PaymentAllocation
+    live = PaymentAllocation.query.filter(PaymentAllocation.voided_at.is_(None)).all()
+    assert [a.amount for a in live] == [D("100.00")]
 
 
 def test_verification_unavailable_then_sweep_finishes(till):
@@ -155,31 +171,80 @@ def test_callback_says_paid_but_query_disagrees_is_held(till):
 
 # --- missed callbacks: the sweep -------------------------------------------------------------
 
-def test_sweep_finds_payment_whose_callback_never_came(till):
+def test_sweep_confirmed_but_no_receipt_waits_for_it(till):
+    """Daraja says paid, no callback ever came: nothing is recorded without
+    a receipt (that is what made one transfer count twice). The receipt then
+    arrives through the Paybill confirmation and closes everything."""
     push(till)
     age(100)
     till["fake"].answer("/query", 200, {"ResultCode": "0"})
-    counts = stk.sweep_tenant()
-    assert counts["completed"] == 1
-    assert invoice_status() == "paid"
-    p = Payment.query.one()
-    assert p.mpesa_receipt is None
-    # The receipt arrives later through the Paybill confirmation: same payment.
+    stk.sweep_tenant()
+    assert intent().status == "paid_unconfirmed"
+    assert Payment.query.count() == 0 and invoice_status() == "open"
     inv = Invoice.query.one()
     till["client"].post(till["c2b_url"],
                         json=daraja_fakes.c2b("SJK0000009", 100, inv.invoice_number))
-    assert Payment.query.count() == 1
-    assert Payment.query.one().mpesa_receipt == "SJK0000009"
+    assert [(p.mpesa_receipt, p.amount) for p in Payment.query] == [("SJK0000009", D("100.00"))]
+    assert invoice_status() == "paid" and intent().status == "completed"
 
 
-def test_late_callback_attaches_receipt(till):
+def test_paybill_confirmation_before_sweep_counts_once(till):
+    """Review finding #1: confirmation first, then the sweep recorded the
+    same KES 100 again without a receipt."""
+    push(till)
+    inv = Invoice.query.one()
+    till["client"].post(till["c2b_url"],
+                        json=daraja_fakes.c2b("SJK0000011", 100, inv.invoice_number))
+    age(100)
+    till["fake"].default("/query", 200, {"ResultCode": "0"})
+    stk.sweep_tenant()
+    stk.sweep_tenant()
+    assert [(p.mpesa_receipt, p.amount) for p in Payment.query] == [("SJK0000011", D("100.00"))]
+    assert intent().status == "completed" and invoice_status() == "paid"
+
+
+def test_typed_code_before_sweep_counts_once(till):
+    push(till)
+    till["client"].post("/payments/manual", json={"transaction_id": till["txn"],
+                                                  "receipt": "SJK0000012", "amount": 100})
+    age(100)
+    till["fake"].default("/query", 200, {"ResultCode": "0"})
+    stk.sweep_tenant()
+    assert Payment.query.count() == 1 and intent().status == "completed"
+
+
+def test_late_callback_records_with_receipt(till):
     push(till)
     age(100)
     till["fake"].default("/query", 200, {"ResultCode": "0"})
     stk.sweep_tenant()
+    assert intent().status == "paid_unconfirmed"
     callback(till, receipt="SJK0000010")
-    assert Payment.query.count() == 1
-    assert Payment.query.one().mpesa_receipt == "SJK0000010"
+    assert [(p.mpesa_receipt, p.amount) for p in Payment.query] == [("SJK0000010", D("100.00"))]
+    assert intent().status == "completed" and invoice_status() == "paid"
+
+
+def test_push_without_reply_is_matched_when_its_result_arrives(till):
+    """Review finding #4: Safaricom accepted the push but the reply timed
+    out; its result must not be thrown away."""
+    import requests
+    till["fake"].answer("/processrequest", 200, requests.Timeout("slow"))
+    r = push(till)
+    assert r.status_code == 502 and "still be recorded" in r.get_json()["error"]
+    assert intent().status == "unknown" and intent().checkout_request_id is None
+    assert push(till).status_code == 409                 # no second prompt meanwhile
+    till["fake"].default("/query", 200, {"ResultCode": "0"})
+    till["client"].post(till["stk_url"], json=daraja_fakes.stk_callback(
+        "ws_CO_LOST", receipt="SJK0000013", amount=100))
+    assert intent().checkout_request_id == "ws_CO_LOST" and intent().status == "completed"
+    assert invoice_status() == "paid"
+
+
+def test_result_matching_no_request_is_recorded_for_review(till):
+    till["client"].post(till["stk_url"], json=daraja_fakes.stk_callback(
+        "ws_CO_NOBODY", receipt="SJK0000014", amount=250))
+    p = Payment.query.one()
+    assert (p.mpesa_receipt, p.amount, p.match_status) == ("SJK0000014", D("250.00"), "unmatched")
 
 
 def test_processing_keeps_waiting_then_times_out(till):
@@ -210,8 +275,9 @@ def test_polling_asks_daraja_after_30_seconds(till):
     age(40)
     till["fake"].answer("/query", 200, {"ResultCode": "0"})
     poll = till["client"].get(f"/payments/intents/{intent_id}")
-    assert poll.get_json()["intent"]["status"] == "completed"
-    assert poll.get_json()["invoice"]["status"] == "paid"
+    assert poll.get_json()["intent"]["status"] == "paid_unconfirmed"
+    assert "Enter the code" in poll.get_json()["intent"]["result_desc"]
+    assert len(till["fake"].posts("/query")) == 1
 
 
 def test_paybill_and_stk_for_one_payment_in_either_order(till):
@@ -231,7 +297,8 @@ def test_sweep_command(app, till):
     till["fake"].answer("/query", 200, {"ResultCode": "0"})
     result = app.test_cli_runner().invoke(args=["payments-sweep"])
     assert result.exit_code == 0, result.output
-    assert "completed': 1" in result.output
+    assert "checked': 1" in result.output
+    assert intent().status == "paid_unconfirmed"
 
 
 # --- typed codes, review, assign, reverse ----------------------------------------------------

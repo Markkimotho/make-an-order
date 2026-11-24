@@ -5,6 +5,16 @@ mid-call leaves a trace. The callback is verified with Daraja's STK query
 before money is recorded; if the query is unavailable the intent waits as
 'callback_received' and the sweep finishes it. Missed callbacks are found by
 the sweep querying pending intents.
+
+Money is only ever recorded with its M-Pesa receipt (the key that stops one
+transfer being counted twice). If Daraja's query says paid but no callback
+ever brought the receipt, the intent becomes 'paid_unconfirmed' and waits
+for the receipt from the Paybill confirmation or the code on the customer's
+SMS; it closes by itself once the invoice is paid.
+
+Intent states: initiating -> pending -> callback_received -> completed, or
+failed / timeout / paid_unconfirmed; 'unknown' when the push request itself
+got no reply (Safaricom may or may not have sent the prompt).
 """
 import logging
 from datetime import datetime, timedelta
@@ -13,7 +23,9 @@ from auth.tenancy import current_tenant_id
 from models import Payment, PaymentIntent, Tenant, db
 from services.billing.invoices import BillingError, money, recompute
 from services.billing.payments import record_payment
-from services.daraja import DarajaBusy, DarajaClient, DarajaError, stk_amount
+from services.billing.invoices import lock_tenant
+from services.daraja import (DarajaBusy, DarajaClient, DarajaError, DarajaUnavailable,
+                             stk_amount)
 from services.mpesa_service import parse_stk_callback
 from services.phone import normalize_ke_phone
 
@@ -23,8 +35,9 @@ PROMPT_WINDOW = timedelta(seconds=90)     # one open prompt per phone
 QUERY_AFTER = timedelta(seconds=90)       # ask Daraja about silent intents
 POLL_QUERY_AFTER = timedelta(seconds=30)  # the till's own polling may ask sooner
 TIMEOUT_AFTER = timedelta(minutes=10)
-OPEN = ("initiating", "pending")
-WAITING = ("pending", "callback_received")
+OPEN = ("initiating", "pending", "unknown")
+WAITING = ("pending", "callback_received", "paid_unconfirmed")
+MATCH_UNKNOWN_WITHIN = timedelta(minutes=10)
 
 
 class PromptPending(BillingError):
@@ -66,6 +79,15 @@ def start_stk(invoice, phone, user_id=None, now=None):
                               "Wait a minute and try again.")
         db.session.commit()
         raise
+    except DarajaUnavailable:
+        # No reply: Safaricom may still have sent the prompt. Keep the intent
+        # open (it blocks a second prompt for 90 s) so a callback can be
+        # matched to it by phone and amount.
+        intent.status = "unknown"
+        intent.result_desc = ("No reply from M-Pesa. If the customer got the prompt and "
+                              "paid, the payment will still be recorded.")
+        db.session.commit()
+        raise
     except DarajaError as e:
         intent.status = "failed"
         intent.result_desc = str(e)[:255]
@@ -89,16 +111,31 @@ def _record_from_callback(intent):
     return payment
 
 
-def _record_without_receipt(intent):
-    """Daraja's query says paid but its callback never came, so there is no
-    receipt. Record the money now; if the receipt turns up later (callback
-    or Paybill confirmation for this invoice and amount) it is attached to
-    this payment instead of counting twice."""
-    payment = record_payment(method="mpesa_stk", amount=intent.amount, intent=intent,
-                             raw={"source": "stk_query", "checkout_request_id":
-                                  intent.checkout_request_id})
-    intent.status = "completed"
-    return payment
+def _lock_intent(intent):
+    from sqlalchemy import select
+    lock_tenant()
+    return db.session.execute(select(PaymentIntent).where(PaymentIntent.id == intent.id)
+                              .with_for_update()
+                              .execution_options(populate_existing=True)).scalar_one()
+
+
+def _intent_for_unknown_checkout(parsed, now):
+    """A push whose request timed out has no checkout id stored. Its result
+    is matched by the phone and amount we asked for, within 10 minutes."""
+    phone, amount = parsed.get("phone_number"), parsed.get("amount")
+    if not phone or amount is None:
+        return None
+    try:
+        phone = normalize_ke_phone(phone)
+    except ValueError:
+        return None
+    return (PaymentIntent.query
+            .filter(PaymentIntent.status.in_(("initiating", "unknown")),
+                    PaymentIntent.checkout_request_id.is_(None),
+                    PaymentIntent.phone == phone,
+                    PaymentIntent.amount == money(amount),
+                    PaymentIntent.created_at > now - MATCH_UNKNOWN_WITHIN)
+            .order_by(PaymentIntent.id.desc()).first())
 
 
 def handle_stk_callback(payload):
@@ -106,11 +143,24 @@ def handle_stk_callback(payload):
     parsed = parse_stk_callback(payload)
     cri = parsed.get("checkout_request_id")
     intent = PaymentIntent.query.filter_by(checkout_request_id=cri).first() if cri else None
+    if intent is None and cri:
+        intent = _intent_for_unknown_checkout(parsed, datetime.utcnow())
+        if intent is not None:
+            intent.checkout_request_id = cri
+            db.session.flush()
     if intent is None:
-        logger.warning("STK callback for unknown CheckoutRequestID %s", cri)
+        if parsed.get("success") and parsed.get("mpesa_receipt") and parsed.get("amount"):
+            # Money we cannot tie to a request is still money: record it for review.
+            logger.warning("STK callback for unknown CheckoutRequestID %s; recorded unmatched", cri)
+            record_payment(method="mpesa_stk", amount=parsed["amount"],
+                           receipt=parsed["mpesa_receipt"],
+                           payer_phone=parsed.get("phone_number"), raw=payload)
+            db.session.commit()
+        else:
+            logger.warning("STK callback for unknown CheckoutRequestID %s", cri)
         return
+    intent = _lock_intent(intent)
     if intent.status == "completed":
-        _attach_late_receipt(intent, parsed)
         db.session.commit()
         return
     intent.raw_callback = payload
@@ -130,20 +180,18 @@ def handle_stk_callback(payload):
     db.session.commit()
 
 
-def _attach_late_receipt(intent, parsed):
-    payment = db.session.get(Payment, intent.payment_id) if intent.payment_id else None
-    receipt = parsed.get("mpesa_receipt")
-    if payment is not None and payment.mpesa_receipt is None and receipt:
-        payment.mpesa_receipt = receipt
-        payment.raw_payload = parsed
-
-
 def _apply_query(intent, result):
     intent.last_queried_at = datetime.utcnow()
     if result.state == "paid":
         if intent.raw_callback and _record_from_callback(intent):
             return
-        _record_without_receipt(intent)
+        invoice = recompute(intent.invoice)
+        if invoice.status == "paid":
+            intent.status = "completed"       # the money came in another way
+            return
+        intent.status = "paid_unconfirmed"
+        intent.result_desc = ("M-Pesa confirms the payment, but its receipt has not arrived. "
+                              "Enter the code from the customer's SMS to finish.")
     elif result.state == "failed":
         if intent.status == "callback_received":
             # The callback said paid, the query says not: a person decides.
@@ -162,6 +210,15 @@ def refresh_intent(intent, now=None, min_age=QUERY_AFTER):
     if intent.status not in WAITING or not intent.checkout_request_id:
         return intent
     if intent.created_at > now - min_age:
+        return intent
+    intent = _lock_intent(intent)
+    if intent.status == "paid_unconfirmed":
+        if recompute(intent.invoice).status == "paid":
+            intent.status = "completed"
+        db.session.commit()
+        return intent
+    if intent.status not in WAITING:
+        db.session.commit()
         return intent
     try:
         result = client().query(intent.checkout_request_id, timeout=5)
@@ -203,7 +260,7 @@ def sweep_tenant(now=None):
                .order_by(PaymentIntent.id).all())
     for intent in intents:
         counts["checked"] += 1
-        refresh_intent(intent, now=now)
+        intent = refresh_intent(intent, now=now)
         if intent.status in counts:
             counts[intent.status] += 1
     return counts

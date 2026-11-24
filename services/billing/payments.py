@@ -5,7 +5,7 @@ from decimal import Decimal
 from models import Invoice, Payment, PaymentAllocation, db
 from services import audit_service
 from services.billing.invoices import (BillingError, live_allocations, lock_invoice,
-                                       lock_tenant, money, recompute)
+                                       lock_payment, lock_tenant, money, recompute)
 from services.billing.matching import match_reference
 
 OWING = ("open", "partial")
@@ -103,15 +103,6 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
         match = match_reference(bill_ref)
         target, matched_customer = match.invoice, match.customer_id
 
-    if receipt and target is not None:
-        receiptless = _receiptless_stk_payment(target, amount)
-        if receiptless is not None:
-            receiptless.mpesa_receipt = receipt
-            return _merge(receiptless, method=method, amount=amount, intent=intent,
-                          invoice=None, bill_ref=bill_ref, payer_phone=payer_phone,
-                          payer_name=payer_name, org_account_balance=org_account_balance,
-                          raw=raw, recorded_by=recorded_by, verified=verified)
-
     payment = Payment(method=method, amount=amount, unallocated_amount=amount,
                       mpesa_receipt=receipt, bill_ref_raw=(bill_ref or None),
                       payer_phone=payer_phone, payer_name=payer_name,
@@ -126,20 +117,21 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
         intent.payment_id = payment.id
         intent.status = "completed"
     allocate(payment, target)
+    if target is not None:
+        _close_confirmed_intents(target, payment)
     return payment
 
 
-def _receiptless_stk_payment(invoice, amount):
-    """An STK payment recorded from Daraja's query (no receipt yet) on this
-    invoice for this amount: the receipt now arriving belongs to it."""
-    candidates = (Payment.query.join(PaymentAllocation,
-                                     PaymentAllocation.payment_id == Payment.id)
-                  .filter(Payment.mpesa_receipt.is_(None), Payment.method == "mpesa_stk",
-                          Payment.status == "confirmed", Payment.amount == amount,
-                          PaymentAllocation.invoice_id == invoice.id,
-                          PaymentAllocation.voided_at.is_(None))
-                  .order_by(Payment.id).all())
-    return candidates[0] if candidates else None
+def _close_confirmed_intents(invoice, payment):
+    """An STK push Daraja confirmed but whose receipt never came closes once
+    the receipt arrives another way and the invoice is paid."""
+    from models import PaymentIntent
+    if recompute(invoice).status != "paid":
+        return
+    for intent in PaymentIntent.query.filter_by(invoice_id=invoice.id,
+                                                status="paid_unconfirmed"):
+        intent.status = "completed"
+        intent.payment_id = intent.payment_id or payment.id
 
 
 def _merge(existing, *, method, amount, intent, invoice, bill_ref, payer_phone, payer_name,
@@ -211,6 +203,8 @@ def _void_allocations(payment, user_id):
 
 def reallocate(payment, to_invoice, user_id=None):
     """Move all of a payment to another invoice (wrong account number)."""
+    lock_tenant()
+    payment = lock_payment(payment)
     if payment.status != "confirmed":
         raise BillingError("payment is reversed")
     to_invoice = lock_invoice(to_invoice)
@@ -228,6 +222,8 @@ def reallocate(payment, to_invoice, user_id=None):
 
 def reverse_payment(payment, user_id=None, reason=None):
     """Safaricom reversed it: the money is gone, its invoices reopen."""
+    lock_tenant()
+    payment = lock_payment(payment)
     if payment.status == "reversed":
         return payment
     _void_allocations(payment, user_id)
@@ -242,6 +238,8 @@ def reverse_payment(payment, user_id=None, reason=None):
 def refund_unallocated(payment, amount=None, user_id=None, note=None):
     """Money handed back to the payer (cash at the till, card reversal on
     the terminal): it leaves the payment, and the business's books."""
+    lock_tenant()
+    payment = lock_payment(payment)
     take = money(payment.unallocated_amount if amount is None else amount)
     if take <= 0:
         return payment
@@ -261,14 +259,15 @@ def refund_unallocated(payment, amount=None, user_id=None, note=None):
 HANDED_BACK = ("cash", "card")
 
 
-def settle_released(payments, user_id=None, note=None):
-    """After a sale is voided or refunded: cash and card money goes back to
-    the customer; M-Pesa money stays as their credit (it cannot be handed
+def settle_released(released, user_id=None, note=None):
+    """After a sale is voided or refunded: cash and card money released from
+    it goes back to the customer (exactly that amount, never credit they
+    already had); M-Pesa money stays as their credit (it cannot be handed
     back at the till) and rolls on to their other invoices, or waits in the
-    review queue for a walk-in."""
-    for payment in payments:
+    review queue for a walk-in. ``released`` is [(payment, amount)]."""
+    for payment, amount in released:
         if payment.method in HANDED_BACK:
-            refund_unallocated(payment, user_id=user_id, note=note)
+            refund_unallocated(payment, amount=amount, user_id=user_id, note=note)
         else:
             allocate(payment, None)
             refresh_match_status(payment)

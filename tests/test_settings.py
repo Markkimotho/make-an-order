@@ -74,20 +74,40 @@ def test_missing_secrets_key_is_explained(app, login_as, monkeypatch):
     assert tenant(app)["daraja_consumer_key"] is None
 
 
-def test_rotate_token_kills_old_urls_and_reregisters(app, owner, client, monkeypatch):
+def test_rotate_token_reregisters_and_keeps_old_url_a_day(app, owner, client, monkeypatch):
+    from datetime import datetime, timedelta
     fake = daraja_fakes.install(monkeypatch)
     fake.default("/registerurl", 200, {"ResponseCode": "0"})
     owner.post("/settings/", data=FORM)
     old = tenant(app)["callback_token"]
-    r = owner.post("/settings/rotate-token")
-    assert r.status_code == 302
+    assert owner.post("/settings/rotate-token").status_code == 302
     new = tenant(app)["callback_token"]
     assert new != old
-    registered = fake.posts("/registerurl")[-1]
-    assert registered["ConfirmationURL"].endswith(f"/acme/{new}")
+    assert fake.posts("/registerurl")[-1]["ConfirmationURL"].endswith(f"/acme/{new}")
     body = daraja_fakes.c2b("SJK0000001", 100, "X")
-    assert client.post(f"/api/payments/daraja/c2b/acme/{old}", json=body).status_code == 404
     assert client.post(f"/api/payments/daraja/c2b/acme/{new}", json=body).status_code == 200
+    # Results for pushes already in flight (old URL) still land for 24 hours...
+    assert client.post(f"/api/payments/daraja/c2b/acme/{old}",
+                       json=daraja_fakes.c2b("SJK0000002", 100, "X")).status_code == 200
+    with unscoped():
+        db.session.get(Tenant, app.acme_id).callback_token_rotated_at = (
+            datetime.utcnow() - timedelta(hours=25))
+        db.session.commit()
+    # ...and not after.
+    assert client.post(f"/api/payments/daraja/c2b/acme/{old}",
+                       json=daraja_fakes.c2b("SJK0000003", 100, "X")).status_code == 404
+
+
+def test_rotation_refused_by_safaricom_changes_nothing(app, owner, monkeypatch):
+    """Review finding: the new token was committed before Safaricom accepted
+    the new URLs, so Paybill confirmations would hit a dead URL."""
+    fake = daraja_fakes.install(monkeypatch)
+    owner.post("/settings/", data=FORM)
+    old = tenant(app)["callback_token"]
+    fake.answer("/registerurl", 400, {"errorMessage": "Invalid ValidationURL"})
+    r = owner.post("/settings/rotate-token", follow_redirects=True)
+    assert "not changed" in r.get_data(as_text=True)
+    assert tenant(app)["callback_token"] == old
 
 
 def test_register_c2b_button(app, owner, monkeypatch):

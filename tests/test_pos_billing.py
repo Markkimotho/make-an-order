@@ -236,3 +236,150 @@ def test_running_total_includes_the_line_just_added_and_removed(till):
     assert r.get_json()["transaction"]["total"] == 300.0
     r = c.delete(f"/pos/transaction/{txn}/remove_item/{line}")
     assert r.get_json()["transaction"]["total"] == 100.0
+
+
+# --- review findings (step 3) ------------------------------------------------------
+
+def refund(till, txn, qty):
+    line = TransactionItem.query.filter_by(transaction_id=txn).one()
+    return till["client"].post(f"/pos/transaction/{txn}/refund",
+                               json={"items": [{"transaction_item_id": line.id,
+                                                "quantity": qty}]})
+
+
+def test_refund_cannot_be_replayed(till):
+    """#8: returning one of three units twice more must not refund KES 200."""
+    txn = sale(till, qty=3, customer=till["duka"])
+    complete(till, txn, "credit")
+    assert refund(till, txn, 1).status_code == 200
+    r = refund(till, txn, 3)                    # only 2 are left
+    assert r.status_code == 400 and "left to refund" in r.get_json()["error"]
+    assert refund(till, txn, 2).status_code == 200
+    assert refund(till, txn, 1).status_code == 400     # sale is now fully refunded
+    inv = invoice_of(txn)
+    assert inv.amount_adjusted == D("300.00")
+    assert db.session.get(Transaction, txn).status == "refunded"
+
+
+def test_duplicate_lines_in_one_request_are_added_up(till):
+    txn = sale(till, qty=2, customer=till["duka"])
+    complete(till, txn, "credit")
+    line = TransactionItem.query.filter_by(transaction_id=txn).one()
+    r = till["client"].post(f"/pos/transaction/{txn}/refund", json={"items": [
+        {"transaction_item_id": line.id, "quantity": 2},
+        {"transaction_item_id": line.id, "quantity": 2}]})
+    assert r.status_code == 400
+    assert invoice_of(txn).amount_adjusted == D("0.00")
+
+
+def test_refund_includes_tax_and_full_return_clears_the_invoice(till, monkeypatch):
+    """#9: a KES 100 item + 16% tax = KES 116; returning it credits KES 116."""
+    from config import Config
+    monkeypatch.setattr(Config, "TAX_RATE", 0.16)
+    txn = sale(till, qty=3, customer=till["duka"])
+    complete(till, txn, "credit")
+    assert invoice_of(txn).total == D("348.00")
+    r = refund(till, txn, 1)
+    assert r.get_json()["refunded_value"] == 116.0
+    refund(till, txn, 2)
+    inv = invoice_of(txn)
+    assert (inv.amount_adjusted, inv.balance) == (D("348.00"), D("0.00"))
+
+
+def test_online_card_completion_needs_the_payment_recorded(till, app, monkeypatch):
+    """#10: with online cards on, the till must not record its own card
+    payment as well as the provider's."""
+    monkeypatch.setitem(app.config, "CARD_PAYMENTS_ENABLED", True)
+    txn = sale(till)
+    r = complete(till, txn, "card")
+    assert r.status_code == 409 and Payment.query.count() == 0
+    inv = billing.create_invoice(total=100, transaction_id=txn)
+    billing.record_payment(method="card", amount=100, receipt="FLWX1", invoice=inv)
+    db.session.commit()
+    assert complete(till, txn, "card").status_code == 200
+    assert Payment.query.count() == 1
+
+
+def test_terminal_card_is_recorded_when_online_cards_are_off(till):
+    txn = sale(till)
+    assert complete(till, txn, "card", card_ref="PDQ-778").status_code == 200
+    assert [p.method for p in Payment.query] == ["card"]
+
+
+def test_split_must_match_what_mpesa_brought_in(till):
+    """#11: KES 250 M-Pesa received but the split says 200: refuse rather
+    than quietly drop KES 50 of cash."""
+    txn = sale(till, qty=3)
+    inv = billing.create_invoice(total=300, transaction_id=txn)
+    billing.record_payment(method="mpesa_c2b", amount=250, receipt="SJK0000040", invoice=inv)
+    db.session.commit()
+    r = complete(till, txn, "split", mpesa_amount=200, cash_amount=100)
+    assert r.status_code == 409 and "250" in r.get_json()["error"]
+    assert Payment.query.count() == 1
+    assert complete(till, txn, "split", mpesa_amount=250, cash_amount=50).status_code == 200
+
+
+def test_old_credit_sale_refund_credits_the_opening_balance(till):
+    """#12: a credit sale from before invoices existed: its debt sits in the
+    customer's opening-balance invoice, so returns must reduce that."""
+    txn = sale(till, qty=3, customer=till["duka"])
+    t = db.session.get(Transaction, txn)
+    t.status, t.payment_method = "completed", "credit"
+    opening = billing.create_invoice(total=1000, kind="opening_balance",
+                                     customer_id=till["duka"])
+    db.session.commit()
+    opening_id = opening.id
+    assert refund(till, txn, 1).status_code == 200
+    assert db.session.get(Invoice, opening_id).balance == D("900.00")
+    assert billing.customer_exposure(till["duka"]) == D("900.00")
+
+
+def _threads(app, cookie, calls):
+    results, barrier = [], threading.Barrier(len(calls))
+
+    def worker(method, url, body):
+        with app.app_context():
+            client = app.test_client()
+            client.set_cookie(app.config["SESSION_COOKIE_NAME"], cookie)
+            barrier.wait()
+            results.append(client.open(url, method=method, json=body).status_code)
+
+    threads = [threading.Thread(target=worker, args=c) for c in calls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return sorted(results)
+
+
+@pytest.mark.skipif(not on_mysql(), reason="row locks need MySQL")
+def test_double_tap_on_complete_makes_one_invoice(till):
+    """#6: two 'complete' requests for one sale at the same moment."""
+    app = till["app"]
+    txn = sale(till)
+    cookie = till["client"].get_cookie(app.config["SESSION_COOKIE_NAME"]).value
+    url = f"/pos/transaction/{txn}/complete"
+    results = _threads(app, cookie, [("POST", url, {"payment_method": "cash"})] * 2)
+    assert results == [200, 400]
+    with tenant_scope(app.acme_id):
+        assert Invoice.query.count() == 1 and Payment.query.count() == 1
+
+
+@pytest.mark.skipif(not on_mysql(), reason="row locks need MySQL")
+def test_concurrent_assign_cannot_spend_a_payment_twice(till, login_as):
+    """#5: one KES 100 payment assigned to two invoices at the same moment."""
+    app = till["app"]
+    a = billing.create_invoice(total=100)
+    b = billing.create_invoice(total=100)
+    p = billing.record_payment(method="mpesa_c2b", amount=100, receipt="SJK0000050",
+                               bill_ref="NOPE")
+    db.session.commit()
+    ids = (a.id, b.id, p.id)
+    owner = login_as("superuser")
+    cookie = owner.get_cookie(app.config["SESSION_COOKIE_NAME"]).value
+    _threads(app, cookie, [("POST", f"/payments/{ids[2]}/assign", {"invoice_id": ids[0]}),
+                           ("POST", f"/payments/{ids[2]}/assign", {"invoice_id": ids[1]})])
+    with tenant_scope(app.acme_id):
+        from models import PaymentAllocation
+        live = PaymentAllocation.query.filter(PaymentAllocation.voided_at.is_(None)).all()
+        assert sum(x.amount for x in live) == D("100.00")

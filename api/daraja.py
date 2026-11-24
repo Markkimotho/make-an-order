@@ -15,6 +15,7 @@ retry. Paths never contain "mpesa" or "safaricom" (Daraja refuses those).
 """
 import hmac
 import logging
+from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -30,14 +31,30 @@ C2B_CONFIRMED = {"ResultCode": 0, "ResultDesc": "Confirmation received successfu
 C2B_VALIDATED = {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+PREVIOUS_TOKEN_GRACE = timedelta(hours=24)
+
+
 def _tenant_for(slug, token):
-    """The tenant id if slug and token match, else None (constant-time)."""
+    """The tenant id if slug and token match, else None (constant-time).
+
+    For a day after a rotation the previous token is accepted too, so
+    results for pushes already in flight still land."""
     with unscoped():
-        row = db.session.query(Tenant.id, Tenant.callback_token).filter_by(slug=slug).first()
+        row = (db.session.query(Tenant.id, Tenant.callback_token,
+                                Tenant.previous_callback_token,
+                                Tenant.callback_token_rotated_at)
+               .filter_by(slug=slug).first())
     if row is None:
         hmac.compare_digest(token, "x" * len(token))   # same work either way
         return None
-    return row.id if hmac.compare_digest(token, row.callback_token) else None
+    if hmac.compare_digest(token, row.callback_token):
+        return row.id
+    recent = (row.callback_token_rotated_at is not None
+              and row.callback_token_rotated_at > datetime.utcnow() - PREVIOUS_TOKEN_GRACE)
+    if row.previous_callback_token and recent and hmac.compare_digest(
+            token, row.previous_callback_token):
+        return row.id
+    return None
 
 
 def _source_allowed():

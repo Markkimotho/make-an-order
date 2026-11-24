@@ -472,6 +472,14 @@ const POS = (() => {
         const r = await api('GET', `/payments/intents/${intentId}`);
         const st = r.intent.status;
         if (r.invoice.status === 'paid') return markPaid();
+        if (st === 'paid_unconfirmed') {
+          // M-Pesa confirmed the payment but its receipt has not come through:
+          // ask for the code from the customer's SMS (the field below).
+          $('#mpesaStatus').textContent = r.intent.result_desc;
+          $('#mpesaCode').focus();
+          mpesaPoll = setTimeout(() => pollIntent(intentId, started), 5000);
+          return;
+        }
         if (st === 'failed' || st === 'timeout') {
           stopPoll();
           $('#mpesaStatus').textContent = (st === 'timeout' ? 'No answer from M-Pesa. ' : '') +

@@ -31,7 +31,7 @@ from models import (
 )
 from services import audit_service, billing, flutterwave_service
 from services.billing import stk
-from services.daraja import DarajaBusy, DarajaError, DarajaNotConfigured
+from services.daraja import DarajaBusy, DarajaError, DarajaNotConfigured, DarajaUnavailable
 from services.phone import InvalidPhone
 
 payments_bp = Blueprint('payments', __name__)
@@ -52,6 +52,13 @@ def _invoice_for_request(body):
     txn = db.session.get(Transaction, body.get('transaction_id')) if body.get('transaction_id') else None
     if txn is None:
         return None, (jsonify({'error': 'transaction_id or invoice_id is required'}), 400)
+    # Same lock as checkout: concurrent requests cannot make two invoices.
+    from sqlalchemy import select
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    txn = db.session.execute(select(Transaction).where(Transaction.id == txn.id)
+                             .with_for_update()
+                             .execution_options(populate_existing=True)).scalar_one()
     if txn.status != TXN_OPEN:
         return None, (jsonify({'error': f'Transaction is {txn.status}'}), 400)
     if billing.money(txn.total) <= 0:
@@ -98,6 +105,10 @@ def mpesa_stk_push():
     except DarajaBusy:
         return jsonify({'error': 'The customer already has an M-Pesa prompt open. '
                                  'Wait a minute and try again.'}), 409
+    except DarajaUnavailable:
+        return jsonify({'error': 'No reply from M-Pesa. If the customer gets the prompt '
+                                 'and pays, it will still be recorded; wait before '
+                                 'sending another.'}), 502
     except DarajaNotConfigured as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400

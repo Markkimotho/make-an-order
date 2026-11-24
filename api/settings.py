@@ -156,20 +156,24 @@ def register_c2b():
 @settings_bp.route("/rotate-token", methods=["POST"])
 @superuser_required
 def rotate_token():
-    """New callback token: the old URLs stop working at once. STK pushes
-    carry the new URL automatically; Paybill URLs are re-registered."""
+    """New callback token. For a Paybill, Safaricom must accept the new URLs
+    first, or confirmations would keep going to a URL we no longer accept;
+    if it refuses, nothing changes. The old token keeps working for 24 hours
+    so results for pushes already in flight still land."""
     tenant = _tenant()
+    old = tenant.callback_token
+    tenant.previous_callback_token = old
     tenant.callback_token = secrets.token_urlsafe(24)
-    audit_service.log(session.get("user_id"), "tenant.rotate_callback_token", "Tenant", tenant.id)
-    db.session.commit()
-    message = "Callback token changed."
+    tenant.callback_token_rotated_at = datetime.utcnow()
     if tenant.daraja_shortcode_type == "paybill" and tenant.daraja_shortcode:
         try:
             DarajaClient(tenant).register_c2b()
-            message += " Paybill URLs re-registered with Safaricom."
         except DarajaError as e:
-            flash(f"{message} Re-registering the Paybill URLs failed ({e}); "
-                  "use 'Register Paybill URLs' again.", "warning")
+            db.session.rollback()
+            flash(f"Safaricom did not accept the new URLs ({e}). The callback token was "
+                  "not changed.", "danger")
             return redirect(url_for("settings.page"))
-    flash(message, "success")
+    audit_service.log(session.get("user_id"), "tenant.rotate_callback_token", "Tenant", tenant.id)
+    db.session.commit()
+    flash("Callback token changed. The old one keeps working for 24 hours.", "success")
     return redirect(url_for("settings.page"))

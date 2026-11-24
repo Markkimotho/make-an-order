@@ -64,6 +64,10 @@ class Tenant(db.Model):
     daraja_passkey          = deferred(db.Column("daraja_passkey_encrypted", EncryptedString(512), nullable=True))
     daraja_env              = db.Column(db.String(12), nullable=False, default="sandbox")
     callback_token          = db.Column(db.String(64), nullable=False, default=_new_callback_token)
+    # After a rotation the old token keeps working for a day, so callbacks
+    # for pushes already in flight (and Safaricom's cached URLs) still land.
+    previous_callback_token = db.Column(db.String(64), nullable=True)
+    callback_token_rotated_at = db.Column(db.DateTime, nullable=True)
 
     at_sender_id        = db.Column(db.String(20), nullable=True)
     subscription_status = db.Column(db.String(20), nullable=False, default="trial")

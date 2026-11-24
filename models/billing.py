@@ -23,8 +23,8 @@ from services.phone import normalize_ke_phone
 
 INVOICE_KINDS = ("sale", "credit", "opening_balance")
 INVOICE_STATUSES = ("open", "partial", "paid", "void", "expired")
-INTENT_STATUSES = ("initiating", "pending", "callback_received", "completed", "failed",
-                   "timeout")
+INTENT_STATUSES = ("initiating", "pending", "unknown", "callback_received", "completed",
+                   "paid_unconfirmed", "failed", "timeout")
 PAYMENT_METHODS = ("mpesa_stk", "mpesa_c2b", "mpesa_manual", "cash", "card")
 MPESA_METHODS = ("mpesa_stk", "mpesa_c2b", "mpesa_manual")
 PAYMENT_STATUSES = ("confirmed", "reversed")

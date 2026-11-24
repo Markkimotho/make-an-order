@@ -35,6 +35,14 @@ def lock_tenant():
                        .with_for_update())
 
 
+def lock_payment(payment):
+    """Reload ``payment`` under a row lock (after taking the tenant lock)."""
+    from models import Payment
+    return db.session.execute(
+        select(Payment).where(Payment.id == payment.id).with_for_update()
+        .execution_options(populate_existing=True)).scalar_one()
+
+
 def lock_invoice(invoice):
     """Reload ``invoice`` from the database under a row lock."""
     return db.session.execute(
@@ -98,12 +106,12 @@ def live_allocations(invoice_id, newest_first=False):
 def release(invoice, amount, user_id=None):
     """Take ``amount`` of money back off ``invoice``, newest allocation first.
 
-    Returns the payments whose money was released, so the caller can roll
-    it on to the payer's other invoices.
+    Returns ``[(payment, amount released from it)]`` so the caller can roll
+    that money on, or hand exactly that much back.
     """
     from models import Payment
     remaining = money(amount)
-    touched = []
+    touched = {}
     now = datetime.utcnow()
     for alloc in live_allocations(invoice.id, newest_first=True):
         if remaining <= 0:
@@ -116,11 +124,10 @@ def release(invoice, amount, user_id=None):
         payment = db.session.get(Payment, alloc.payment_id)
         payment.unallocated_amount = money(payment.unallocated_amount) + take
         remaining -= take
-        if payment not in touched:
-            touched.append(payment)
+        touched[payment] = touched.get(payment, Decimal("0")) + take
     db.session.flush()
     recompute(invoice)
-    return touched
+    return list(touched.items())
 
 
 def adjust(invoice, amount, reason, note=None, user_id=None, roll=True):
@@ -128,10 +135,11 @@ def adjust(invoice, amount, reason, note=None, user_id=None, roll=True):
 
     With ``roll`` (the default) it moves on to the payer's next invoices or
     stays as their credit. With ``roll=False`` the caller decides (the till
-    hands cash back). Returns (adjustment, payments whose money was released).
+    hands cash back). Returns (adjustment, [(payment, amount released)]).
     """
     from services.billing.payments import allocate, refresh_match_status
     amount = money(amount)
+    lock_tenant()
     invoice = lock_invoice(invoice)
     if invoice.status == "void":
         raise BillingError("invoice is void")
@@ -147,7 +155,7 @@ def adjust(invoice, amount, reason, note=None, user_id=None, roll=True):
     excess = money(invoice.amount_paid) - (money(invoice.total) - money(invoice.amount_adjusted))
     released = release(invoice, excess, user_id) if excess > 0 else []
     if roll:
-        for payment in released:
+        for payment, _ in released:
             allocate(payment, None, exclude=(invoice.id,))
             refresh_match_status(payment)
     audit_service.log(user_id, "invoice.adjust", "Invoice", invoice.id, None,
@@ -158,8 +166,9 @@ def adjust(invoice, amount, reason, note=None, user_id=None, roll=True):
 def void_invoice(invoice, user_id=None, reason="void", roll=True):
     """Void an invoice. Money already on it is released: with ``roll`` it
     becomes the payer's credit and moves on to their other open invoices;
-    with ``roll=False`` the caller decides. Returns (invoice, released)."""
+    with ``roll=False`` the caller decides. Returns (invoice, [(payment, amount)])."""
     from services.billing.payments import allocate, refresh_match_status
+    lock_tenant()
     invoice = lock_invoice(invoice)
     if invoice.status == "void":
         return invoice, []
@@ -167,7 +176,7 @@ def void_invoice(invoice, user_id=None, reason="void", roll=True):
     db.session.flush()
     released = release(invoice, invoice.amount_paid, user_id) if money(invoice.amount_paid) else []
     if roll:
-        for payment in released:
+        for payment, _ in released:
             allocate(payment, None, exclude=(invoice.id,))
             refresh_match_status(payment)
     audit_service.log(user_id, "invoice.void", "Invoice", invoice.id, None, {"reason": reason})

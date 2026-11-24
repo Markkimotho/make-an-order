@@ -95,3 +95,20 @@ def test_downgrade_refuses_with_paid_sales(legacy):
     with pytest.raises(Exception) as excinfo:
         command.downgrade(config, "0003_tenants_contract")
     assert "cannot be folded back" in str(excinfo.value)
+
+
+def test_downgrade_refuses_with_unapplied_credit(legacy):
+    """#13: KES 150 paid on a KES 100 opening balance leaves KES 50 credit
+    that credit_balance cannot hold."""
+    seed_customers(100)
+    upgrade()
+    tenant_id = fetch("SELECT id FROM tenants")[0][0]
+    with db.engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO payments (tenant_id, method, amount, unallocated_amount, status, "
+            "match_status, verified, received_at) VALUES "
+            f"({tenant_id}, 'cash', 150, 50, 'confirmed', 'partial', 1, CURRENT_TIMESTAMP)")
+    config = current_app.extensions["migrate"].migrate.get_config()
+    with pytest.raises(Exception) as excinfo:
+        command.downgrade(config, "0003_tenants_contract")
+    assert "unapplied payment credit" in str(excinfo.value)

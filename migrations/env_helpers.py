@@ -20,7 +20,12 @@ def _normalise_default(text):
     t = re.sub(r"\s+", "", t)
     if t in _NOW_FORMS:
         return "current_timestamp"
-    return _BOOLEAN_FORMS.get(t, t)
+    t = _BOOLEAN_FORMS.get(t, t)
+    try:                                   # MySQL reports 0 as '0.000' on DECIMAL
+        from decimal import Decimal, InvalidOperation
+        return format(Decimal(t).normalize(), "f")
+    except (InvalidOperation, ValueError):
+        return t
 
 
 _BOOLEAN_FORMS = {"false": "0", "true": "1"}

@@ -161,6 +161,36 @@ def _ensure_open_shift_or_403():
     return shift, None
 
 
+def _lock_txn(txn):
+    """Serialise money work on this sale: the business's billing lock, then
+    the sale row reloaded under lock (two taps on 'complete' cannot both
+    create an invoice and take payment)."""
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    return db.session.execute(select(Transaction).where(Transaction.id == txn.id)
+                              .with_for_update()
+                              .execution_options(populate_existing=True)).scalar_one()
+
+
+def _invoice_to_credit(txn):
+    """The invoice a void or refund of this sale credits: its own, or, for a
+    credit sale made before invoices existed, the customer's opening-balance
+    invoice (which holds that debt since migration 0004)."""
+    invoice = billing.open_invoice_for_transaction(txn.id)
+    if invoice is not None or txn.payment_method != PAY_CREDIT or not txn.customer_id:
+        return invoice
+    from models import Invoice
+    return (Invoice.query.filter(Invoice.customer_id == txn.customer_id,
+                                 Invoice.kind == 'opening_balance',
+                                 Invoice.status.in_(('open', 'partial')))
+            .order_by(Invoice.id.asc()).first())
+
+
+def _online_cards():
+    from flask import current_app
+    return bool(current_app.config.get('CARD_PAYMENTS_ENABLED'))
+
+
 def _invoice_payments(invoice):
     from models import Payment, PaymentAllocation
     ids = [a.payment_id for a in PaymentAllocation.query.filter(
@@ -531,9 +561,12 @@ def transaction_complete(txn_id):
     """
     txn, err = _txn_or_404(txn_id)
     if err: return err
+    txn = _lock_txn(txn)
     if txn.status != TXN_OPEN:
+        db.session.rollback()
         return jsonify({'error': f'Transaction is {txn.status}'}), 400
     if not txn.items:
+        db.session.rollback()
         return jsonify({'error': 'Cannot complete an empty cart'}), 400
 
     body = request.get_json(silent=True) or {}
@@ -584,11 +617,20 @@ def transaction_complete(txn_id):
     if invoice is not None and billing.money(invoice.total) != _q(total) and paid_so_far > 0:
         return jsonify({'error': 'The cart changed after a payment was received; '
                                  'void and start again'}), 409
-    if method == PAY_MPESA and (invoice is None or paid_so_far < _q(total)):
-        return jsonify({'error': 'M-Pesa payment not received yet',
+    # Money that arrives by itself (M-Pesa; online cards when switched on)
+    # must already be recorded on the invoice; the till does not record it.
+    awaits_provider = method == PAY_MPESA or (method == PAY_CARD and _online_cards())
+    if awaits_provider and (invoice is None or paid_so_far < _q(total)):
+        db.session.rollback()
+        return jsonify({'error': f'{"M-Pesa" if method == PAY_MPESA else "Card"} payment '
+                                 'not received yet',
                         'invoice': invoice.to_dict() if invoice else None}), 409
-    if method == PAY_SPLIT and mpesa_a > 0 and paid_so_far < mpesa_a:
-        return jsonify({'error': f'M-Pesa part not received yet ({paid_so_far} of {mpesa_a})'}), 409
+    if method == PAY_SPLIT and paid_so_far != _q(mpesa_a):
+        # The tender must match what M-Pesa actually brought in, or cash
+        # taken at the till would silently go unrecorded.
+        db.session.rollback()
+        return jsonify({'error': f'M-Pesa received is {paid_so_far}; the split says '
+                                 f'{_q(mpesa_a)}. Adjust the cash/card amounts.'}), 409
     if method == PAY_CREDIT:
         if customer is None:
             return jsonify({'error': 'credit payment requires a customer'}), 400
@@ -643,7 +685,7 @@ def transaction_complete(txn_id):
         invoice.due_date = billing.credit_due_date(customer, date.today())
     customer_id = customer.id if customer else None
     to_record = []
-    if method in (PAY_CASH, PAY_CARD):
+    if method == PAY_CASH or (method == PAY_CARD and not _online_cards()):
         to_record.append((method, None))
     elif method == PAY_SPLIT:
         to_record += [(PAY_CASH, cash_a), (PAY_CARD, card_a)]
@@ -755,10 +797,21 @@ def transaction_void(txn_id):
 
     # The invoice goes too. Cash/card already taken is handed back; M-Pesa
     # money (including an STK paid on a sale still open) becomes credit.
-    invoice = billing.open_invoice_for_transaction(txn.id)
-    if invoice is not None:
+    txn = _lock_txn(txn)
+    if txn.status in (TXN_VOIDED, TXN_REFUNDED):
+        db.session.rollback()
+        return jsonify({'error': f'Transaction already {txn.status}'}), 400
+    invoice = _invoice_to_credit(txn)
+    if invoice is not None and invoice.transaction_id == txn.id:
         _, released = billing.void_invoice(invoice, uid, reason=reason, roll=False)
         billing.settle_released(released, uid, note=f'VOID {txn.transaction_ref}')
+    elif invoice is not None and txn.status == TXN_COMPLETED:
+        # A pre-invoice credit sale: take its amount off the opening balance.
+        credit = min(_q(Decimal(str(txn.total or 0))), billing.money(invoice.balance))
+        if credit > 0:
+            _, released = billing.adjust(invoice, credit, 'void', note=f'VOID {txn.transaction_ref}',
+                                         user_id=uid, roll=False)
+            billing.settle_released(released, uid, note=f'VOID {txn.transaction_ref}')
 
     txn.status = TXN_VOIDED
     txn.notes = ((txn.notes or '') + f'\nVOID: {reason}').strip()
@@ -795,32 +848,47 @@ def transaction_refund(txn_id):
         return jsonify({'error': 'items list is required'}), 400
 
     uid = _user_id()
-    refunded_value = Decimal('0')
-    fully_refunded = True
+    txn = _lock_txn(txn)
+    if txn.status != TXN_COMPLETED:
+        db.session.rollback()
+        return jsonify({'error': f'Can only refund completed transactions (status={txn.status})'}), 400
 
-    # Index lines for quick lookup; track remaining qty after refund.
-    remaining = {li.id: Decimal(str(li.quantity)) for li in txn.items}
-
+    # Add up the request per line, then check against what is still unreturned
+    # (a replayed or duplicated request cannot return the same goods twice).
+    wanted = {}
     for entry in refund_items:
         lid = entry.get('transaction_item_id')
         try:
             qty = Decimal(str(entry.get('quantity', 0)))
         except Exception:
+            db.session.rollback()
             return jsonify({'error': 'item quantity must be numeric'}), 400
         if qty <= 0:
             continue
         line = db.session.get(TransactionItem, lid) if lid else None
         if not line or line.transaction_id != txn.id:
+            db.session.rollback()
             return jsonify({'error': f'Line {lid} not on this transaction'}), 404
-        if qty > Decimal(str(line.quantity)):
-            return jsonify({'error': f'Refund qty exceeds line qty for {line.item_name}'}), 400
+        wanted[line.id] = (line, wanted.get(line.id, (line, Decimal('0')))[1] + qty)
+    if not wanted:
+        db.session.rollback()
+        return jsonify({'error': 'nothing to refund'}), 400
+    for line, qty in wanted.values():
+        left = Decimal(str(line.quantity)) - Decimal(str(line.refunded_quantity or 0))
+        if qty > left:
+            db.session.rollback()
+            return jsonify({'error': f'Only {left} of {line.item_name} left to refund'}), 400
 
-        # Per-unit value
-        unit_value = (Decimal(str(line.line_total)) / Decimal(str(line.quantity))
-                      ) if Decimal(str(line.quantity)) > 0 else Decimal('0')
-        line_refund = _q(unit_value * qty)
-        refunded_value += line_refund
-
+    # Each line's share of what the customer actually paid: tax and any
+    # sale-wide discount are spread in proportion to the line totals.
+    subtotal = Decimal(str(txn.subtotal or 0))
+    ratio = (Decimal(str(txn.total or 0)) / subtotal) if subtotal > 0 else Decimal('0')
+    refunded_value = Decimal('0')
+    for line, qty in wanted.values():
+        line_qty = Decimal(str(line.quantity))
+        unit_value = Decimal(str(line.line_total)) / line_qty if line_qty > 0 else Decimal('0')
+        refunded_value += _q(unit_value * qty * ratio)
+        line.refunded_quantity = Decimal(str(line.refunded_quantity or 0)) + qty
         if line.inventory_item_id:
             item = db.session.get(InventoryItem, line.inventory_item_id)
             if item:
@@ -831,10 +899,8 @@ def transaction_refund(txn_id):
                     reason='refund', user_id=uid,
                     note=f'REFUND {txn.transaction_ref}',
                 ))
-        remaining[line.id] = remaining[line.id] - qty
-
-    if any(r > 0 for r in remaining.values()):
-        fully_refunded = False
+    fully_refunded = all(Decimal(str(li.refunded_quantity or 0)) >= Decimal(str(li.quantity))
+                         for li in txn.items)
 
     # Loyalty reversal proportional to refunded fraction of total
     total = Decimal(str(txn.total or 0))
@@ -855,13 +921,19 @@ def transaction_refund(txn_id):
                         note=f'reversal: refund {txn.transaction_ref}',
                     ))
 
-    # Credit note on the sale's invoice. For a credit sale it lowers what is
-    # owed; money already paid above the new amount goes back (cash/card)
-    # or stays as the customer's credit (M-Pesa).
-    invoice = billing.open_invoice_for_transaction(txn.id)
+    # Credit note on the sale's invoice (or, for a credit sale made before
+    # invoices existed, the customer's opening balance). It lowers what is
+    # owed; money already paid above that goes back (cash/card) or stays as
+    # the customer's credit (M-Pesa). The last return takes whatever is left,
+    # so rounding never strands a few cents.
+    invoice = _invoice_to_credit(txn)
     if invoice is not None and refunded_value > 0:
         still_invoiced = billing.money(invoice.total) - billing.money(invoice.amount_adjusted)
-        credit = min(refunded_value, still_invoiced)
+        if fully_refunded and invoice.transaction_id == txn.id:
+            refunded_value = still_invoiced
+        credit = min(refunded_value, still_invoiced,
+                     billing.money(invoice.balance) if invoice.transaction_id != txn.id
+                     else still_invoiced)
         if credit > 0:
             _, released = billing.adjust(invoice, credit, 'return', note=reason, user_id=uid,
                                          roll=False)

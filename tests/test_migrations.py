@@ -131,6 +131,8 @@ def test_disable_foreign_keys_ignores_other_dialects():
     ("'0'", "false", False),                          # MySQL boolean default
     ("0", "0", False),                                # SQLite boolean default
     ("'1'", "false", None),                           # a real change
+    ("'0.000'", "'0'", False),                        # MySQL DECIMAL default
+    ("'30'", "'14'", None),                           # a real change
     ("'0'", "now()", None),                           # a real change: let Alembic decide
     (None, "now()", None),
 ])

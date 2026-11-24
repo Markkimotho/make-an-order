@@ -251,3 +251,18 @@ def test_withdrawal_is_not_a_missed_payment(app):
 def test_money_rounds_to_cents():
     assert billing.money("100.005") == D("100.01")
     assert billing.money(None) == D("0.00")
+
+
+# --- review findings (step 3) ------------------------------------------------------
+
+def test_settling_a_refund_hands_back_only_what_was_released(duka):
+    """#7: KES 150 cash on a KES 100 credit sale leaves KES 50 credit.
+    Returning KES 20 must hand back KES 20, not the customer's KES 70."""
+    i = inv(100, duka)
+    pay(150, method="cash", invoice=i, customer_id=duka.id)
+    assert Payment.query.one().unallocated_amount == D("50.00")
+    _, released = billing.adjust(i, 20, "return", roll=False)
+    billing.settle_released(released)
+    db.session.commit()
+    p = Payment.query.one()
+    assert (p.amount, p.unallocated_amount) == (D("130.00"), D("50.00"))

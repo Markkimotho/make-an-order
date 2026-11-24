@@ -446,6 +446,9 @@ class TransactionItem(TenantMixin, db.Model):
     discount          = db.Column(db.Numeric(12, 2), default=0, nullable=False)
     line_total        = db.Column(db.Numeric(12, 2), nullable=False)
     batch_number      = db.Column(db.String(64), nullable=True)
+    # Units already returned; refunds cannot return more than were sold.
+    refunded_quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0,
+                                  server_default='0')
 
     def to_dict(self):
         return {
@@ -457,6 +460,7 @@ class TransactionItem(TenantMixin, db.Model):
             'unit_price':        float(self.unit_price),
             'discount':          float(self.discount or 0),
             'line_total':        float(self.line_total),
+            'refunded_quantity': float(self.refunded_quantity or 0),
             'batch_number':      self.batch_number,
         }
 

@@ -10,7 +10,13 @@ tenants.manual_mpesa_enabled (default on).
 
 Downgrade puts each customer's open invoice balance back into
 credit_balance. It refuses when any invoice other than an opening balance
-has payments, because that history cannot be squeezed back into one number.
+has payments, or any payment has unapplied credit, because that cannot be
+squeezed back into one number.
+
+Not carried over: completed sales from before this revision have no
+invoice (cash already taken needs none; a refund or void of an old credit
+sale credits the customer's opening-balance invoice instead), and STK
+pushes still waiting at upgrade time (the old global callback URL is gone).
 
 Revision ID: 0004_billing
 Revises: 0003_tenants_contract
@@ -185,6 +191,12 @@ def upgrade():
     with op.batch_alter_table("tenants") as batch:
         batch.add_column(sa.Column("manual_mpesa_enabled", sa.Boolean(), nullable=False,
                                    server_default=sa.true()))
+        batch.add_column(sa.Column("previous_callback_token", sa.String(length=64),
+                                   nullable=True))
+        batch.add_column(sa.Column("callback_token_rotated_at", sa.DateTime(), nullable=True))
+    with op.batch_alter_table("transaction_items") as batch:
+        batch.add_column(sa.Column("refunded_quantity", sa.Numeric(precision=12, scale=3),
+                                   nullable=False, server_default="0"))
     with op.batch_alter_table("customers") as batch:
         batch.add_column(sa.Column("credit_term_days", sa.Integer(), nullable=False,
                                    server_default="30"))
@@ -236,6 +248,13 @@ def downgrade():
         raise RuntimeError(
             "Cannot downgrade below 0004: invoices other than opening balances have "
             "payments, and that history cannot be folded back into credit_balance.")
+    unapplied = bind.execute(sa.text(
+        "SELECT COUNT(*) FROM payments WHERE status = 'confirmed' "
+        "AND unallocated_amount > 0")).scalar()
+    if unapplied:
+        raise RuntimeError(
+            "Cannot downgrade below 0004: customers hold unapplied payment credit, "
+            "which credit_balance cannot represent.")
 
     with op.batch_alter_table("customers") as batch:
         batch.add_column(sa.Column("credit_balance", sa.Numeric(precision=12, scale=2),
@@ -252,7 +271,11 @@ def downgrade():
 
     with op.batch_alter_table("customers") as batch:
         batch.drop_column("credit_term_days")
+    with op.batch_alter_table("transaction_items") as batch:
+        batch.drop_column("refunded_quantity")
     with op.batch_alter_table("tenants") as batch:
+        batch.drop_column("callback_token_rotated_at")
+        batch.drop_column("previous_callback_token")
         batch.drop_column("manual_mpesa_enabled")
     for table in ("invoice_adjustments", "payment_allocations", "payment_intents",
                   "payments", "invoices"):
