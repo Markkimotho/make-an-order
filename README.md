@@ -150,19 +150,39 @@ AT_API_KEY=your_at_api_key
 AT_SENDER_ID=your_sender_id
 ```
 
+### Database setup
+
+The schema is managed by Alembic (Flask-Migrate). The app never creates or
+alters tables on startup.
+
+New database:
+
+```bash
+export FLASK_APP=app
+flask create-db        # local MySQL only: CREATE DATABASE IF NOT EXISTS
+flask db upgrade       # builds every table from migrations/versions/
+```
+
+Existing database created by an older version of this app (which built its
+tables with `db.create_all()` on startup): mark it as already at the baseline
+once, then upgrade normally from then on.
+
+```bash
+flask db stamp 0001_baseline
+flask db upgrade
+```
+
+After pulling new code, always run `flask db upgrade`.
+
 ### Running the App
 
 ```bash
 python app.py
 ```
 
-The app starts at **`http://127.0.0.1:5001`**.
-
-On first run it automatically:
-- Creates all database tables (`users`, `customers`, `orders`, `inventory_items`)
-- Seeds the inventory with 20 mock items across 4 categories (Electronics, Office, Food & Beverage, Accessories)
-
-No migrations are needed — the app manages its own schema via `db.create_all()`.
+The app starts at **`http://127.0.0.1:5001`**. The first admin login is sent
+to onboarding, which records the business type and seeds sample inventory for
+it.
 
 ---
 
@@ -617,7 +637,7 @@ Content-Type: application/json
 
 ```
 make-an-order/
-├── app.py                    # App factory, routes, blueprints, UI shims
+├── app.py                    # create_app() factory, routes, blueprints, CLI
 ├── config.py                 # Environment-based configuration
 ├── models.py                 # SQLAlchemy models — legacy + POS extensions
 ├── requirements.txt
@@ -639,8 +659,8 @@ make-an-order/
 │                             # decorators (UI + *_api_required JSON variants)
 │
 ├── services/
-│   ├── database_service.py   # MySQL database creation helper
-│   ├── seed_service.py       # Mock inventory seeding (runs once on startup)
+│   ├── database_service.py   # MySQL database creation (flask create-db)
+│   ├── seed_service.py       # Sample inventory seeding (run by onboarding)
 │   ├── sms_service.py        # Africa's Talking SMS (order, payment, low-stock, etc.)
 │   ├── mpesa_service.py      # Daraja STK Push, status, callback parser
 │   ├── flutterwave_service.py# Card payment links + webhook validation
@@ -648,6 +668,8 @@ make-an-order/
 │   ├── loyalty_service.py    # award / redeem / balance
 │   ├── audit_service.py      # AuditLog writer (never re-raises)
 │   └── otp_service.py        # Manager OTPs — Redis with in-memory fallback
+│
+├── migrations/               # Alembic: env.py, env_helpers.py, versions/0001_baseline.py
 │
 ├── templates/
 │   ├── base.html             # Navbar (role-aware tabs + role badges)
@@ -664,10 +686,15 @@ make-an-order/
 │   └── style.css             # macOS Platinum POS theme
 │
 └── tests/
+    ├── conftest.py           # app (fresh migrated SQLite per test), client, login_as
+    ├── test_app_factory.py   # no I/O at import, ProxyFix, naming convention
+    ├── test_migrations.py    # baseline round trip, parity with models, stamping
     ├── test_auth.py
     ├── test_customers.py
     ├── test_models.py
     ├── test_orders.py
+    ├── test_pos_models.py
+    ├── test_sms_service.py   # lazy Africa's Talking client
     └── test_pos_services.py  # Phone formatting, STK callback parser, OTP, receipts
 ```
 
@@ -695,6 +722,7 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `LOW_STOCK_DAYS` | Near-expiry window in days (default `30`) |
 | `MANAGER_OTP_TTL` | Manager-override OTP lifetime in seconds (default `300`) |
 | `REDIS_URL` | Optional — for OTP storage. Falls back to in-memory if absent |
+| `PROXY_FIX_X_FOR` / `PROXY_FIX_X_PROTO` | Reverse-proxy hops to trust (default `1`, Heroku's router; add one per CDN/WAF) |
 
 > `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
 
@@ -703,12 +731,19 @@ See [.env.example](.env.example) for the full template. Key variables:
 ## Testing
 
 ```bash
-pytest tests/
+pytest
 ```
 
+The suite needs no MySQL, Redis, credentials or `.env`. Each test gets a
+fresh SQLite database built by the real migrations (`tests/conftest.py`).
+Use the `login_as(role)` fixture for routes behind a role.
+
 Covers:
-- `test_auth.py` — auth routes
-- `test_customers.py` — customer endpoints
+- `test_app_factory.py` — app builds with no network I/O, endpoint names, ProxyFix hops, naming convention
+- `test_migrations.py` — baseline upgrade/downgrade, zero diff against the models, every constraint named, stamping an old database
+- `test_auth.py` — login, landing, logout redirects
+- `test_customers.py` — customer endpoints and their role checks
 - `test_orders.py` — legacy order endpoints
-- `test_models.py` — Customer/Order ORM
-- `test_pos_services.py` — phone normalisation, M-Pesa callback parser, OTP service, receipt formatting (pure unit tests)
+- `test_models.py`, `test_pos_models.py` — ORM models
+- `test_sms_service.py` — Africa's Talking client starts lazily and never raises
+- `test_pos_services.py` — phone normalisation, M-Pesa callback parser, OTP service, receipt formatting

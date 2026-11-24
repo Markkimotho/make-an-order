@@ -4,6 +4,7 @@ Every test gets a fresh app on its own file-backed SQLite database, so the
 suite needs no MySQL, Redis, credentials or network.
 """
 import pytest
+from flask_migrate import downgrade, upgrade
 
 import app as app_module
 from models import db
@@ -11,16 +12,17 @@ from models import db
 
 @pytest.fixture
 def app(tmp_path):
+    """Fresh app whose schema is built by the real migrations, not create_all."""
     flask_app = app_module.create_app({
         "TESTING": True,
         "SECRET_KEY": "test",
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'app.db'}",
     })
     with flask_app.app_context():
-        db.create_all()
+        upgrade()
         yield flask_app
         db.session.remove()
-        db.drop_all()
+        downgrade(revision="base")
 
 
 @pytest.fixture
