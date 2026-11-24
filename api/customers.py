@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, session  # type: ignore
 from models import (
-    db, Customer, Transaction, LoyaltyTransaction,
+    db, Customer, Order, Transaction, LoyaltyTransaction,
     PAY_CASH, PAY_MPESA, PAY_CARD,
 )
 from sqlalchemy.exc import IntegrityError

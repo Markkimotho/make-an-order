@@ -1,32 +1,35 @@
-import pytest # type: ignore
-from app import app, db
-
-@pytest.fixture
-def client():
-    with app.test_client() as client:
-        yield client
-
-def test_login(client):
-    # Test to simulate the login route
+def test_login_page_renders_when_logged_out(client):
     response = client.get('/login')
-    assert response.status_code == 302  # Expecting a redirect
-
-def test_hello_world_logged_in(client):
-    with client.session_transaction() as sess:
-        sess['profile'] = {'email': 'testuser@example.com'}
-
-        response = client.get('/')
-    assert response.status_code == 302 # Now redirects to dashboard
-    assert response.headers['Location'] == '/dashboard' # Verify redirect to dashboard
+    assert response.status_code == 200
 
 
-def test_logout(client):
-    # Firstly, set a fake session
-    with client.session_transaction() as sess:
-        sess['profile'] = {'email': 'testuser@example.com'}
+def test_login_page_redirects_when_logged_in(login_as):
+    response = login_as('cashier').get('/login')
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/dashboard'
 
-        # Now testing the logout route
+
+def test_index_redirects_logged_in_user_to_dashboard(login_as):
+    response = login_as('cashier').get('/')
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/dashboard'
+
+
+def test_index_shows_landing_when_logged_out(client):
+    response = client.get('/')
+    assert response.status_code == 200
+
+
+def test_logout_clears_session_and_redirects_home(login_as):
+    client = login_as('admin')
     response = client.get('/logout')
-    assert response.status_code == 302 # Now redirects to index
-    assert response.headers['Location'].startswith('/') # Verify redirect to index
-    assert 'You have logged out successfully!' in response.headers['Location'] # Check message in redirect URL
+    assert response.status_code == 302
+    assert response.headers['Location'] == '/'
+    with client.session_transaction() as sess:
+        assert 'profile' not in sess
+
+
+def test_dashboard_requires_login(client):
+    response = client.get('/dashboard')
+    assert response.status_code == 302
+    assert '/auth/login' in response.headers['Location']

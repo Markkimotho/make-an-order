@@ -1,28 +1,5 @@
-import pytest # type: ignore
-from app import app, db
-from models import Customer, Order
+from models import db, Customer, Order
 
-# This will set up a test client with a temporary database
-@pytest.fixture
-def client():
-    test_app = app  # Using the existing app instance
-
-    # Set up the app context
-    with test_app.app_context():
-        # Configure the app for testing
-        test_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'  # Use an in-memory database for tests
-        test_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-        test_app.config['SECRET_KEY'] = 'test_secret_key' # Needed for session/login_required in some tests
-
-        # Create the tables before each test
-        db.create_all()
-
-        # Yield the test client for making requests
-        yield test_app.test_client()
-
-        # Clean up after tests
-        db.session.remove()
-        db.drop_all()
 
 # Test customer creation
 def test_create_customer(client):
@@ -65,8 +42,13 @@ def test_customer_to_dict(client):
     assert customer_dict == {
         "id": customer.id,
         "name": "Alice",
+        "email": None,
         "phone_number": "1112223333",
-        "code": "CUST003"
+        "code": "CUST003",
+        "loyalty_points": 0,
+        "credit_limit": 0.0,
+        "credit_balance": 0.0,
+        "customer_type": "retail",
     }
 
 # Test to_dict method of Order

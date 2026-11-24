@@ -1,13 +1,13 @@
 """Tests for new POS models (Transaction, Shift, PurchaseOrder, etc.).
 
-Uses an in-memory SQLite DB by overriding the SQLAlchemy URI before
-``db.create_all()``. Tests are isolated via the ``client`` fixture.
+Each test gets a fresh SQLite database from the shared ``client`` fixture
+in ``tests/conftest.py``.
 """
 import pytest
 from decimal import Decimal
 
-from app import app, db
 from models import (
+    db,
     Customer, InventoryItem, Supplier, Category, Shift, CashMovement,
     Transaction, TransactionItem, PurchaseOrder, PurchaseOrderItem,
     Prescription, PrescriptionItem, LoyaltyTransaction,
@@ -15,17 +15,6 @@ from models import (
     PAY_CASH, PAY_MPESA, PO_DRAFT, PO_RECEIVED,
 )
 
-
-@pytest.fixture
-def client():
-    app.config['TESTING'] = True
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    app.config['SECRET_KEY'] = 'test'
-    with app.app_context():
-        db.create_all()
-        yield app.test_client()
-        db.session.remove()
-        db.drop_all()
 
 
 # --------------------------------------------------------------------------
@@ -150,12 +139,11 @@ class TestPurchaseOrder:
         db.session.add_all([sup, item]); db.session.commit()
 
         po = PurchaseOrder(po_number='PO-20260502-0001', supplier_id=sup.id,
-                           total=Decimal('100'), status=PO_DRAFT)
+                           status=PO_DRAFT)
         db.session.add(po); db.session.flush()
         db.session.add(PurchaseOrderItem(
-            purchase_order_id=po.id, inventory_item_id=item.id,
-            quantity_ordered=Decimal('20'), unit_cost=Decimal('5'),
-            line_total=Decimal('100')))
+            po_id=po.id, inventory_item_id=item.id,
+            quantity_ordered=Decimal('20'), unit_cost=Decimal('5')))
         db.session.commit()
 
         assert po.status == PO_DRAFT
