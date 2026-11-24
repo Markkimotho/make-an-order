@@ -51,7 +51,9 @@ class Config:
     MPESA_CALLBACK_URL        = os.environ.get("MPESA_CALLBACK_URL")
     MPESA_ENV                 = os.environ.get("MPESA_ENV", "sandbox")  # 'sandbox' | 'production'
 
-    # Flutterwave
+    # Flutterwave (cards). Off by default: card money settles to the platform's
+    # account, not the business's. Set CARD_PAYMENTS_ENABLED=1 to turn on.
+    CARD_PAYMENTS_ENABLED = os.environ.get("CARD_PAYMENTS_ENABLED", "") in ("1", "true", "yes")
     FLW_SECRET_KEY    = os.environ.get("FLW_SECRET_KEY")
     FLW_PUBLIC_KEY    = os.environ.get("FLW_PUBLIC_KEY")
     FLW_WEBHOOK_SECRET = os.environ.get("FLW_WEBHOOK_SECRET")

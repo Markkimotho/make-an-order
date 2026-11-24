@@ -110,3 +110,19 @@ def test_delete_nonexistent_customer(superuser):
     response = superuser.delete("/customers/delete_customers/999")
     assert response.status_code == 404
     assert response.get_json()["error"] == "Customer not found"
+
+
+def test_customer_with_history_is_kept_not_deleted(admin, superuser, app):
+    """Found by the isolation sweep: deleting a customer with loyalty
+    history failed with a database error (500)."""
+    from auth.tenancy import tenant_scope
+    from models import Customer, LoyaltyTransaction, db
+    customer_id = _register(admin)
+    with tenant_scope(app.acme_id):
+        db.session.add(LoyaltyTransaction(customer_id=customer_id, points_earned=5,
+                                          balance_after=5))
+        db.session.commit()
+    r = superuser.delete(f"/customers/delete_customers/{customer_id}")
+    assert r.status_code == 409
+    with tenant_scope(app.acme_id):
+        assert db.session.get(Customer, customer_id) is not None

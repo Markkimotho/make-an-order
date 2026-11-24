@@ -64,7 +64,20 @@ def test_stk_callback_unknown_reference_is_acknowledged(client, open_txns):
     assert r.get_json()["ResultCode"] == 0
 
 
-def test_card_webhook_with_ambiguous_reference_changes_nothing(client, open_txns, monkeypatch):
+@pytest.fixture
+def cards_on(app, monkeypatch):
+    monkeypatch.setitem(app.config, "CARD_PAYMENTS_ENABLED", True)
+
+
+def test_card_routes_are_off_by_default(client, login_as):
+    assert client.post("/payments/card/webhook", json={}).status_code == 404
+    c = login_as("cashier")
+    assert c.post("/payments/card/initiate", json={"transaction_id": 1}).status_code == 404
+    assert c.get("/payments/card/verify/123").status_code == 404
+
+
+def test_card_webhook_with_ambiguous_reference_changes_nothing(client, open_txns, monkeypatch,
+                                                               cards_on):
     """transaction_ref is unique per tenant only; a webhook naming a ref two
     tenants share must not complete either."""
     from services import flutterwave_service
@@ -77,7 +90,8 @@ def test_card_webhook_with_ambiguous_reference_changes_nothing(client, open_txns
     assert status_of(*open_txns["globex"]) == TXN_OPEN
 
 
-def test_card_webhook_with_unique_reference_completes_it(client, open_txns, monkeypatch):
+def test_card_webhook_with_unique_reference_completes_it(client, open_txns, monkeypatch,
+                                                       cards_on):
     from services import flutterwave_service
     tid, txn_id = open_txns["globex"]
     with tenant_scope(tid):
@@ -85,10 +99,40 @@ def test_card_webhook_with_unique_reference_completes_it(client, open_txns, monk
         db.session.commit()
     monkeypatch.setattr(flutterwave_service, "validate_webhook_signature", lambda raw, sig: True)
     monkeypatch.setattr(flutterwave_service, "verify_transaction",
-                        lambda flw_id: {"status": "successful", "amount": 100, "flw_ref": "F1"})
+                        lambda flw_id: {"status": "successful", "amount": 100, "flw_ref": "F1",
+                                        "tx_ref": "TXN-GLOBEX"})
     r = client.post("/payments/card/webhook", json={"data": {"tx_ref": "TXN-GLOBEX", "id": 9}})
     assert r.status_code == 200
     assert status_of(tid, txn_id) == TXN_COMPLETED
+
+
+def test_card_webhook_rejects_provider_record_for_another_ref(client, open_txns, monkeypatch,
+                                                              cards_on):
+    """A signed event pairing our ref with someone else's successful payment."""
+    from services import flutterwave_service
+    tid, txn_id = open_txns["globex"]
+    with tenant_scope(tid):
+        db.session.get(Transaction, txn_id).transaction_ref = "TXN-GLOBEX"
+        db.session.commit()
+    monkeypatch.setattr(flutterwave_service, "validate_webhook_signature", lambda raw, sig: True)
+    monkeypatch.setattr(flutterwave_service, "verify_transaction",
+                        lambda flw_id: {"status": "successful", "amount": 100, "flw_ref": "F9",
+                                        "tx_ref": "TXN-SOMEONE-ELSE"})
+    r = client.post("/payments/card/webhook", json={"data": {"tx_ref": "TXN-GLOBEX", "id": 9}})
+    assert r.get_json() == {"status": "mismatch"}
+    assert status_of(tid, txn_id) == TXN_OPEN
+
+
+def test_transaction_refs_are_unique_across_businesses(app, other_tenant, login_as):
+    refs = []
+    for tid in (app.acme_id, other_tenant):
+        client = login_as("admin", tenant_id=tid)
+        client.post("/pos/shift/open", json={"opening_float": 0})
+        r = client.post("/pos/transaction/new", json={})
+        assert r.status_code in (200, 201), r.get_json()
+        refs.append(r.get_json()["transaction"]["transaction_ref"])
+    assert refs[0] != refs[1]
+    assert refs[0].startswith(f"TXN-{app.acme_id}-") and refs[1].startswith(f"TXN-{other_tenant}-")
 
 
 def test_status_lookup_refuses_another_tenants_checkout(login_as, open_txns, app, monkeypatch):
@@ -105,7 +149,8 @@ def test_status_lookup_refuses_another_tenants_checkout(login_as, open_txns, app
     assert asked == ["ws_CO_ACME"]
 
 
-def test_card_verify_refuses_another_tenants_reference(login_as, open_txns, monkeypatch):
+def test_card_verify_refuses_another_tenants_reference(login_as, open_txns, monkeypatch,
+                                                      cards_on):
     from services import flutterwave_service
     asked = []
     monkeypatch.setattr(flutterwave_service, "verify_transaction",

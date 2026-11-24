@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from auth.auth_middleware import cashier_api_required
 from auth.tenancy import tenant_scope, unscoped
@@ -56,6 +56,14 @@ def _owning_tenant(**match):
                          match, len(owners))
         return None
     return owners.pop()
+
+
+def _card_payments_disabled():
+    """Card payments use the platform's Flutterwave account, so money would
+    not settle to the business directly. Off unless CARD_PAYMENTS_ENABLED."""
+    if current_app.config.get('CARD_PAYMENTS_ENABLED'):
+        return None
+    return jsonify({'error': 'Card payments are not available'}), 404
 
 
 def _txn_or_404(txn_id):
@@ -222,6 +230,9 @@ def mpesa_status(checkout_request_id):
 @cashier_api_required
 def card_initiate():
     """Create a Flutterwave hosted-checkout link for ``transaction_id``."""
+    disabled = _card_payments_disabled()
+    if disabled:
+        return disabled
     body = request.get_json(silent=True) or {}
     txn_id = body.get('transaction_id')
     if not txn_id:
@@ -266,6 +277,9 @@ def card_webhook():
     """Flutterwave webhook. Verifies the ``verif-hash`` header, then
     re-verifies the transaction server-side via Flutterwave's verify API.
     """
+    disabled = _card_payments_disabled()
+    if disabled:
+        return disabled
     sig = request.headers.get('verif-hash')
     raw = request.get_data() or b''
     if not flutterwave_service.validate_webhook_signature(raw, sig):
@@ -303,6 +317,13 @@ def _apply_card_result(tx_ref, data, flw_id):
                     'amount': data.get('amount'),
                     'flw_ref': data.get('flw_ref')}
 
+    # The provider's record must be for this transaction: a signed event
+    # could otherwise pair this ref with someone else's successful payment.
+    if flw_id and verified.get('tx_ref') != tx_ref:
+        logger.error('Flutterwave verify for %s returned tx_ref %s; ignored',
+                     tx_ref, verified.get('tx_ref'))
+        return jsonify({'status': 'mismatch'}), 200
+
     if (verified.get('status') or '').lower() == 'successful':
         _mark_paid(txn, method=PAY_CARD, ref_field='card_ref',
                    ref_value=verified.get('flw_ref') or str(flw_id or ''),
@@ -322,6 +343,13 @@ def _apply_card_result(tx_ref, data, flw_id):
 @payments_bp.route('/card/verify/<flw_ref>', methods=['GET'])
 @cashier_api_required
 def card_verify(flw_ref):
+    disabled = _card_payments_disabled()
+    if disabled:
+        return disabled
+    return _card_verify(flw_ref)
+
+
+def _card_verify(flw_ref):
     """Verify a Flutterwave transaction by its numeric ID (NB: the param is
     named ``flw_ref`` per the spec but Flutterwave's verify endpoint expects
     the numeric ``id`` — accept both)."""

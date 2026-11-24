@@ -1,36 +1,45 @@
 """Fail-closed tenant scoping for every ORM query and write.
 
 The bound tenant lives in a ContextVar, so it follows the request, CLI
-command or test that set it. Two session hooks enforce it:
+command or test that set it. The rules, enforced by session hooks:
 
-do_orm_execute (every query the ORM runs)
-    select            -> WHERE tenant_id = :bound, on every tenant table in
-                         the statement, including joins, aliases, unions and
-                         lazy/refresh loads
-    bulk update/delete-> WHERE tenant_id = :bound added explicitly
-    ORM insert()      -> refused (it would skip before_flush); use add()
-    non-ORM statement -> refused (text(), Core table statements)
-    nothing bound     -> TenantNotBound, never "all tenants"
+Reads (do_orm_execute)
+    Every ORM select is filtered to the bound tenant wherever a tenant table
+    appears: joins, aliases, unions, subqueries, lazy, eager and refresh
+    loads. With nothing bound, a statement touching tenant data anywhere
+    (even in a scalar subquery) raises TenantNotBound.
 
-before_flush (every add/change/delete)
-    new rows get tenant_id stamped; a row for another tenant, a changed
-    tenant_id, or a foreign key pointing at another tenant's row raises
-    CrossTenantWrite; changes with nothing bound raise TenantNotBound.
+What the filter will not run outside unscoped() (UnscopedStatement)
+    - Core or text() SQL, from_statement(), or text() inside a tenant query.
+    - Bulk insert(), update() and delete() on tenant tables, including
+      Query.update/delete. Every bypass found in review was a bulk-write
+      shape; the app needs none. Change rows by loading them (with
+      .with_for_update() when it must be atomic) and editing them.
+    - Any session other than the app's db.session. One session per request
+      is what lets a scope change empty the identity map completely.
 
-before_attach
-    an object belonging to another tenant cannot enter the session
-    (session.add or merge of an object loaded under a different scope).
+Writes (before_flush)
+    New rows are stamped with the bound tenant. Adding, changing or deleting
+    another tenant's row, moving a row between tenants, or pointing a
+    foreign key at another tenant's row raises CrossTenantWrite. Any change
+    with nothing bound raises TenantNotBound.
+
+Attaching (before_attach, merge)
+    An object of another tenant cannot enter the session through add() or
+    merge(), including an expired one whose tenant_id is not in memory.
+
+Scope changes
+    Whenever the effective scope changes, the session's identity map is
+    emptied, so a get() cannot return an object loaded under another scope.
+    Unflushed changes are discarded then (and logged): finish work before
+    switching. Values already loaded on an object a caller keeps holding
+    stay readable in Python; the guarantees are about what queries return
+    and what is written.
 
 unscoped() switches all of this off for the few platform paths that must
-see every tenant (login lookup, signup, slug resolution, the scheduler's
-tenant loop). tests/test_no_bypass.py keeps the list of call sites.
-
-Whenever the effective scope changes, the session's identity map is
-emptied, so session.get() can never hand back an object loaded under a
-different tenant.
+see every tenant; tests/test_no_bypass.py lists the call sites.
 """
-import threading
-import weakref
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -38,10 +47,12 @@ from sqlalchemy import event, inspect, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlalchemy.orm.context import FromStatement
 from sqlalchemy.sql import visitors
-from sqlalchemy.sql.elements import BindParameter, TextClause
-from sqlalchemy.sql.selectable import Alias, Select, TableClause, TextualSelect
+from sqlalchemy.sql.elements import TextClause
+from sqlalchemy.sql.selectable import TableClause, TextualSelect
 
 from models.base import TenantMixin, db
+
+logger = logging.getLogger(__name__)
 
 
 class TenantNotBound(RuntimeError):
@@ -49,11 +60,11 @@ class TenantNotBound(RuntimeError):
 
 
 class CrossTenantWrite(RuntimeError):
-    """A write would create, move or delete a row of another tenant."""
+    """A write would create, move, delete or reference another tenant's row."""
 
 
 class UnscopedStatement(RuntimeError):
-    """A statement the tenant filter cannot scope (Core/text, ORM insert())."""
+    """A statement or session the tenant filter cannot scope."""
 
 
 _tenant: ContextVar = ContextVar("tenant_id", default=None)
@@ -61,6 +72,14 @@ _unscoped: ContextVar = ContextVar("unscoped", default=False)
 
 _UNSCOPED = object()
 
+# Execution option for the hooks' own lookups. Never set by app code;
+# tests/test_no_bypass.py bans the name outside this module.
+_INTERNAL = "tenancy_internal"
+
+
+# ---------------------------------------------------------------------------
+# Scope
+# ---------------------------------------------------------------------------
 
 def current_tenant_id():
     return _tenant.get()
@@ -74,26 +93,22 @@ def _effective_scope():
     return _UNSCOPED if in_unscoped() else current_tenant_id()
 
 
-_local = threading.local()
-
-
-def _thread_sessions():
-    """Sessions that have begun a transaction in this thread (weakly held)."""
-    sessions = getattr(_local, "sessions", None)
-    if sessions is None:
-        sessions = _local.sessions = weakref.WeakSet()
-    return sessions
+def _app_session():
+    """The app's Session for this application context, or None outside one."""
+    try:
+        return db.session()
+    except RuntimeError:
+        return None
 
 
 def _clear_identity_map():
-    """Empty every session this thread has used, not only db.session: any
-    session's identity map could otherwise hand back another tenant's row."""
-    for session in list(_thread_sessions()):
-        session.expunge_all()
-    try:
-        db.session.expunge_all()
-    except RuntimeError:
-        pass  # no application context: no Flask session to clear
+    session = _app_session()
+    if session is None:
+        return
+    pending = len(session.new) + len(session.dirty) + len(session.deleted)
+    if pending:
+        logger.warning("Tenant scope changed with %d unflushed change(s); discarded", pending)
+    session.expunge_all()
 
 
 def _clear_if_changed(before):
@@ -126,25 +141,25 @@ def tenant_scope(tenant_id):
 
 @contextmanager
 def unscoped():
-    """See every tenant. Platform paths only; leaves an empty identity map."""
+    """See every tenant. Platform paths only.
+
+    Leaving the outermost unscoped() empties the identity map; a nested one
+    does not, since the effective scope does not change.
+    """
     before = _effective_scope()
     token = _unscoped.set(True)
     _clear_if_changed(before)
     try:
         yield
     finally:
+        inner_before = _effective_scope()
         _unscoped.reset(token)
-        _clear_identity_map()
+        _clear_if_changed(inner_before)
 
 
 # ---------------------------------------------------------------------------
-# Hooks
+# Helpers
 # ---------------------------------------------------------------------------
-
-# Internal execution option for the hooks' own lookups (never set by app
-# code; tests/test_no_bypass.py bans the name outside this module).
-_INTERNAL = "tenancy_internal"
-
 
 def _is_tenant_mapper(mapper):
     return issubclass(mapper.class_, TenantMixin)
@@ -155,33 +170,24 @@ def _tenant_table_names():
 
 
 def _inspect_statement(statement):
-    """(touches a tenant table anywhere, contains raw SQL text anywhere).
-
-    Walks the whole statement, subqueries included: the unbound check must
-    see a tenant table hidden in a scalar subquery, and text() fragments
-    cannot be scoped at all.
-    """
+    """(touches a tenant table anywhere, contains raw SQL text anywhere)."""
     tenant_tables = _tenant_table_names()
     touches = has_text = False
     for element in visitors.iterate(statement):
         if isinstance(element, (TextClause, TextualSelect)):
             has_text = True
-        name = getattr(element, "name", None) if isinstance(element, TableClause) else None
-        if name in tenant_tables:
+        if isinstance(element, TableClause) and element.name in tenant_tables:
             touches = True
     return touches, has_text
 
 
-def _updated_values(statement):
-    """{column name: value expression} set by an UPDATE statement."""
-    values = {}
-    for source in (getattr(statement, "_values", None) or {},
-                   dict(getattr(statement, "_ordered_values", None) or ())):
-        for key, value in source.items():
-            name = getattr(key, "key", None) or getattr(key, "name", None) or str(key)
-            values[name] = value
-    return values
+def _foreign_session(session):
+    return session is not _app_session()
 
+
+# ---------------------------------------------------------------------------
+# do_orm_execute
+# ---------------------------------------------------------------------------
 
 def _scope_statement(state):
     if in_unscoped() or state.execution_options.get(_INTERNAL):
@@ -193,81 +199,39 @@ def _scope_statement(state):
             "query, or wrap a platform path in unscoped()")
 
     touches_tenant, has_text = _inspect_statement(statement)
-    if has_text and touches_tenant:
-        raise UnscopedStatement("raw SQL text inside a tenant query cannot be scoped")
-
-    tenant_mappers = [m for m in state.all_mappers if _is_tenant_mapper(m)]
-    touches_tenant = touches_tenant or bool(tenant_mappers)
-
-    if state.is_insert:
-        if touches_tenant:
-            raise UnscopedStatement("ORM insert() bypasses tenant stamping; use session.add()")
+    touches_tenant = touches_tenant or any(_is_tenant_mapper(m) for m in state.all_mappers)
+    if not touches_tenant:
         return
+    if has_text:
+        raise UnscopedStatement("raw SQL text inside a tenant query cannot be scoped")
+    if _foreign_session(state.session):
+        raise UnscopedStatement("tenant data is only available through db.session")
+    if state.is_insert or state.is_update or state.is_delete:
+        raise UnscopedStatement(
+            "bulk insert/update/delete on tenant tables is not allowed; load the rows "
+            "(with_for_update() if it must be atomic) and change them, or add() new ones")
 
     tid = current_tenant_id()
     if tid is None:
-        if touches_tenant:
-            raise TenantNotBound("no tenant bound for a query on tenant data")
-        return
-
-    if state.is_update or state.is_delete:
-        if not tenant_mappers:
-            return
-        _check_bulk_write(state, statement, tenant_mappers)
-        for mapper in tenant_mappers:
-            statement = statement.where(mapper.class_.tenant_id == tid)
-
-    # Applies to the statement's entities everywhere they occur, subqueries
-    # included, for selects and for bulk update/delete.
+        raise TenantNotBound("no tenant bound for a query on tenant data")
     state.statement = statement.options(
         with_loader_criteria(TenantMixin, lambda cls: cls.tenant_id == tid,
                              include_aliases=True))
 
 
-def _check_bulk_write(state, statement, tenant_mappers):
-    """Bulk UPDATE/DELETE are kept to the simple shape the filter can prove
-    safe: one plain tenant table, literal values, no subqueries or aliases
-    of tenant tables (an aliased join inside a subquery is not reliably
-    filtered), tenant_id untouched, references checked like a flush."""
-    if isinstance(statement.table, Alias):
-        raise UnscopedStatement("bulk update/delete on an aliased entity cannot be tenant-scoped")
-    if state.is_executemany or isinstance(state.parameters, list):
-        raise UnscopedStatement("bulk update/delete by parameter list is not supported")
-    tenant_tables = _tenant_table_names()
-    for element in visitors.iterate(statement):
-        if element is statement:
-            continue
-        if isinstance(element, Select):
-            raise UnscopedStatement("subqueries are not allowed in a bulk update/delete; "
-                                    "load the rows with a query instead")
-        if isinstance(element, Alias) and getattr(element.element, "name", None) in tenant_tables:
-            raise UnscopedStatement("aliased tenant tables are not allowed in a bulk update/delete")
-    if not state.is_update:
-        return
-    values = _updated_values(statement)
-    if "tenant_id" in values:
-        raise UnscopedStatement("tenant_id cannot be changed by a bulk update")
-    mapper = tenant_mappers[0]
-    for key, target in _tenant_references(mapper):
-        if key not in values:
-            continue
-        value = values[key]
-        if isinstance(value, BindParameter):
-            value = value.value
-        elif hasattr(value, "__clause_element__") or hasattr(value, "_is_clause_element"):
-            raise UnscopedStatement(f"{key} must be set to a plain value in a bulk update")
-        if value is not None and not _reference_visible(state.session, target, value, {}):
-            raise CrossTenantWrite(
-                f"bulk update sets {mapper.class_.__name__}.{key}={value}, which is not a "
-                f"{target.__name__} of this tenant")
+# ---------------------------------------------------------------------------
+# Attaching objects
+# ---------------------------------------------------------------------------
+
+_UNKNOWN_OWNER = object()
 
 
 def _owner_of(session, instance):
     """The tenant an instance belongs to, or None for a new row.
 
-    An expired or partly loaded object (after a commit, say) may not hold
-    tenant_id in memory; if it has a database identity, the owner is read
-    from the database instead of being mistaken for a new row.
+    An expired object (after a commit, say) may not hold tenant_id in
+    memory; if it has a database identity, its owner is read from the
+    database instead of being mistaken for a new row.
     """
     state = inspect(instance)
     if "tenant_id" in state.dict:
@@ -275,21 +239,19 @@ def _owner_of(session, instance):
     if state.key is None:
         return None
     mapper = state.mapper
-    pk_cols = mapper.primary_key
-    condition = [col == value for col, value in zip(pk_cols, state.key[1])]
+    condition = [col == value for col, value in zip(mapper.primary_key, state.key[1])]
     owner = session.execute(
         select(mapper.class_.tenant_id).where(*condition)
         .execution_options(**{_INTERNAL: True})).scalar()
     return owner if owner is not None else _UNKNOWN_OWNER
 
 
-_UNKNOWN_OWNER = object()
-
-
 def _check_attach(session, instance):
-    """No object of another tenant may enter a session (merge, add, ...)."""
+    """No object of another tenant may enter a session."""
     if in_unscoped() or not isinstance(instance, TenantMixin):
         return
+    if _foreign_session(session):
+        raise UnscopedStatement("tenant data is only available through db.session")
     tid = current_tenant_id()
     if tid is None and inspect(instance).key is not None:
         raise TenantNotBound(f"cannot attach {type(instance).__name__}: no tenant bound")
@@ -304,13 +266,27 @@ def _check_attach(session, instance):
 
 
 def check_merged(session, merged):
-    """Called by models.base.TenantSession.merge with the merged object."""
+    """merge() fills in its copy after attaching it, so check the result."""
     try:
         _check_attach(session, merged)
-    except (CrossTenantWrite, TenantNotBound):
-        session.expunge(merged)
+    except (CrossTenantWrite, TenantNotBound, UnscopedStatement):
+        if merged in session:
+            session.expunge(merged)
         raise
 
+
+def _checked_merge(original):
+    def merge(self, instance, *args, **kwargs):
+        merged = original(self, instance, *args, **kwargs)
+        check_merged(self, merged)
+        return merged
+    merge._tenancy_checked = True
+    return merge
+
+
+# ---------------------------------------------------------------------------
+# before_flush
+# ---------------------------------------------------------------------------
 
 def _nullable_allowed(obj, unscoped_now):
     from models.core import AuditLog, User
@@ -343,25 +319,33 @@ def _tenant_references(mapper):
     return refs
 
 
+def _pending_with_id(session, target, value):
+    for obj in session.new:
+        if isinstance(obj, target) and inspect(obj).dict.get("id") == value:
+            return obj
+    return None
+
+
 def _reference_visible(session, target, value, memo):
     """True if row ``value`` of ``target`` belongs to the bound tenant.
 
-    ``memo`` caches answers for one flush, so 100 rows pointing at the same
-    item cost one lookup, not 100. References to platform admins (users
-    with no tenant) are allowed: they act inside a business and their
-    actions are recorded against them.
+    Finds parents flushed earlier, parents pending in this same flush, and
+    platform administrators (who act inside a business whatever business, if
+    any, their own account belongs to). ``memo`` caches answers for one
+    flush, so many rows sharing a reference cost one lookup.
     """
     from models.core import User
     key = (target, value)
     if key in memo:
         return memo[key]
     with session.no_autoflush:
-        visible = session.get(target, value) is not None
+        visible = (session.get(target, value) is not None
+                   or _pending_with_id(session, target, value) is not None)
         if not visible and target is User:
-            row = session.execute(
-                select(User.tenant_id, User.is_platform_admin).where(User.id == value)
-                .execution_options(**{_INTERNAL: True})).first()
-            visible = row is not None and row.tenant_id is None and bool(row.is_platform_admin)
+            admin = session.execute(
+                select(User.is_platform_admin).where(User.id == value)
+                .execution_options(**{_INTERNAL: True})).scalar()
+            visible = bool(admin)
     memo[key] = visible
     return visible
 
@@ -383,6 +367,10 @@ def _check_references(session, obj, only_changed, memo):
 def _check_writes(session, flush_context, instances):
     tid = current_tenant_id()
     unscoped_now = in_unscoped()
+    tenant_rows = [o for o in (*session.new, *session.dirty, *session.deleted)
+                   if isinstance(o, TenantMixin)]
+    if tenant_rows and not unscoped_now and _foreign_session(session):
+        raise UnscopedStatement("tenant data is only available through db.session")
 
     for obj in session.new:
         if not isinstance(obj, TenantMixin):
@@ -391,8 +379,7 @@ def _check_writes(session, flush_context, instances):
             if tid is not None:
                 obj.tenant_id = tid
             elif not _nullable_allowed(obj, unscoped_now):
-                raise TenantNotBound(
-                    f"cannot add {type(obj).__name__}: no tenant bound")
+                raise TenantNotBound(f"cannot add {type(obj).__name__}: no tenant bound")
         elif not unscoped_now:
             if tid is None:
                 raise TenantNotBound(
@@ -437,28 +424,16 @@ def _check_writes(session, flush_context, instances):
                 f"bound to tenant {tid}")
 
 
-def _register_session(session, transaction, connection):
-    _thread_sessions().add(session)
-
-
-def _checked_merge(original):
-    def merge(self, instance, *args, **kwargs):
-        merged = original(self, instance, *args, **kwargs)
-        check_merged(self, merged)
-        return merged
-    merge._tenancy_checked = True
-    return merge
-
+# ---------------------------------------------------------------------------
+# Install (once per process)
+# ---------------------------------------------------------------------------
 
 def _install():
-    # merge() attaches its copy before filling in attributes, so before_attach
-    # cannot see whose row it is; check the result on every Session class.
     if not getattr(Session.merge, "_tenancy_checked", False):
         Session.merge = _checked_merge(Session.merge)
     for name, fn in (("do_orm_execute", _scope_statement),
                      ("before_flush", _check_writes),
-                     ("before_attach", _check_attach),
-                     ("after_begin", _register_session)):
+                     ("before_attach", _check_attach)):
         if not event.contains(Session, name, fn):
             event.listen(Session, name, fn)
 

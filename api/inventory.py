@@ -39,6 +39,23 @@ def _parse_date(value):
 # Read-only (all logged-in users)
 # ---------------------------------------------------------------------------
 
+def _reference_error(data):
+    """400 response if supplier_id/category_id name a row this business does
+    not have (another business's id, or a made-up one); else None."""
+    for key, model, label in (('supplier_id', Supplier, 'supplier'),
+                              ('category_id', Category, 'category')):
+        value = data.get(key)
+        if value in (None, ''):
+            continue
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return jsonify({'error': f'{key} must be a number'}), 400
+        if db.session.get(model, value) is None:
+            return jsonify({'error': f'Unknown {label}'}), 400
+    return None
+
+
 @inventory_bp.route('/items', methods=['GET'])
 @login_required
 def get_items():
@@ -80,6 +97,9 @@ def get_item_by_sku(sku):
 @admin_api_required
 def create_item():
     data        = request.get_json(silent=True) or {}
+    bad_ref = _reference_error(data)
+    if bad_ref:
+        return bad_ref
     name        = data.get('name', '').strip()
     category    = data.get('category', '').strip()
     price       = data.get('price')
@@ -136,6 +156,9 @@ def update_item(id):
         return jsonify({'error': 'Item not found'}), 404
 
     data = request.get_json(silent=True) or {}
+    bad_ref = _reference_error(data)
+    if bad_ref:
+        return bad_ref
     item.name        = data.get('name',        item.name)
     item.price       = data.get('price',       item.price)
     item.category    = data.get('category',    item.category)
@@ -154,9 +177,9 @@ def update_item(id):
     if 'batch_number' in data:
         item.batch_number = (data.get('batch_number') or '').strip() or None
     if 'supplier_id' in data:
-        item.supplier_id = data.get('supplier_id')
+        item.supplier_id = data.get('supplier_id') or None
     if 'category_id' in data:
-        item.category_id = data.get('category_id')
+        item.category_id = data.get('category_id') or None
     if 'unit' in data:
         item.unit = (data.get('unit') or 'pcs').strip() or 'pcs'
     if 'is_drug' in data:

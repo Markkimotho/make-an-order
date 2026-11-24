@@ -93,9 +93,15 @@ def _current_shift() -> Shift | None:
 
 
 def _generate_transaction_ref() -> str:
-    """``TXN-YYYYMMDD-NNNN`` — sequential per UTC day."""
+    """``TXN-<tenant>-YYYYMMDD-NNNN``, sequential per business per UTC day.
+
+    The tenant id makes refs unique across businesses: payment providers
+    echo the ref back, and a ref two businesses shared could not be matched
+    to either.
+    """
+    from auth.tenancy import current_tenant_id
     today = datetime.utcnow().strftime('%Y%m%d')
-    prefix = f"TXN-{today}-"
+    prefix = f"TXN-{current_tenant_id()}-{today}-"
     last = (Transaction.query
             .filter(Transaction.transaction_ref.like(f"{prefix}%"))
             .order_by(Transaction.id.desc())

@@ -11,7 +11,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, aliased
 
 from auth.tenancy import (CrossTenantWrite, TenantNotBound, UnscopedStatement,
-                          tenant_scope)
+                          tenant_scope, unscoped)
 from models import Customer, InventoryItem, StockMovement, db
 
 SECRET = "B SECRET"
@@ -143,18 +143,40 @@ def test_pending_change_is_dropped_when_scope_switches(ab):
         assert db.session.get(Customer, ab["B_customer"]).name == SECRET
 
 
-# 10. a second session keeps no foreign objects across a switch -----------------------------
+# 10. other sessions cannot touch tenant data at all ------------------------------
 
-def test_other_sessions_are_cleared_on_switch(ab):
+def test_other_sessions_cannot_read_or_write_tenant_data(ab):
+    """Only db.session may touch tenant tables, so a scope switch can empty
+    every identity map that could hold tenant rows."""
     other = Session(db.engine)
     try:
         with tenant_scope(ab["B"]):
-            held = other.get(Customer, ab["B_customer"])
-            assert held.name == SECRET
-        with tenant_scope(ab["A"]):
-            assert other.get(Customer, ab["B_customer"]) is None
+            with pytest.raises(UnscopedStatement):
+                other.get(Customer, ab["B_customer"])
+            with pytest.raises(UnscopedStatement):
+                other.execute(select(Customer)).all()
+            other.rollback()
+            with pytest.raises(UnscopedStatement):
+                other.add(Customer(name="x", phone_number="0722333444", code="X",
+                                   tenant_id=ab["B"]))
+            other.rollback()
     finally:
         other.close()
+
+
+def test_pending_only_secondary_session_cannot_flush(ab):
+    """A session that only holds a pending object (never queried) used to
+    survive a scope switch and stamp the row with the new tenant."""
+    other = Session(db.engine)
+    try:
+        with tenant_scope(ab["A"]):
+            with pytest.raises(UnscopedStatement):
+                other.add(Customer(name="pending", phone_number="0722333445", code="P"))
+        with tenant_scope(ab["B"]):
+            other.flush()          # nothing was accepted, so nothing to write
+    finally:
+        other.close()
+    assert names_in(ab["B"]) == [SECRET]
 
 
 # 11. foreign keys must point inside the tenant -----------------------------------------------
@@ -224,8 +246,9 @@ def test_merge_on_a_plain_session_is_checked(ab):
     other = Session(db.engine)
     try:
         with tenant_scope(ab["A"]):
-            with pytest.raises(CrossTenantWrite):
+            with pytest.raises((CrossTenantWrite, UnscopedStatement)):
                 other.merge(foreign, load=False)
+            assert foreign not in other
     finally:
         other.close()
 
@@ -245,18 +268,29 @@ def test_subquery_with_aliased_join_in_bulk_write_is_refused(ab):
 
 
 def test_bulk_update_cannot_point_a_reference_at_another_tenant(ab):
+    """Covers both shapes from the second review: values in the statement
+    and values supplied at execution time (bindparam / parameter dict)."""
+    from sqlalchemy import bindparam
     with tenant_scope(ab["B"]):
-        item = db.session.get(InventoryItem, ab["B_item"])
-        db.session.add(StockMovement(item_id=item.id, item_name="m", delta=1, reason="manual"))
+        db.session.add(StockMovement(item_id=ab["B_item"], item_name="m", delta=1,
+                                     reason="manual"))
         db.session.commit()
-        with pytest.raises(CrossTenantWrite):
-            db.session.execute(update(StockMovement).values(item_id=ab["A_item"]))
-        db.session.rollback()
-        # A plain in-tenant bulk update (the pickup pattern) still works.
-        db.session.execute(update(StockMovement).where(StockMovement.reason == "manual")
-                           .values(note="picked", item_id=ab["B_item"]))
-        db.session.commit()
-        assert StockMovement.query.one().note == "picked"
+        for attempt in (
+            lambda: db.session.execute(update(StockMovement).values(item_id=ab["A_item"])),
+            lambda: db.session.execute(update(StockMovement).values(item_id=bindparam("ref")),
+                                       {"ref": ab["A_item"]}),
+            lambda: db.session.execute(update(Customer).where(Customer.id == ab["B_customer"]),
+                                       {"tenant_id": ab["A"]}),
+            lambda: db.session.execute(
+                update(Customer).where(Customer.id == ab["B_customer"],
+                                       InventoryItem.id == ab["A_item"])
+                .values(name=InventoryItem.name)),
+        ):
+            with pytest.raises(UnscopedStatement):
+                attempt()
+            db.session.rollback()
+        assert StockMovement.query.one().item_id == ab["B_item"]
+    assert names_in(ab["B"]) == [SECRET]
 
 
 def test_reference_checks_are_cached_within_a_flush(ab):
@@ -277,4 +311,55 @@ def test_reference_checks_are_cached_within_a_flush(ab):
             db.session.rollback()
     finally:
         event.remove(engine, "before_cursor_execute", count)
-    assert len(selects) <= 2, f"{len(selects)} lookups for 100 rows with one reference"
+    # Exactly one lookup: the reference is checked once, not once per row
+    # (and not skipped, which zero lookups would mean).
+    assert len(selects) == 1, f"{len(selects)} lookups for 100 rows with one reference"
+
+
+
+# --- third review round ------------------------------------------------------------
+
+def test_nested_unscoped_keeps_the_outer_unit_of_work(ab):
+    with unscoped():
+        customer = Customer.query.filter_by(name=SECRET).one()
+        customer.email = "kept@x.co"
+        with unscoped():
+            pass
+        db.session.commit()
+    with tenant_scope(ab["B"]):
+        assert Customer.query.one().email == "kept@x.co"
+
+
+def test_reference_to_parent_pending_in_same_flush(ab):
+    from models import Order
+    with tenant_scope(ab["A"]):
+        db.session.add(Customer(id=100, name="New", phone_number="0722444555", code="N"))
+        db.session.add(Order(customer_id=100, item="x", amount=Decimal("1")))
+        db.session.commit()
+        assert Order.query.filter_by(customer_id=100).count() == 1
+
+
+def test_platform_admin_with_own_tenant_can_act_in_another(ab):
+    """grant-platform-admin keeps the user's own business; acting in another
+    business must still be able to record them as cashier or in audit logs."""
+    from models import AuditLog, Shift, User
+    with tenant_scope(ab["A"]):
+        admin = User(email="ops@acme.co", role="superuser", status="approved",
+                     is_platform_admin=True)
+        db.session.add(admin)
+        db.session.commit()
+        admin_id = admin.id
+    with tenant_scope(ab["B"]):
+        db.session.add(Shift(cashier_id=admin_id, opening_float=Decimal("0")))
+        db.session.add(AuditLog(user_id=admin_id, action="platform.act"))
+        db.session.commit()
+    with tenant_scope(ab["A"]):
+        ordinary = User(email="clerk@acme.co", role="cashier", status="approved")
+        db.session.add(ordinary)
+        db.session.commit()
+        clerk_id = ordinary.id
+    with tenant_scope(ab["B"]):
+        db.session.add(Shift(cashier_id=clerk_id, opening_float=Decimal("0")))
+        with pytest.raises(CrossTenantWrite):
+            db.session.commit()
+        db.session.rollback()

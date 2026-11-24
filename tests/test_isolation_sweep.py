@@ -21,8 +21,8 @@ from tests.test_migrations import HEAD_TABLES
 
 MARK = "ALPHA-SECRET"
 # Everything identifying about tenant A that must never reach tenant B.
-LEAK_MARKERS = (MARK, "ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "alpha@acme.co",
-                "254712000001", "254700000009", "254700000010")
+LEAK_MARKERS = (MARK, "ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "alpha@x.co",
+                "254712000001", "254712000009", "254712000010")
 STRING_ARGS = ("ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "ws_CO_ALPHA")
 SKIP_PREFIXES = ("/static", "/auth/", "/platform/")
 SKIP_RULES = {"/logout"}
@@ -47,50 +47,64 @@ def leaked(text_body):
     return [m for m in LEAK_MARKERS if m in text_body]
 
 
-def seed_tenant_a(tenant_id):
-    """One row per table, every text field carrying the marker."""
+def seed_tenant(tenant_id, mark, tag, phone_base):
+    """One row per table, every text field carrying ``mark``."""
     with tenant_scope(tenant_id):
-        user = User(email="alpha@acme.co", name=MARK, role="cashier", status="approved",
-                    phone_number="0700000009")
-        cat = Category(name=f"{MARK} cat")
-        sup = Supplier(name=f"{MARK} supplier", phone="0700000010")
+        user = User(email=f"{tag.lower()}@x.co", name=mark, role="cashier", status="approved",
+                    phone_number=f"0{phone_base}09")
+        cat = Category(name=f"{mark} cat")
+        sup = Supplier(name=f"{mark} supplier", phone=f"0{phone_base}10")
         db.session.add_all([user, cat, sup])
         db.session.flush()
-        item = InventoryItem(name=f"{MARK} item", price=Decimal("10"), stock=50,
-                             sku="ALPHA-SKU", category_id=cat.id, supplier_id=sup.id,
+        item = InventoryItem(name=f"{mark} item", price=Decimal("10"), stock=50,
+                             sku=f"{tag}-SKU", category_id=cat.id, supplier_id=sup.id,
                              is_drug=True, requires_prescription=True)
-        cust = Customer(name=f"{MARK} customer", phone_number="0712000001", code="ALPHA")
+        cust = Customer(name=f"{mark} customer", phone_number=f"0{phone_base}01", code=tag)
         shift = Shift(cashier_id=user.id, opening_float=Decimal("100"))
         db.session.add_all([item, cust, shift])
         db.session.flush()
-        order = Order(customer_id=cust.id, item=f"{MARK} order", amount=Decimal("10"))
-        txn = Transaction(transaction_ref="ALPHA-TXN", customer_id=cust.id, cashier_id=user.id,
-                          shift_id=shift.id, total=Decimal("10"), notes=MARK,
-                          checkout_request_id="ws_CO_ALPHA")
-        po = PurchaseOrder(po_number="ALPHA-PO", supplier_id=sup.id, notes=MARK)
-        rx = Prescription(customer_id=cust.id, doctor_name=f"{MARK} doctor",
+        order = Order(customer_id=cust.id, item=f"{mark} order", amount=Decimal("10"))
+        txn = Transaction(transaction_ref=f"{tag}-TXN", customer_id=cust.id, cashier_id=user.id,
+                          shift_id=shift.id, total=Decimal("10"), notes=mark,
+                          checkout_request_id=f"ws_CO_{tag}")
+        po = PurchaseOrder(po_number=f"{tag}-PO", supplier_id=sup.id, notes=mark)
+        rx = Prescription(customer_id=cust.id, doctor_name=f"{mark} doctor",
                           prescription_date=date(2026, 11, 1))
         db.session.add_all([order, txn, po, rx])
         db.session.flush()
         db.session.add_all([
-            OrderItem(order_id=order.id, inventory_item_id=item.id, item_name=MARK,
+            OrderItem(order_id=order.id, inventory_item_id=item.id, item_name=mark,
                       quantity=1, unit_price=Decimal("10"), subtotal=Decimal("10")),
-            StockMovement(item_id=item.id, item_name=MARK, delta=5, reason="restock"),
+            StockMovement(item_id=item.id, item_name=mark, delta=5, reason="restock"),
             CashMovement(shift_id=shift.id, movement_type="cash_in", amount=Decimal("5"),
-                         reason=MARK),
-            TransactionItem(transaction_id=txn.id, inventory_item_id=item.id, item_name=MARK,
+                         reason=mark),
+            TransactionItem(transaction_id=txn.id, inventory_item_id=item.id, item_name=mark,
                             quantity=Decimal("1"), unit_price=Decimal("10"),
-                            line_total=Decimal("10"), batch_number=MARK),
+                            line_total=Decimal("10"), batch_number=mark),
             PurchaseOrderItem(po_id=po.id, inventory_item_id=item.id,
                               quantity_ordered=Decimal("5"), unit_cost=Decimal("2"),
-                              batch_number=MARK),
+                              batch_number=mark),
             PrescriptionItem(prescription_id=rx.id, inventory_item_id=item.id,
-                             dosage_instructions=MARK, quantity_prescribed=Decimal("5")),
+                             dosage_instructions=mark, quantity_prescribed=Decimal("5")),
             LoyaltyTransaction(customer_id=cust.id, transaction_id=txn.id, points_earned=1,
-                               balance_after=1, note=MARK),
-            AuditLog(user_id=user.id, action="seed", entity_type=MARK),
+                               balance_after=1, note=mark),
+            AuditLog(user_id=user.id, action="seed", entity_type=mark),
         ])
         db.session.commit()
+
+
+def seed_tenant_a(tenant_id):
+    seed_tenant(tenant_id, MARK, "ALPHA", "7120000")
+
+
+def seed_tenant_b(tenant_id):
+    seed_tenant(tenant_id, "BETA-OWN", "BETA", "7330000")
+
+
+def row_counts():
+    with unscoped():
+        return {t: db.session.execute(text(f"SELECT COUNT(*) FROM {t}")).scalar()
+                for t in sorted(HEAD_TABLES)}
 
 
 def snapshot(tenant_id):
@@ -236,14 +250,41 @@ def test_routes_with_ids_never_reach_tenant_a(swept):
     assert bad == [], "tenant B rows now reference tenant A rows:\n" + "\n".join(bad)
 
 
+def test_own_resources_cannot_be_pointed_at_tenant_a(app, other_tenant, login_as, no_network):
+    """B edits B's own rows through every id route, with A's ids in every
+    reference field of the body. No B row may end up referencing an A row."""
+    seed_tenant_a(app.acme_id)
+    seed_tenant_b(other_tenant)
+    a_before = snapshot(app.acme_id)
+    b_ids = all_ids(snapshot(other_tenant))
+    a_ids = all_ids(a_before)
+    client = login_as("superuser", tenant_id=other_tenant)
+    crashes = []
+    for rule in id_routes(app):
+        for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+            for own in b_ids:
+                for foreign in a_ids:
+                    url = rule.build({arg: own for arg in rule.arguments})[1]
+                    r = call(client, method, url, foreign)
+                    if r.status_code >= 500 and r.status_code != 502:
+                        crashes.append(f"{method} {url} -> {r.status_code}")
+    assert crashes == [], "server errors:\n" + "\n".join(crashes)
+    assert snapshot(app.acme_id) == a_before
+    bad = foreign_references(other_tenant)
+    assert bad == [], "B rows now reference A rows:\n" + "\n".join(bad)
+
+
 def test_anonymous_requests_reach_nothing(app, client, no_network):
-    """No session at all: nothing leaks, nothing crashes, nothing changes."""
+    """No session at all: nothing leaks, nothing crashes, and not a single
+    row is created or changed in any tenant."""
     seed_tenant_a(app.acme_id)
     before = snapshot(app.acme_id)
+    counts = row_counts()
     leaks, crashes = sweep(app, client, all_ids(before))
     assert leaks == [], "tenant A data visible anonymously:\n" + "\n".join(leaks)
     assert crashes == [], "server errors for anonymous requests:\n" + "\n".join(crashes)
     assert snapshot(app.acme_id) == before
+    assert row_counts() == counts, "anonymous requests created rows"
 
 
 def test_tenant_a_still_sees_its_own_data(app, login_as):

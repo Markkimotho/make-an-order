@@ -111,16 +111,33 @@ def test_get_after_switch_returns_nothing(two_tenants):
 
 # --- bulk writes -----------------------------------------------------------
 
-def test_bulk_update_and_delete_are_scoped(two_tenants):
+def test_bulk_update_and_delete_are_refused(two_tenants):
+    """Bulk writes on tenant tables are refused outright: every bypass the
+    reviews found was a bulk-write shape, and the app needs none."""
     with tenant_scope(two_tenants["globex"]["tenant"]):
-        db.session.execute(update(Customer).values(name="renamed"))
-        db.session.execute(delete(Order))
-        Customer.query.filter_by(code="C1").update({"code": "C9"})
-        db.session.commit()
+        for attempt in (lambda: db.session.execute(update(Customer).values(name="renamed")),
+                        lambda: db.session.execute(delete(Order)),
+                        lambda: Customer.query.filter_by(code="C1").update({"code": "C9"}),
+                        lambda: Order.query.delete()):
+            with pytest.raises(UnscopedStatement):
+                attempt()
+            db.session.rollback()
+    for name in ("acme", "globex"):
+        with tenant_scope(two_tenants[name]["tenant"]):
+            assert names(Customer.query.all()) == [f"{name} customer"]
+            assert Customer.query.one().code == "C1"
+            assert Order.query.count() == 1
+
+
+def test_atomic_change_by_locked_load_works(two_tenants):
+    """The supported way to do what a bulk write did: lock, load, change."""
     with tenant_scope(two_tenants["acme"]["tenant"]):
-        assert names(Customer.query.all()) == ["acme customer"]
-        assert Customer.query.one().code == "C1"
-        assert Order.query.count() == 1
+        c = Customer.query.filter_by(code="C1").with_for_update().one()
+        c.name = "renamed"
+        db.session.commit()
+        assert names(Customer.query.all()) == ["renamed"]
+    with tenant_scope(two_tenants["globex"]["tenant"]):
+        assert names(Customer.query.all()) == ["globex customer"]
 
 
 # --- statements the filter cannot scope ---------------------------------------

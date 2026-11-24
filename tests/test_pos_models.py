@@ -270,3 +270,24 @@ def test_supplier_create_and_update_api(login_as):
     assert r.status_code == 200
     assert r.get_json()['supplier']['contact_name'] == 'Otieno'
     assert client.put(f"/inventory/suppliers/{sup['id']}", json={'name': ''}).status_code == 400
+
+
+def test_item_references_must_belong_to_the_business(login_as, other_tenant):
+    """Found by the isolation sweep: another business's category id made
+    the item update fail with a 500 instead of a clear 400."""
+    from auth.tenancy import tenant_scope
+    with tenant_scope(other_tenant):
+        foreign = Category(name='Theirs')
+        db.session.add(foreign)
+        db.session.commit()
+        foreign_id = foreign.id
+    client = login_as('admin')
+    r = client.post('/inventory/items', json={'name': 'Gauze', 'price': 10,
+                                              'category': 'Dressings',
+                                              'category_id': foreign_id})
+    assert r.status_code == 400 and r.get_json() == {'error': 'Unknown category'}
+    item = InventoryItem(name='Gauze', price=Decimal('10'))
+    db.session.add(item); db.session.commit()
+    r = client.put(f'/inventory/items/{item.id}', json={'category_id': foreign_id})
+    assert r.status_code == 400
+    assert client.put(f'/inventory/items/{item.id}', json={'supplier_id': 'x'}).status_code == 400

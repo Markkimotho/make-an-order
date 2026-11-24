@@ -25,7 +25,7 @@ class LoyaltyError(RuntimeError):
 
 def get_balance(customer_id: int) -> int:
     """Return the current loyalty point balance for ``customer_id``."""
-    customer = Customer.query.get(customer_id)
+    customer = db.session.get(Customer, customer_id)
     if customer is None:
         raise LoyaltyError(f"customer {customer_id} not found")
     return int(customer.loyalty_points or 0)
@@ -43,7 +43,7 @@ def award_points(customer_id: int, transaction_id: Optional[int], total_amount) 
     Caller controls the surrounding transaction; this function flushes but
     does NOT commit so it can compose with the POS checkout flow.
     """
-    customer = Customer.query.get(customer_id)
+    customer = db.session.get(Customer, customer_id)
     if customer is None:
         raise LoyaltyError(f"customer {customer_id} not found")
 
@@ -89,7 +89,7 @@ def redeem_points(customer_id: int, points: int, transaction_id: Optional[int]) 
     if points <= 0:
         raise LoyaltyError("points must be > 0")
 
-    customer = Customer.query.get(customer_id)
+    customer = db.session.get(Customer, customer_id)
     if customer is None:
         raise LoyaltyError(f"customer {customer_id} not found")
 

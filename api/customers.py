@@ -138,6 +138,13 @@ def delete_customer(id):
         customer = db.session.get(Customer, id)
         if not customer:
             return jsonify({"error": "Customer not found"}), 404
+        # Prescriptions are pharmacy records that must be kept, and loyalty
+        # history cannot be orphaned (customer_id is required): such a
+        # customer is kept, not deleted. (Deleting one used to fail with a
+        # database error.)
+        if customer.prescriptions or customer.loyalty_log:
+            return jsonify({"error": "Customer has prescription or loyalty history "
+                                     "and cannot be deleted"}), 409
         db.session.delete(customer)
         db.session.commit()
         logger.info(f"Customer {id} deleted.")
