@@ -94,7 +94,7 @@ Roles are stored on the `User` row and enforced by decorators in `auth/auth_midd
 
 **New businesses** sign up at `/register` (business name, type, owner details). That creates the business on a 14-day trial and its owner. Owners add staff through the Users page. Google sign-in only works for people who already have an account; an unknown Google address is sent to signup.
 
-**Platform admins** (people running this service, not a business) are listed in `PLATFORM_ADMIN_EMAILS`; the flag is refreshed at every login. They choose which business to act in at `/platform/tenants`. Create one that belongs to no business with `flask create-platform-admin you@example.com`.
+**Platform admins** (people running this service, not a business) need two things: the flag, set only from the command line (`flask create-platform-admin you@example.com` for an operator with no business, `flask grant-platform-admin you@example.com` for an existing user), and the email listed in `PLATFORM_ADMIN_EMAILS`. Signing up or logging in can never grant it. They choose which business to act in at `/platform/tenants`.
 
 ## Multi-tenancy
 
@@ -105,6 +105,9 @@ Every business is a `Tenant` (`models/base.py`) with a vertical: `pharmacy`, `di
 - New rows are stamped with the tenant; writing another tenant's row raises `CrossTenantWrite`.
 - With no tenant bound, a query raises `TenantNotBound` instead of returning every business's rows.
 - Raw SQL and Core table statements are refused on the session. `tests/test_no_bypass.py` also bans them in application code.
+- Bulk `insert()`/`update()`/`delete()` (including `Query.update`/`delete`) on business tables are refused. To change rows atomically, load them with `.with_for_update()` and edit them.
+- Only `db.session` may touch business data; a second `Session` is refused.
+- A foreign key must point at a row of the same business; anything else raises `CrossTenantWrite` (returned as 404).
 - `unscoped()` turns scoping off for the few platform paths that must see every tenant (login lookup, signup, the platform pages). Its call sites are an explicit allowlist in `tests/test_no_bypass.py`.
 
 `tests/test_isolation_sweep.py` calls every route as one business with another business's ids and fails on any leak, change or crash.
@@ -199,6 +202,7 @@ Other commands:
 
 ```bash
 flask create-platform-admin you@example.com   # operator account with no business
+flask grant-platform-admin you@example.com    # make an existing user an operator
 flask seed-demo <tenant-slug>                  # demo inventory for an empty business
 ```
 
@@ -752,7 +756,8 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `REDIS_URL` | Optional — for OTP storage. Falls back to in-memory if absent |
 | `PROXY_FIX_X_FOR` / `PROXY_FIX_X_PROTO` | Reverse-proxy hops to trust (default `1`, Heroku's router; add one per CDN/WAF) |
 | `TENANT_SECRETS_KEY` | Fernet key encrypting each business's Daraja/eTIMS secrets. Required before any secret is saved; losing it makes them unreadable |
-| `PLATFORM_ADMIN_EMAILS` | Comma-separated operator emails given platform-admin rights at login |
+| `PLATFORM_ADMIN_EMAILS` | Operator emails allowed platform-admin rights. The flag itself is set only by `flask create-platform-admin` / `flask grant-platform-admin`; login removes it if the email is not listed |
+| `CARD_PAYMENTS_ENABLED` | `1` turns on Flutterwave card payments. Off by default: card money settles to the platform's account, not the business's |
 
 > `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
 
