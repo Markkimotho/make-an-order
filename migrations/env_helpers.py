@@ -5,6 +5,38 @@ testing lives here instead.
 """
 
 
+import re
+
+_NOW_FORMS = {"now()", "current_timestamp", "current_timestamp()", "localtimestamp",
+              "localtimestamp()"}
+
+
+def _normalise_default(text):
+    if text is None:
+        return None
+    t = str(text).strip().strip("'\"").lower()
+    while t.startswith("(") and t.endswith(")") and t.count("(") == t.count(")"):
+        t = t[1:-1].strip()
+    t = re.sub(r"\s+", "", t)
+    return "current_timestamp" if t in _NOW_FORMS else t
+
+
+def compare_server_default(context, inspected_column, metadata_column,
+                           inspected_default, metadata_default,
+                           rendered_metadata_default):
+    """Alembic hook: treat now() and CURRENT_TIMESTAMP as the same default.
+
+    Models declare server_default=func.now(). MySQL stores it and reports it
+    back as CURRENT_TIMESTAMP; SQLite as (CURRENT_TIMESTAMP). Without this,
+    autogenerate reports a change on every timestamp column on MySQL.
+    Returns False (same) for that pair, None to let Alembic decide otherwise.
+    """
+    if (_normalise_default(inspected_default) == "current_timestamp"
+            and _normalise_default(rendered_metadata_default) == "current_timestamp"):
+        return False
+    return None
+
+
 def disable_sqlite_foreign_keys(connection):
     """Turn SQLite foreign-key enforcement off for this connection.
 

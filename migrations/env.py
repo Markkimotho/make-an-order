@@ -8,7 +8,8 @@ from flask import current_app
 from alembic import context
 
 sys.path.insert(0, os.path.dirname(__file__))
-from env_helpers import (disable_sqlite_foreign_keys,  # noqa: E402
+from env_helpers import (compare_server_default,  # noqa: E402
+                         disable_sqlite_foreign_keys,
                          restore_sqlite_foreign_keys)
 
 # this is the Alembic Config object, which provides
@@ -100,6 +101,8 @@ def run_migrations_online():
     # SQLite cannot ALTER/DROP constraints in place; batch mode rebuilds the
     # table there and emits plain ALTER TABLE on MySQL (recreate='auto').
     conf_args.setdefault("render_as_batch", True)
+    conf_args.setdefault("compare_type", True)
+    conf_args.setdefault("compare_server_default", compare_server_default)
 
     connectable = get_engine()
 

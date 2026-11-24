@@ -1,28 +1,69 @@
 """Shared fixtures.
 
-Every test gets a fresh app on its own file-backed SQLite database, so the
-suite needs no MySQL, Redis, credentials or network.
+Every test gets a fresh app on its own database, built by the real
+migrations, so the suite needs no MySQL, Redis, credentials or network.
+
+Database backend:
+  default              a SQLite file under the test's tmp_path
+  TEST_MYSQL_URL=...    a fresh MySQL database per test on that server
+                        (server URL without a database name, for example
+                        mysql+pymysql://root:root@127.0.0.1:3306). CI runs
+                        both lanes; locally use scripts/local_mysql.sh.
 """
+import os
+import uuid
+
 import pytest
 from flask_migrate import downgrade, upgrade
+from sqlalchemy import create_engine
 
 import app as app_module
 from models import db
 
+MYSQL_SERVER_URL = os.environ.get("TEST_MYSQL_URL", "").rstrip("/")
+
+
+def on_mysql():
+    return bool(MYSQL_SERVER_URL)
+
 
 @pytest.fixture
-def app(tmp_path):
-    """Fresh app whose schema is built by the real migrations, not create_all."""
-    flask_app = app_module.create_app({
+def database_url(tmp_path):
+    """URL of an empty database that exists only for this test."""
+    if not MYSQL_SERVER_URL:
+        yield f"sqlite:///{tmp_path / 'db.sqlite'}"
+        return
+    name = f"t_{uuid.uuid4().hex[:8]}"
+    server = create_engine(MYSQL_SERVER_URL, isolation_level="AUTOCOMMIT")
+    with server.connect() as conn:
+        conn.exec_driver_sql(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4")
+    try:
+        yield f"{MYSQL_SERVER_URL}/{name}?charset=utf8mb4"
+    finally:
+        with server.connect() as conn:
+            conn.exec_driver_sql(f"DROP DATABASE IF EXISTS `{name}`")
+        server.dispose()
+
+
+def make_app(database_url, **extra):
+    return app_module.create_app({
         "TESTING": True,
         "SECRET_KEY": "test",
-        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'app.db'}",
+        "SQLALCHEMY_DATABASE_URI": database_url,
+        **extra,
     })
+
+
+@pytest.fixture
+def app(database_url):
+    """Fresh app whose schema is built by the real migrations, not create_all."""
+    flask_app = make_app(database_url)
     with flask_app.app_context():
         upgrade()
         yield flask_app
         db.session.remove()
         downgrade(revision="base")
+        db.engine.dispose()
 
 
 class FakeSMS:
