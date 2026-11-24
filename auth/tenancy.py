@@ -38,8 +38,8 @@ from sqlalchemy import event, inspect, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlalchemy.orm.context import FromStatement
 from sqlalchemy.sql import visitors
-from sqlalchemy.sql.elements import TextClause
-from sqlalchemy.sql.selectable import Alias, TableClause, TextualSelect
+from sqlalchemy.sql.elements import BindParameter, TextClause
+from sqlalchemy.sql.selectable import Alias, Select, TableClause, TextualSelect
 
 from models.base import TenantMixin, db
 
@@ -172,13 +172,15 @@ def _inspect_statement(statement):
     return touches, has_text
 
 
-def _updated_keys(statement):
-    keys = set()
+def _updated_values(statement):
+    """{column name: value expression} set by an UPDATE statement."""
+    values = {}
     for source in (getattr(statement, "_values", None) or {},
                    dict(getattr(statement, "_ordered_values", None) or ())):
-        for key in source:
-            keys.add(getattr(key, "key", None) or getattr(key, "name", None) or str(key))
-    return keys
+        for key, value in source.items():
+            name = getattr(key, "key", None) or getattr(key, "name", None) or str(key)
+            values[name] = value
+    return values
 
 
 def _scope_statement(state):
@@ -211,13 +213,7 @@ def _scope_statement(state):
     if state.is_update or state.is_delete:
         if not tenant_mappers:
             return
-        if isinstance(statement.table, Alias):
-            raise UnscopedStatement(
-                "bulk update/delete on an aliased entity cannot be tenant-scoped")
-        if state.is_executemany or isinstance(state.parameters, list):
-            raise UnscopedStatement("bulk update/delete by parameter list is not supported")
-        if state.is_update and "tenant_id" in _updated_keys(statement):
-            raise UnscopedStatement("tenant_id cannot be changed by a bulk update")
+        _check_bulk_write(state, statement, tenant_mappers)
         for mapper in tenant_mappers:
             statement = statement.where(mapper.class_.tenant_id == tid)
 
@@ -228,19 +224,78 @@ def _scope_statement(state):
                              include_aliases=True))
 
 
-def _owner_of(instance):
-    """tenant_id as stored on the instance, without triggering a load."""
-    return inspect(instance).dict.get("tenant_id")
+def _check_bulk_write(state, statement, tenant_mappers):
+    """Bulk UPDATE/DELETE are kept to the simple shape the filter can prove
+    safe: one plain tenant table, literal values, no subqueries or aliases
+    of tenant tables (an aliased join inside a subquery is not reliably
+    filtered), tenant_id untouched, references checked like a flush."""
+    if isinstance(statement.table, Alias):
+        raise UnscopedStatement("bulk update/delete on an aliased entity cannot be tenant-scoped")
+    if state.is_executemany or isinstance(state.parameters, list):
+        raise UnscopedStatement("bulk update/delete by parameter list is not supported")
+    tenant_tables = _tenant_table_names()
+    for element in visitors.iterate(statement):
+        if element is statement:
+            continue
+        if isinstance(element, Select):
+            raise UnscopedStatement("subqueries are not allowed in a bulk update/delete; "
+                                    "load the rows with a query instead")
+        if isinstance(element, Alias) and getattr(element.element, "name", None) in tenant_tables:
+            raise UnscopedStatement("aliased tenant tables are not allowed in a bulk update/delete")
+    if not state.is_update:
+        return
+    values = _updated_values(statement)
+    if "tenant_id" in values:
+        raise UnscopedStatement("tenant_id cannot be changed by a bulk update")
+    mapper = tenant_mappers[0]
+    for key, target in _tenant_references(mapper):
+        if key not in values:
+            continue
+        value = values[key]
+        if isinstance(value, BindParameter):
+            value = value.value
+        elif hasattr(value, "__clause_element__") or hasattr(value, "_is_clause_element"):
+            raise UnscopedStatement(f"{key} must be set to a plain value in a bulk update")
+        if value is not None and not _reference_visible(state.session, target, value, {}):
+            raise CrossTenantWrite(
+                f"bulk update sets {mapper.class_.__name__}.{key}={value}, which is not a "
+                f"{target.__name__} of this tenant")
+
+
+def _owner_of(session, instance):
+    """The tenant an instance belongs to, or None for a new row.
+
+    An expired or partly loaded object (after a commit, say) may not hold
+    tenant_id in memory; if it has a database identity, the owner is read
+    from the database instead of being mistaken for a new row.
+    """
+    state = inspect(instance)
+    if "tenant_id" in state.dict:
+        return state.dict["tenant_id"]
+    if state.key is None:
+        return None
+    mapper = state.mapper
+    pk_cols = mapper.primary_key
+    condition = [col == value for col, value in zip(pk_cols, state.key[1])]
+    owner = session.execute(
+        select(mapper.class_.tenant_id).where(*condition)
+        .execution_options(**{_INTERNAL: True})).scalar()
+    return owner if owner is not None else _UNKNOWN_OWNER
+
+
+_UNKNOWN_OWNER = object()
 
 
 def _check_attach(session, instance):
     """No object of another tenant may enter a session (merge, add, ...)."""
     if in_unscoped() or not isinstance(instance, TenantMixin):
         return
-    owner = _owner_of(instance)
+    tid = current_tenant_id()
+    if tid is None and inspect(instance).key is not None:
+        raise TenantNotBound(f"cannot attach {type(instance).__name__}: no tenant bound")
+    owner = _owner_of(session, instance)
     if owner is None:
         return   # a new row; before_flush stamps it
-    tid = current_tenant_id()
     if tid is None:
         raise TenantNotBound(f"cannot attach {type(instance).__name__}: no tenant bound")
     if owner != tid:
@@ -288,25 +343,30 @@ def _tenant_references(mapper):
     return refs
 
 
-def _reference_visible(session, target, value):
+def _reference_visible(session, target, value, memo):
     """True if row ``value`` of ``target`` belongs to the bound tenant.
 
-    References to platform admins (users with no tenant) are allowed: they
-    act inside a business and their actions are recorded against them.
+    ``memo`` caches answers for one flush, so 100 rows pointing at the same
+    item cost one lookup, not 100. References to platform admins (users
+    with no tenant) are allowed: they act inside a business and their
+    actions are recorded against them.
     """
     from models.core import User
+    key = (target, value)
+    if key in memo:
+        return memo[key]
     with session.no_autoflush:
-        if session.get(target, value) is not None:
-            return True
-        if target is User:
+        visible = session.get(target, value) is not None
+        if not visible and target is User:
             row = session.execute(
                 select(User.tenant_id, User.is_platform_admin).where(User.id == value)
                 .execution_options(**{_INTERNAL: True})).first()
-            return row is not None and row.tenant_id is None and bool(row.is_platform_admin)
-    return False
+            visible = row is not None and row.tenant_id is None and bool(row.is_platform_admin)
+    memo[key] = visible
+    return visible
 
 
-def _check_references(session, obj, only_changed):
+def _check_references(session, obj, only_changed, memo):
     state = inspect(obj)
     for key, target in _tenant_references(state.mapper):
         if only_changed and not state.attrs[key].history.has_changes():
@@ -314,7 +374,7 @@ def _check_references(session, obj, only_changed):
         value = state.dict.get(key)
         if value is None:
             continue
-        if not _reference_visible(session, target, value):
+        if not _reference_visible(session, target, value, memo):
             raise CrossTenantWrite(
                 f"{type(obj).__name__}.{key}={value} does not refer to a "
                 f"{target.__name__} of this tenant")
@@ -348,9 +408,10 @@ def _check_writes(session, flush_context, instances):
     if unscoped_now:
         return
 
+    memo = {}
     for obj in session.new:
         if isinstance(obj, TenantMixin):
-            _check_references(session, obj, only_changed=False)
+            _check_references(session, obj, only_changed=False, memo=memo)
 
     for obj in session.dirty:
         if not isinstance(obj, TenantMixin) or not session.is_modified(obj):
@@ -363,7 +424,7 @@ def _check_writes(session, flush_context, instances):
             raise CrossTenantWrite(
                 f"{type(obj).__name__} of tenant {obj.tenant_id} changed while "
                 f"bound to tenant {tid}")
-        _check_references(session, obj, only_changed=True)
+        _check_references(session, obj, only_changed=True, memo=memo)
 
     for obj in session.deleted:
         if not isinstance(obj, TenantMixin):
@@ -380,7 +441,20 @@ def _register_session(session, transaction, connection):
     _thread_sessions().add(session)
 
 
+def _checked_merge(original):
+    def merge(self, instance, *args, **kwargs):
+        merged = original(self, instance, *args, **kwargs)
+        check_merged(self, merged)
+        return merged
+    merge._tenancy_checked = True
+    return merge
+
+
 def _install():
+    # merge() attaches its copy before filling in attributes, so before_attach
+    # cannot see whose row it is; check the result on every Session class.
+    if not getattr(Session.merge, "_tenancy_checked", False):
+        Session.merge = _checked_merge(Session.merge)
     for name, fn in (("do_orm_execute", _scope_statement),
                      ("before_flush", _check_writes),
                      ("before_attach", _check_attach),

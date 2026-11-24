@@ -52,20 +52,15 @@ def test_bulk_update_on_alias_is_refused(ab):
 # 3. subquery inside a bulk update --------------------------------------------
 
 def test_bulk_update_subquery_cannot_read_other_tenant(ab):
-    """The subquery is filtered to A too, so B's value comes back NULL.
-    (MySQL refuses an UPDATE that selects from its own table, error 1093,
-    which is also fine: either way B's value never reaches A.)"""
-    from sqlalchemy.exc import OperationalError
+    """Subqueries in bulk writes are refused outright (the second review
+    pass showed an aliased join inside one is not reliably filtered)."""
     with tenant_scope(ab["A"]):
-        try:
+        with pytest.raises(UnscopedStatement):
             db.session.execute(
                 update(Customer).where(Customer.id == ab["A_customer"]).values(
                     email=select(Customer.name).where(Customer.id == ab["B_customer"])
                     .scalar_subquery()))
-            db.session.commit()
-        except OperationalError as exc:
-            db.session.rollback()
-            assert "1093" in str(exc)
+        db.session.rollback()
         values = [(c.name, c.email) for c in Customer.query.all()]
     assert values == [("A customer", None)]
 
@@ -206,3 +201,80 @@ def test_cross_tenant_write_escaping_a_route_is_a_404(app, ab, login_as):
     assert r.status_code == 404 and r.get_json() == {"error": "Not found"}
     with tenant_scope(ab["A"]):
         assert StockMovement.query.count() == 0
+
+
+# --- second review pass ----------------------------------------------------------
+
+def test_expired_foreign_object_cannot_be_reattached(ab):
+    """After a commit, objects are expired: tenant_id is not in memory.
+    Such an object must not pass for a new row when re-added elsewhere."""
+    with tenant_scope(ab["B"]):
+        foreign = db.session.get(Customer, ab["B_customer"])
+        db.session.commit()                      # expires every attribute
+        assert "tenant_id" not in db.inspect(foreign).dict
+    with tenant_scope(ab["A"]):
+        with pytest.raises(CrossTenantWrite):
+            db.session.add(foreign)
+        assert names_in(ab["A"]) == ["A customer"]
+
+
+def test_merge_on_a_plain_session_is_checked(ab):
+    with tenant_scope(ab["B"]):
+        foreign = db.session.get(Customer, ab["B_customer"])
+    other = Session(db.engine)
+    try:
+        with tenant_scope(ab["A"]):
+            with pytest.raises(CrossTenantWrite):
+                other.merge(foreign, load=False)
+    finally:
+        other.close()
+
+
+def test_subquery_with_aliased_join_in_bulk_write_is_refused(ab):
+    item = aliased(InventoryItem)
+    sub = select(Customer.id).join(item, item.id == Customer.id)
+    with tenant_scope(ab["A"]):
+        with pytest.raises(UnscopedStatement):
+            db.session.execute(update(Customer).where(Customer.id.in_(sub)).values(name="x"))
+        db.session.rollback()
+        from sqlalchemy import delete
+        with pytest.raises(UnscopedStatement):
+            db.session.execute(delete(Customer).where(Customer.id.in_(select(Customer.id))))
+        db.session.rollback()
+    assert names_in(ab["B"]) == [SECRET]
+
+
+def test_bulk_update_cannot_point_a_reference_at_another_tenant(ab):
+    with tenant_scope(ab["B"]):
+        item = db.session.get(InventoryItem, ab["B_item"])
+        db.session.add(StockMovement(item_id=item.id, item_name="m", delta=1, reason="manual"))
+        db.session.commit()
+        with pytest.raises(CrossTenantWrite):
+            db.session.execute(update(StockMovement).values(item_id=ab["A_item"]))
+        db.session.rollback()
+        # A plain in-tenant bulk update (the pickup pattern) still works.
+        db.session.execute(update(StockMovement).where(StockMovement.reason == "manual")
+                           .values(note="picked", item_id=ab["B_item"]))
+        db.session.commit()
+        assert StockMovement.query.one().note == "picked"
+
+
+def test_reference_checks_are_cached_within_a_flush(ab):
+    from sqlalchemy import event
+    selects = []
+
+    def count(conn, cursor, statement, *args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    engine = db.engine
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        with tenant_scope(ab["A"]):
+            db.session.add_all([StockMovement(item_id=ab["A_item"], item_name="same", delta=1,
+                                              reason="manual") for _ in range(100)])
+            db.session.flush()
+            db.session.rollback()
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len(selects) <= 2, f"{len(selects)} lookups for 100 rows with one reference"
