@@ -11,9 +11,11 @@ A customer and order management system with role-based access control (RBAC), a 
 - [Overview](#overview)
 - [Tech Stack](#tech-stack)
 - [Roles & Access](#roles--access)
+- [Multi-tenancy](#multi-tenancy)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
+  - [Database setup](#database-setup)
   - [Running the App](#running-the-app)
 - [API Reference](#api-reference)
   - [Authentication Endpoints](#authentication-endpoints)
@@ -86,11 +88,28 @@ The legacy customer/order/SMS flows from earlier versions are preserved unchange
 | Manage customers / orders / reports | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
 | Manage users (roles, linking) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
 
-Roles are stored on the `User` row and enforced by decorators in `auth/auth_middleware.py` (`cashier_required`, `pharmacist_required`, `stock_clerk_required`, `admin_required`, `superuser_required`, plus their `*_api_required` JSON variants).
+Roles are stored on the `User` row and enforced by decorators in `auth/auth_middleware.py` (`cashier_required`, `pharmacist_required`, `stock_clerk_required`, `admin_required`, `superuser_required`, plus their `*_api_required` JSON variants). Every decorator first requires a bound tenant.
 
-**Superuser:** `kimothomark93@gmail.com` — enforced on every login regardless of the database.
+**`superuser` is the business owner.** Roles apply inside one business; an owner manages only their own staff.
 
-**New users:** Any Google account that logs in for the first time is auto-created with the `user` role. A superuser must link them to a customer profile before they can place orders.
+**New businesses** sign up at `/register` (business name, type, owner details). That creates the business on a 14-day trial and its owner. Owners add staff through the Users page. Google sign-in only works for people who already have an account; an unknown Google address is sent to signup.
+
+**Platform admins** (people running this service, not a business) are listed in `PLATFORM_ADMIN_EMAILS`; the flag is refreshed at every login. They choose which business to act in at `/platform/tenants`. Create one that belongs to no business with `flask create-platform-admin you@example.com`.
+
+## Multi-tenancy
+
+Every business is a `Tenant` (`models/base.py`) with a vertical: `pharmacy`, `distributor` or `institution`. Every other table has a `tenant_id`, and `auth/tenancy.py` enforces it for all code without each query having to remember:
+
+- Each request binds the logged-in user's tenant (`app.bind_request_tenant`), re-checking the user and subscription against the database every time.
+- Every ORM query is filtered to that tenant, including joins, unions and lazily loaded relationships; bulk updates and deletes get the same filter.
+- New rows are stamped with the tenant; writing another tenant's row raises `CrossTenantWrite`.
+- With no tenant bound, a query raises `TenantNotBound` instead of returning every business's rows.
+- Raw SQL and Core table statements are refused on the session. `tests/test_no_bypass.py` also bans them in application code.
+- `unscoped()` turns scoping off for the few platform paths that must see every tenant (login lookup, signup, the platform pages). Its call sites are an explicit allowlist in `tests/test_no_bypass.py`.
+
+`tests/test_isolation_sweep.py` calls every route as one business with another business's ids and fails on any leak, change or crash.
+
+Tenant secrets (Daraja keys, eTIMS token) are encrypted with `TENANT_SECRETS_KEY` and never returned by the API.
 
 ---
 
@@ -174,15 +193,24 @@ flask db upgrade
 
 After pulling new code, always run `flask db upgrade`.
 
+Revision `0003_tenants_contract` moves an existing single-business database into one tenant. It first normalises every customer and staff phone number to `254XXXXXXXXX`; if any number is not a Kenyan mobile, or two customers would end up with the same number, it stops, lists every one, and changes nothing. Fix those rows and run `flask db upgrade` again.
+
+Other commands:
+
+```bash
+flask create-platform-admin you@example.com   # operator account with no business
+flask seed-demo <tenant-slug>                  # demo inventory for an empty business
+```
+
 ### Running the App
 
 ```bash
 python app.py
 ```
 
-The app starts at **`http://127.0.0.1:5001`**. The first admin login is sent
-to onboarding, which records the business type and seeds sample inventory for
-it.
+The app starts at **`http://127.0.0.1:5001`**. Open `/register` to create a
+business; its owner can change the business name and type later at
+`/onboarding`.
 
 ---
 
@@ -723,6 +751,8 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `MANAGER_OTP_TTL` | Manager-override OTP lifetime in seconds (default `300`) |
 | `REDIS_URL` | Optional — for OTP storage. Falls back to in-memory if absent |
 | `PROXY_FIX_X_FOR` / `PROXY_FIX_X_PROTO` | Reverse-proxy hops to trust (default `1`, Heroku's router; add one per CDN/WAF) |
+| `TENANT_SECRETS_KEY` | Fernet key encrypting each business's Daraja/eTIMS secrets. Required before any secret is saved; losing it makes them unreadable |
+| `PLATFORM_ADMIN_EMAILS` | Comma-separated operator emails given platform-admin rights at login |
 
 > `JAWSDB_URL` (set by Heroku) overrides the individual MySQL variables automatically.
 
@@ -735,12 +765,29 @@ pytest
 ```
 
 The suite needs no MySQL, Redis, credentials or `.env`. Each test gets a
-fresh SQLite database built by the real migrations (`tests/conftest.py`).
-Use the `login_as(role)` fixture for routes behind a role.
+fresh database built by the real migrations, with business `acme` bound
+(`tests/conftest.py`). `login_as(role)` creates a real user and logs in;
+`other_tenant` adds a second business. Every test also gets a fake SMS
+client (`sms_outbox`), so no test can send a real text.
+
+The same suite runs on MySQL. CI does both on every push
+(`.github/workflows/tests.yml`, MySQL 5.7). Locally:
+
+```bash
+scripts/local_mysql.sh start            # private mysqld on port 33071
+TEST_MYSQL_URL=$(scripts/local_mysql.sh url) pytest
+scripts/local_mysql.sh stop
+```
 
 Covers:
 - `test_app_factory.py` — app builds with no network I/O, endpoint names, ProxyFix hops, naming convention
-- `test_migrations.py` — baseline upgrade/downgrade, zero diff against the models, every constraint named, stamping an old database
+- `test_migrations.py` — upgrade/downgrade round trip, zero diff against the models, every constraint named, an old database upgraded to zero drift
+- `test_migrations_tenancy.py` — moving an existing business into a tenant: default tenant naming, phone normalisation, stopping on bad or colliding numbers, downgrade
+- `test_tenancy_hooks.py` — the tenant filter: unbound queries, every read path, cached statements, unions, identity map, bulk writes, refused statements
+- `test_isolation_sweep.py` — every route called by another business: no leak, no change, no crash
+- `test_no_bypass.py` — no raw SQL in app code; `unscoped()` only at allowlisted call sites
+- `test_tenant_auth.py` — signup, login, stale sessions, lapsed trials, Google sign-in, platform admins, staff management
+- `test_tenant_models.py`, `test_phone.py`, `test_encrypted_type.py` — tenant model, phone normalisation, encrypted secrets
 - `test_auth.py` — login, landing, logout redirects
 - `test_customers.py` — customer endpoints and their role checks
 - `test_orders.py` — legacy order endpoints
