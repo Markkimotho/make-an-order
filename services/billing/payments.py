@@ -97,26 +97,49 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
                       org_account_balance=org_account_balance, raw=raw,
                       recorded_by=recorded_by, verified=verified)
 
+    target = invoice or (intent.invoice if intent is not None else None)
+    matched_customer = None
+    if target is None and bill_ref:
+        match = match_reference(bill_ref)
+        target, matched_customer = match.invoice, match.customer_id
+
+    if receipt and target is not None:
+        receiptless = _receiptless_stk_payment(target, amount)
+        if receiptless is not None:
+            receiptless.mpesa_receipt = receipt
+            return _merge(receiptless, method=method, amount=amount, intent=intent,
+                          invoice=None, bill_ref=bill_ref, payer_phone=payer_phone,
+                          payer_name=payer_name, org_account_balance=org_account_balance,
+                          raw=raw, recorded_by=recorded_by, verified=verified)
+
     payment = Payment(method=method, amount=amount, unallocated_amount=amount,
                       mpesa_receipt=receipt, bill_ref_raw=(bill_ref or None),
-                      payer_phone=payer_phone, payer_name=payer_name, customer_id=customer_id,
+                      payer_phone=payer_phone, payer_name=payer_name,
+                      customer_id=customer_id or matched_customer,
                       org_account_balance=org_account_balance, raw_payload=raw,
                       recorded_by=recorded_by, verified=verified,
                       received_at=received_at or datetime.utcnow())
     db.session.add(payment)
     db.session.flush()
 
-    target = invoice or (intent.invoice if intent is not None else None)
-    if target is None and bill_ref:
-        match = match_reference(bill_ref)
-        target = match.invoice
-        if payment.customer_id is None:
-            payment.customer_id = match.customer_id
     if intent is not None:
         intent.payment_id = payment.id
         intent.status = "completed"
     allocate(payment, target)
     return payment
+
+
+def _receiptless_stk_payment(invoice, amount):
+    """An STK payment recorded from Daraja's query (no receipt yet) on this
+    invoice for this amount: the receipt now arriving belongs to it."""
+    candidates = (Payment.query.join(PaymentAllocation,
+                                     PaymentAllocation.payment_id == Payment.id)
+                  .filter(Payment.mpesa_receipt.is_(None), Payment.method == "mpesa_stk",
+                          Payment.status == "confirmed", Payment.amount == amount,
+                          PaymentAllocation.invoice_id == invoice.id,
+                          PaymentAllocation.voided_at.is_(None))
+                  .order_by(Payment.id).all())
+    return candidates[0] if candidates else None
 
 
 def _merge(existing, *, method, amount, intent, invoice, bill_ref, payer_phone, payer_name,

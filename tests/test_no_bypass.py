@@ -24,6 +24,8 @@ UNSCOPED_ALLOWLIST = {
     ("app.py", "create_platform_admin_command"),
     ("app.py", "grant_platform_admin_command"),
     ("api/payments.py", "_owning_tenant"),      # webhooks: which tenant owns this reference
+    ("api/daraja.py", "_tenant_for"),           # webhook URL slug + token -> tenant
+    ("app.py", "payments_sweep_command"),       # which businesses have silent STK pushes
     ("app.py", "seed_demo_command"),            # resolve slug -> tenant id
     ("api/platform.py", "tenants"),             # platform admins list all tenants
     ("api/platform.py", "act_as"),

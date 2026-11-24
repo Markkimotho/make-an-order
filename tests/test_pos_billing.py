@@ -222,3 +222,17 @@ def test_concurrent_credit_sales_cannot_both_pass_the_ceiling(till):
     assert sorted(results) == [200, 400]
     with tenant_scope(app.acme_id):
         assert billing.customer_exposure(till["duka"]) == D("300.00")
+
+
+def test_running_total_includes_the_line_just_added_and_removed(till):
+    """Found by the STK tests: the total lagged one line behind."""
+    c = till["client"]
+    txn = c.post("/pos/transaction/new", json={}).get_json()["transaction"]["id"]
+    r = c.post(f"/pos/transaction/{txn}/add_item",
+               json={"inventory_item_id": till["item"], "quantity": 2})
+    assert r.get_json()["transaction"]["total"] == 200.0
+    line = r.get_json()["line"]["id"]
+    r = c.post(f"/pos/transaction/{txn}/add_item", json={"inventory_item_id": till["item"]})
+    assert r.get_json()["transaction"]["total"] == 300.0
+    r = c.delete(f"/pos/transaction/{txn}/remove_item/{line}")
+    assert r.get_json()["transaction"]["total"] == 100.0

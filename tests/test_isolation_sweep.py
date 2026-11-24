@@ -197,16 +197,17 @@ def call(client, method, url, foreign_id):
 @pytest.fixture
 def no_network(monkeypatch):
     """Provider calls fail fast instead of reaching Safaricom/Flutterwave."""
-    from services import flutterwave_service, mpesa_service
+    from services import flutterwave_service
+    from services.daraja import DarajaUnavailable, client as daraja_client
 
     def offline(*a, **k):
-        raise mpesa_service.MpesaError("offline in tests")
+        raise DarajaUnavailable("offline in tests")
 
     def offline_card(*a, **k):
         raise flutterwave_service.FlutterwaveError("offline in tests")
 
-    for name in ("stk_push", "query_stk_status", "get_access_token"):
-        monkeypatch.setattr(mpesa_service, name, offline)
+    for name in ("stk_push", "query", "register_c2b", "_fetch_token"):
+        monkeypatch.setattr(daraja_client.DarajaClient, name, offline)
     for name in ("verify_transaction", "create_payment_link"):
         monkeypatch.setattr(flutterwave_service, name, offline_card)
 

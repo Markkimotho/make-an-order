@@ -120,9 +120,15 @@ def _generate_transaction_ref() -> str:
 def _recalc_totals(txn: Transaction, *, discount_override: Decimal | None = None) -> None:
     """Recompute subtotal/tax/total for ``txn`` from its items.
 
+    The item list is reloaded first: lines added or deleted in this request
+    are not in an already-loaded ``txn.items`` (that made the running total
+    lag one line behind every add and remove).
+
     Tax = ``Config.TAX_RATE`` applied to (subtotal - discount). Inclusive
     pricing not assumed — tax is added on top. Caller flushes/commits.
     """
+    db.session.flush()
+    db.session.expire(txn, ['items'])
     subtotal = Decimal('0')
     for item in txn.items:
         subtotal += Decimal(str(item.line_total or 0))

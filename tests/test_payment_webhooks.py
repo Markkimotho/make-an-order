@@ -1,15 +1,16 @@
-"""Payment webhooks arrive with no session, so no tenant is bound.
+"""Card (Flutterwave) webhook and verify routes, and transaction refs.
 
-Review finding: after tenancy, the M-Pesa and Flutterwave callbacks raised
-TenantNotBound (a 500 in production) and payments were never recorded. The
-test suite had hidden it because requests inherited the test's tenant.
+The webhook arrives with no session, so no tenant is bound; it finds the
+owning business by the transaction ref. M-Pesa webhooks are per-business
+URLs, tested in test_daraja_webhooks.py.
 """
 from decimal import Decimal
 
 import pytest
 
 from auth.tenancy import tenant_scope
-from models import TXN_COMPLETED, TXN_OPEN, Transaction, db
+from models import TXN_OPEN, Payment, Transaction, db
+from services import billing
 
 
 def stk_callback(checkout_id, success=True):
@@ -42,26 +43,6 @@ def open_txns(app, other_tenant):
 def status_of(tid, txn_id):
     with tenant_scope(tid):
         return db.session.get(Transaction, txn_id).status
-
-
-def test_stk_callback_without_session_marks_the_right_tenants_txn(client, open_txns):
-    r = client.post("/payments/mpesa/callback", json=stk_callback("ws_CO_GLOBEX"))
-    assert r.status_code == 200
-    assert r.get_json() == {"ResultCode": 0, "ResultDesc": "Accepted"}
-    assert status_of(*open_txns["globex"]) == TXN_COMPLETED
-    assert status_of(*open_txns["acme"]) == TXN_OPEN
-
-
-def test_stk_callback_failure_leaves_txn_open(client, open_txns):
-    r = client.post("/payments/mpesa/callback", json=stk_callback("ws_CO_ACME", success=False))
-    assert r.status_code == 200
-    assert status_of(*open_txns["acme"]) == TXN_OPEN
-
-
-def test_stk_callback_unknown_reference_is_acknowledged(client, open_txns):
-    r = client.post("/payments/mpesa/callback", json=stk_callback("ws_CO_NOPE"))
-    assert r.status_code == 200
-    assert r.get_json()["ResultCode"] == 0
 
 
 @pytest.fixture
@@ -103,7 +84,15 @@ def test_card_webhook_with_unique_reference_completes_it(client, open_txns, monk
                                         "tx_ref": "TXN-GLOBEX"})
     r = client.post("/payments/card/webhook", json={"data": {"tx_ref": "TXN-GLOBEX", "id": 9}})
     assert r.status_code == 200
-    assert status_of(tid, txn_id) == TXN_COMPLETED
+    # The card payment pays the sale's invoice; the till then completes the sale.
+    with tenant_scope(tid):
+        invoice = billing.open_invoice_for_transaction(txn_id)
+        assert (invoice.status, invoice.total) == ("paid", Decimal("100.00"))
+        assert Payment.query.one().mpesa_receipt == "FLWF1"
+    # A retried webhook is recorded once.
+    client.post("/payments/card/webhook", json={"data": {"tx_ref": "TXN-GLOBEX", "id": 9}})
+    with tenant_scope(tid):
+        assert Payment.query.count() == 1
 
 
 def test_card_webhook_rejects_provider_record_for_another_ref(client, open_txns, monkeypatch,
@@ -133,20 +122,6 @@ def test_transaction_refs_are_unique_across_businesses(app, other_tenant, login_
         refs.append(r.get_json()["transaction"]["transaction_ref"])
     assert refs[0] != refs[1]
     assert refs[0].startswith(f"TXN-{app.acme_id}-") and refs[1].startswith(f"TXN-{other_tenant}-")
-
-
-def test_status_lookup_refuses_another_tenants_checkout(login_as, open_txns, app, monkeypatch):
-    """Review sweep finding: the status route asked the provider about any
-    checkout id, so business B could read business A's payment status."""
-    from services import mpesa_service
-    asked = []
-    monkeypatch.setattr(mpesa_service, "query_stk_status",
-                        lambda cri: asked.append(cri) or {"ResultCode": "0"})
-    client = login_as("cashier")                       # acme
-    assert client.get("/payments/mpesa/status/ws_CO_GLOBEX").status_code == 404
-    assert asked == []
-    assert client.get("/payments/mpesa/status/ws_CO_ACME").status_code == 200
-    assert asked == ["ws_CO_ACME"]
 
 
 def test_card_verify_refuses_another_tenants_reference(login_as, open_txns, monkeypatch,

@@ -9,6 +9,7 @@ database is created on demand with ``flask create-db``.
 """
 import logging
 import os
+import re
 from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 
@@ -21,6 +22,7 @@ from flask_migrate import Migrate
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from api.customers import customers_bp
+from api.daraja import daraja_bp
 from api.inventory import inventory_bp
 from api.orders import orders_bp
 from api.payments import payments_bp
@@ -226,6 +228,7 @@ def create_app(config_override=None):
     app.register_blueprint(payments_bp, url_prefix='/payments')
     app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
     app.register_blueprint(platform_bp, url_prefix='/platform')
+    app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
 
     app.before_request(bind_request_tenant)
@@ -236,7 +239,30 @@ def create_app(config_override=None):
     return app
 
 
+class RedactCallbackTokens(logging.Filter):
+    """Webhook URLs carry each business's callback token; keep it out of
+    request logs (werkzeug, gunicorn access log, app logs)."""
+
+    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/)[^/\s?\"]+")
+
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = self._pattern.sub(r"\1[token]", message)
+        if redacted != message:
+            record.msg, record.args = redacted, ()
+        return True
+
+
 def _configure_logging(app):
+    token_filter = RedactCallbackTokens()
+    for name in ("werkzeug", "gunicorn.access", "gunicorn.error", "api.daraja",
+                 "services.billing.stk", app.logger.name):
+        target = logging.getLogger(name)
+        if not any(isinstance(f, RedactCallbackTokens) for f in target.filters):
+            target.addFilter(token_filter)
     if app.testing:
         return
     if app.debug:
@@ -315,6 +341,29 @@ def _register_cli(app):
             user.is_platform_admin = True
             db.session.commit()
         click.echo(f'{email} is a platform admin while listed in PLATFORM_ADMIN_EMAILS.')
+
+    @app.cli.command('payments-sweep')
+    def payments_sweep_command():
+        """Ask Daraja about every silent STK push (run every 10 minutes)."""
+        from auth.tenancy import tenant_scope
+        from models import PaymentIntent
+        from services.billing.stk import WAITING, sweep_tenant
+        with unscoped():
+            tenant_ids = sorted({tid for (tid,) in db.session.query(PaymentIntent.tenant_id)
+                                 .filter(PaymentIntent.status.in_(WAITING)).distinct()})
+        totals = {}
+        for tenant_id in tenant_ids:
+            try:
+                with tenant_scope(tenant_id):
+                    counts = sweep_tenant()
+            except Exception as e:                      # one business never stops the rest
+                db.session.rollback()
+                app.logger.error(f"payments sweep failed for tenant {tenant_id}: {e}")
+                continue
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+        app.logger.info(f"payments sweep: {len(tenant_ids)} businesses, {totals}")
+        click.echo(f"Swept {len(tenant_ids)} businesses: {totals}")
 
     @app.cli.command('seed-demo')
     @click.argument('slug')

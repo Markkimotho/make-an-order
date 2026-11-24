@@ -54,6 +54,10 @@ class Config:
     # Flutterwave (cards). Off by default: card money settles to the platform's
     # account, not the business's. Set CARD_PAYMENTS_ENABLED=1 to turn on.
     CARD_PAYMENTS_ENABLED = os.environ.get("CARD_PAYMENTS_ENABLED", "") in ("1", "true", "yes")
+
+    # Optional: only accept Daraja webhooks from these IPs (comma-separated).
+    # Needs PROXY_FIX_X_FOR set right behind a proxy, or every webhook is refused.
+    DARAJA_ALLOWED_IPS = os.environ.get("DARAJA_ALLOWED_IPS", "")
     FLW_SECRET_KEY    = os.environ.get("FLW_SECRET_KEY")
     FLW_PUBLIC_KEY    = os.environ.get("FLW_PUBLIC_KEY")
     FLW_WEBHOOK_SECRET = os.environ.get("FLW_WEBHOOK_SECRET")

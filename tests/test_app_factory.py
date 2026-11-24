@@ -57,7 +57,8 @@ def test_create_app_twice(tmp_path):
 def test_module_app_has_all_blueprints():
     from app import app
     rules = {r.rule for r in app.url_map.iter_rules()}
-    for path in ("/pos/transaction/new", "/payments/mpesa/callback",
+    for path in ("/pos/transaction/new", "/payments/mpesa/stk_push",
+                 "/api/payments/daraja/stk/<slug>/<token>",
                  "/auth/login", "/dashboard", "/onboarding", "/"):
         assert path in rules, path
 
