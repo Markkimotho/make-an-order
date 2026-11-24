@@ -483,3 +483,27 @@ def test_two_tills_selling_the_last_unit(app, login_as, monkeypatch):
         db.session.expire_all()
         assert batches_of(item_id) == {"LAST": 0}
         assert LineBatch.query.count() == 1
+
+
+def test_item_list_reads_batches_in_one_query(app, admin):
+    """The old screens' expiry/batch columns come from one batch query for
+    the whole list, not one (or three) per item."""
+    from sqlalchemy import event
+    for n in range(12):
+        item = make_item(f"Item {n}")
+        stock.receive(item, 3, batch_number=f"B{n}", expiry_date=date(2027, 1, 1 + n))
+    db.session.commit()
+    statements = []
+
+    def count(conn, cursor, statement, *args):
+        if "FROM batches" in statement:
+            statements.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", count)
+    try:
+        rows = admin.get("/inventory/items").get_json()
+    finally:
+        event.remove(db.engine, "before_cursor_execute", count)
+    assert len(statements) == 1
+    first = next(r for r in rows if r["name"] == "Item 0")
+    assert (first["batch_number"], first["expiry_date"]) == ("B0", "2027-01-01")

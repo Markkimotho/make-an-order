@@ -114,6 +114,35 @@ Every business is a `Tenant` (`models/base.py`) with a vertical: `pharmacy`, `di
 
 Tenant secrets (Daraja keys, eTIMS token) are encrypted with `TENANT_SECRETS_KEY` and never returned by the API.
 
+## Stock, batches and expiry
+
+An item's stock lives in **batches** (`models/stock.py`), each with its own batch number, expiry date, quantity and unit cost; sized goods (uniforms, shoes) use **variants** instead (`has_variants`). `inventory_items.stock` is the total and is written only by `services/stock.py`; `tests/test_no_bypass.py` fails on any stock write anywhere else.
+
+- Every delivery is a batch: a purchase-order receipt uses the batch number given (else `PO-<number>`) at the line's cost; a plain restock without a number goes to `UNBATCHED`.
+- Sales take **first-expiry-first-out** and skip batches whose expiry is before today in Nairobi (`services/clock.today_nairobi()`, never the server's UTC date). Expired stock leaves only through a negative stock adjustment (a write-off).
+- Each sale or order line records which batches it drew from (`line_batches`), so a void or return puts units back in exactly those batches. The receipt line shows them (`A x4, B x6`).
+- Selling more than the sellable stock is refused: `409` at the till, `400` for a shop order, with nothing recorded.
+- Concurrent sales lock the item, then its batches in id order, then the variant, so two tills cannot both sell the last unit (tested on MySQL).
+- `GET /inventory/expiring?days=30` and `GET /reports/expiry` list batches with days to expiry, an expired flag and cost at risk. `GET /inventory/items/<id>/batches` lists an item's batches; `PUT /inventory/batches/<id>` corrects a batch's number or expiry (admin). The old item form's batch and expiry fields edit the item's only batch, and are refused with several.
+
+## SMS outbox
+
+Every text is a row in `sms_messages` written by `services/sms_service.send(to, body, kind, dedupe_key=None)`: `sent` (Africa's Talking accepted it), `failed` (refused, not configured, or down: recorded, never raised) or `skipped` (not a Kenyan mobile number). Messages use the business's `at_sender_id` and name.
+
+- A `dedupe_key` already used in the business returns the earlier row and sends nothing; low-stock alerts are once per item per admin per day.
+- `send()` commits, so it must be called after the caller's own commit; it refuses to run with unsaved changes.
+- One-time codes are masked in the stored body.
+- Africa's Talking posts delivery reports to `POST /delivery-reports` (one URL for every business; set it in the AT dashboard, adding `?token=<AT_DELIVERY_TOKEN>` if configured). The status only moves forward: a final state (`Success`, `Failed`, `Rejected`, ...) is never replaced by a late `Sent`.
+
+## Public pay links
+
+`/o/<slug>/pay/<pay_token>` lets a customer pay an invoice from their phone with no login. The slug picks the business and the invoice's random `pay_token` picks the invoice; an unknown slug, a lapsed business, a wrong token or another business's token is `404`. The page shows the lines, credit notes, payments and balance, pushes an M-Pesa prompt for the balance (rounded up to the shilling) and polls until paid.
+
+- `billing.pay_url(invoice)` builds the absolute link for SMS reminders from `PUBLIC_BASE_URL`.
+- Rate limits (Flask-Limiter): 5 pushes a minute per IP; 3 prompts per invoice per 10 minutes from any IP. Stored in Redis when `REDIS_URL`/`RATELIMIT_STORAGE_URI` is set, else memory; a Redis outage falls back to memory and never breaks the page.
+- Responses are `no-store`, `no-referrer` and `noindex`; pay tokens are redacted from request logs.
+- The status poll asks Daraja at most every 15 seconds per prompt, however often the page polls.
+
 ---
 
 ## Getting Started
@@ -440,6 +469,11 @@ DELETE http://127.0.0.1:5001/orders/delete_orders/5
 | `GET` | `/inventory/items` | List all items (optional `?category=` filter) |
 | `GET` | `/inventory/categories` | List distinct categories |
 | `POST` | `/inventory/place_order` | Place a cart order from inventory |
+| `POST` | `/inventory/items/<id>/restock` | Receive stock (optional `batch_number`, `expiry_date`) |
+| `POST` | `/inventory/stock_adjustment` | Admin correction or write-off (`delta`, `reason`) |
+| `GET` | `/inventory/expiring?days=30` | Stocked batches expiring within the window |
+| `GET` | `/inventory/items/<id>/batches` | An item's batches |
+| `PUT` | `/inventory/batches/<id>` | Correct a batch's number or expiry (admin) |
 
 #### List Inventory Items
 
@@ -691,6 +725,8 @@ make-an-order/
 ├── requirements.txt
 ├── Procfile                  # Gunicorn entry point (production)
 │
+├── public/                   # /o/<slug>/... no-login pages (pay link) + rate limits
+│
 ├── api/
 │   ├── customers.py          # /customers/* + loyalty / credit endpoints
 │   ├── orders.py             # legacy /orders/*
@@ -709,7 +745,9 @@ make-an-order/
 ├── services/
 │   ├── database_service.py   # MySQL database creation (flask create-db)
 │   ├── seed_service.py       # Sample inventory seeding (run by onboarding)
-│   ├── sms_service.py        # Africa's Talking SMS (order, payment, low-stock, etc.)
+│   ├── sms_service.py        # SMS outbox (sms_messages), dedupe, delivery reports
+│   ├── stock.py              # The only stock writer: batches, FEFO, returns to batch
+│   ├── clock.py              # today_nairobi()
 │   ├── mpesa_service.py      # Daraja STK Push, status, callback parser
 │   ├── flutterwave_service.py# Card payment links + webhook validation
 │   ├── receipt_service.py    # build / SMS / 42-col thermal receipts
@@ -765,7 +803,10 @@ See [.env.example](.env.example) for the full template. Key variables:
 | `TAX_RATE` | VAT rate added on top of subtotal (default `0.16`) |
 | `LOW_STOCK_DAYS` | Near-expiry window in days (default `30`) |
 | `MANAGER_OTP_TTL` | Manager-override OTP lifetime in seconds (default `300`) |
-| `REDIS_URL` | Optional — for OTP storage. Falls back to in-memory if absent |
+| `REDIS_URL` | Optional — for OTP storage, Daraja tokens and rate limits. Falls back to in-memory if absent |
+| `RATELIMIT_STORAGE_URI` | Optional override for the public pages' rate-limit store (defaults to `REDIS_URL`, else `memory://`) |
+| `PUBLIC_BASE_URL` | Absolute base for links sent by SMS, e.g. `https://app.example.co.ke` (pay links) |
+| `AT_DELIVERY_TOKEN` | Optional secret required as `?token=` on `/delivery-reports` |
 | `PROXY_FIX_X_FOR` / `PROXY_FIX_X_PROTO` | Reverse-proxy hops to trust (default `1`, Heroku's router; add one per CDN/WAF) |
 | `TENANT_SECRETS_KEY` | Fernet key encrypting each business's Daraja/eTIMS secrets. Required before any secret is saved; losing it makes them unreadable |
 | `PLATFORM_ADMIN_EMAILS` | Operator emails allowed platform-admin rights. The flag itself is set only by `flask create-platform-admin` / `flask grant-platform-admin`; login removes it if the email is not listed |

@@ -150,12 +150,23 @@ class InventoryItem(TenantMixin, db.Model):
     is_drug               = db.Column(db.Boolean, default=False, nullable=False)
     requires_prescription = db.Column(db.Boolean, default=False, nullable=False)
 
-    def _soonest_batch(self):
+    @staticmethod
+    def soonest_batches(item_ids):
+        """{item_id: the stocked batch sold next} in one query, for lists."""
         from models.stock import Batch
-        return (Batch.query.filter(Batch.inventory_item_id == self.id,
-                                   Batch.quantity_on_hand > 0)
-                .order_by(Batch.expiry_date.is_(None), Batch.expiry_date.asc(), Batch.id.asc())
-                .first())
+        ids = list(item_ids)
+        if not ids:
+            return {}
+        rows = (Batch.query.filter(Batch.inventory_item_id.in_(ids), Batch.quantity_on_hand > 0)
+                .order_by(Batch.inventory_item_id, Batch.expiry_date.is_(None),
+                          Batch.expiry_date.asc(), Batch.id.asc()).all())
+        out = {}
+        for batch in rows:
+            out.setdefault(batch.inventory_item_id, batch)
+        return out
+
+    def _soonest_batch(self):
+        return self.soonest_batches([self.id]).get(self.id)
 
     @property
     def expiry_date(self):
@@ -169,7 +180,10 @@ class InventoryItem(TenantMixin, db.Model):
         batch = self._soonest_batch()
         return batch.batch_number if batch else None
 
-    def to_dict(self):
+    def to_dict(self, soonest=None):
+        """``soonest``: a map from :meth:`soonest_batches`, so a list of
+        items costs one batch query instead of one per item."""
+        batch = soonest.get(self.id) if soonest is not None else self._soonest_batch()
         return {
             'id':          self.id,
             'name':        self.name,
@@ -183,8 +197,8 @@ class InventoryItem(TenantMixin, db.Model):
             'sku':         self.sku,
             'barcode':     self.barcode,
             'reorder_level': self.reorder_level,
-            'expiry_date': self.expiry_date.isoformat() if self.expiry_date else None,
-            'batch_number': self.batch_number,
+            'expiry_date': batch.expiry_date.isoformat() if batch and batch.expiry_date else None,
+            'batch_number': batch.batch_number if batch else None,
             'supplier_id': self.supplier_id,
             'unit':        self.unit,
             'has_variants': bool(self.has_variants),

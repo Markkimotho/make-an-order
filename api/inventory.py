@@ -66,7 +66,8 @@ def get_items():
     if category:
         q = q.filter_by(category=category)
     items = q.order_by(InventoryItem.category, InventoryItem.name).all()
-    return jsonify([i.to_dict() for i in items])
+    soonest = InventoryItem.soonest_batches(i.id for i in items)
+    return jsonify([i.to_dict(soonest) for i in items])
 
 
 @inventory_bp.route('/categories', methods=['GET'])
@@ -273,10 +274,11 @@ def low_stock():
              .filter(InventoryItem.stock < threshold)
              .order_by(InventoryItem.stock)
              .all())
+    soonest = InventoryItem.soonest_batches(i.id for i in items)
     return jsonify({
         'threshold': threshold,
         'count':     len(items),
-        'items':     [i.to_dict() for i in items],
+        'items':     [i.to_dict(soonest) for i in items],
     }), 200
 
 
@@ -464,7 +466,8 @@ def low_stock_reorder():
             .filter(InventoryItem.stock <= InventoryItem.reorder_level)
             .order_by(InventoryItem.stock.asc())
             .all())
-    return jsonify([i.to_dict() for i in rows]), 200
+    soonest = InventoryItem.soonest_batches(i.id for i in rows)
+    return jsonify([i.to_dict(soonest) for i in rows]), 200
 
 
 @inventory_bp.route('/expiring', methods=['GET'])

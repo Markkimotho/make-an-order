@@ -15,7 +15,9 @@ call into `services/*` and translate domain errors to HTTP responses.
 | [`billing`](billing/)                         | Invoices, payments, allocation  | `BillingError`      | Yes (database) |
 | [`mpesa_service`](mpesa_service.py)           | Phone format, STK callback parse | `ValueError`       | Yes |
 | [`flutterwave_service`](flutterwave_service.py) | Flutterwave v3                  | `FlutterwaveError`  | No — needs network + creds |
-| [`sms_service`](sms_service.py)               | Africa's Talking                | never (returns bool) | Yes — gracefully logs & returns False |
+| [`sms_service`](sms_service.py)               | Africa's Talking, `sms_messages` | never for provider problems | Yes — records `failed`, returns the row |
+| [`stock`](stock.py)                           | Batches, variants, line batches | `StockError`, `InsufficientStock` | Yes (database) |
+| [`clock`](clock.py)                           | Nothing                         | never               | Yes |
 | [`receipt_service`](receipt_service.py)       | DB (read-only)                  | `ValueError`        | Yes |
 | [`loyalty_service`](loyalty_service.py)       | DB (read+write, no commit)      | `LoyaltyError`      | Yes |
 | [`audit_service`](audit_service.py)           | DB (write, no commit)           | never (logs)        | Yes |
@@ -31,9 +33,12 @@ call into `services/*` and translate domain errors to HTTP responses.
    `db.session.add(...)` and `db.session.flush()` so the row gets an ID, but
    the surrounding blueprint owns `db.session.commit()` / `rollback()`. This
    keeps multi-step POS flows atomic (e.g. complete-transaction = update stock
-   + award loyalty + audit log + commit once).
-2. **External calls never crash a checkout.** SMS failures log and return
-   `False`. Daraja / Flutterwave failures raise typed errors that the blueprint
+   + award loyalty + audit log + commit once). Exceptions, because they call
+   out to a provider and must leave a record even if the request then fails:
+   `sms_service.send()` and `billing.stk.start_stk()` commit, so call them
+   after your own commit.
+2. **External calls never crash a checkout.** SMS failures are recorded as
+   `failed` rows and the helpers return `False`. Daraja / Flutterwave failures raise typed errors that the blueprint
    should catch and return a proper HTTP status for.
 3. **Money is `Decimal`.** Receipts cast to `float` only at the very edge
    (JSON output / printer). Internal arithmetic uses `Decimal` to avoid
@@ -73,6 +78,33 @@ environment: `stk_push`, `query` (paid / failed / processing),
 number as shortcode and the till as PartyB. Tokens are cached in Redis per
 business (`daraja:token:<id>`, TTL `expires_in - 120`), memory fallback.
 Callback URLs: `/api/payments/daraja/{stk|c2b}/<slug>/<callback_token>`.
+
+## `stock.py` — the only stock writer
+
+```python
+from services import stock
+stock.receive(item, 50, batch_number="AMX-7", expiry_date=d, unit_cost=12)
+taken = stock.take(item, 10, transaction_item=line)   # FEFO, skips expired; [(batch, n)]
+stock.give_back(item, 3, transaction_item=line)        # back to the batches it came from
+stock.adjust(item, -4, reason="expired_write_off")     # takes expired stock too
+```
+
+Locks item, then batches by id, then variant. Raises `InsufficientStock`
+before changing anything. Flushes; callers commit. Items with
+`has_variants` need `variant=`.
+
+## `sms_service.py` — the outbox
+
+`send(to, body, kind, dedupe_key=None)` writes and commits a
+`sms_messages` row, then calls Africa's Talking with `+254...`. Call it after
+your own commit (it raises `UnsavedChanges` otherwise). `record_delivery()`
+applies delivery reports, forwards only. `SendSMS.*` wraps the app's
+messages and returns True when accepted.
+
+## `clock.py`
+
+`today_nairobi()` / `now_nairobi()`: expiry, aging and daily jobs use these,
+never `date.today()` (the server runs on UTC).
 
 ## `mpesa_service.py` — helpers
 
