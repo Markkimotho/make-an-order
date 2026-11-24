@@ -112,17 +112,39 @@ def other_tenant(app):
 
 
 class FakeSMS:
-    """Stands in for the Africa's Talking SMS client. Records every send."""
+    """Stands in for the Africa's Talking SMS client. Records every send.
+
+    Checks numbers the way the real SDK does (``+`` and digits, else
+    ValueError) and replies in Africa's Talking's shape, with a unique
+    messageId per recipient. ``reply_code`` sets the per-recipient
+    statusCode (101 Sent; 4xx/5xx are refusals such as 405
+    InsufficientBalance).
+    """
 
     def __init__(self):
         self.sent = []
         self.fail = False
+        self.reply_code = 101
+        self._ids = 0
 
     def send(self, message, recipients, sender_id=None):
+        import re
+        for phone in recipients:
+            if not re.match(r"^\+\d{1,3}\d{3,}$", phone):
+                raise ValueError("Invalid phone number: " + phone)
         if self.fail:
             raise RuntimeError("simulated Africa's Talking outage")
         self.sent.append({"message": message, "to": list(recipients), "sender_id": sender_id})
-        return {"SMSMessageData": {"Recipients": [{"status": "Success"}]}}
+        out = []
+        for phone in recipients:
+            self._ids += 1
+            ok = self.reply_code in (100, 101, 102)
+            out.append({"statusCode": self.reply_code, "number": phone,
+                        "status": "Success" if ok else "InsufficientBalance",
+                        "cost": "KES 0.8000" if ok else "0",
+                        "messageId": f"ATXid_{self._ids:06d}" if ok else "None"})
+        return {"SMSMessageData": {"Message": f"Sent to {len(out)}/{len(out)}",
+                                   "Recipients": out}}
 
 
 @pytest.fixture(autouse=True)

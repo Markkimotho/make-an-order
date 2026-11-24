@@ -19,7 +19,8 @@ BASELINE_TABLES = {
 BILLING_TABLES = {"invoices", "payments", "payment_allocations", "payment_intents",
                   "invoice_adjustments"}
 STOCK_TABLES = {"batches", "item_variants", "line_batches"}
-HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES
+SMS_TABLES = {"sms_messages"}
+HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES | SMS_TABLES
 
 
 @pytest.fixture

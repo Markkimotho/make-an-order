@@ -30,7 +30,7 @@ def test_place_order(admin, sms_outbox):
     assert body["message"] == "Order placed successfully!"
     assert body["sms_status"] == "SMS sent successfully"
     assert len(sms_outbox.sent) == 1
-    assert sms_outbox.sent[0]["to"] == ["254722000389"]
+    assert sms_outbox.sent[0]["to"] == ["+254722000389"]
     assert "Laptop" in sms_outbox.sent[0]["message"]
 
 

@@ -43,7 +43,8 @@ def place_order():
         logger.info(f"Legacy order {new_order.id} placed for customer {customer_id}.")
 
         sms_ok = SendSMS.send_order_confirmation(
-            customer.phone_number, customer.name, f"Item: {item}, Amount: {amount}"
+            customer.phone_number, customer.name, f"Item: {item}, Amount: {amount}",
+            order_id=new_order.id,
         )
         return jsonify({
             "message":    "Order placed successfully!",

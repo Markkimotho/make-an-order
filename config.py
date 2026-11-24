@@ -32,6 +32,8 @@ class Config:
     AT_USERNAME = os.environ.get("AT_USERNAME")
     AT_API_KEY = os.environ.get("AT_API_KEY")
     AT_SENDER_ID = os.environ.get("AT_SENDER_ID")
+    # Optional secret on the delivery-report URL: /delivery-reports?token=...
+    AT_DELIVERY_TOKEN = os.environ.get("AT_DELIVERY_TOKEN")
 
     # DB Credentials (for local, non-Prod setup)
     MYSQL_HOST=os.environ.get("MYSQL_HOST")

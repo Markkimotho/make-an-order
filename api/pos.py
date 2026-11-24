@@ -48,6 +48,7 @@ from models import (
 )
 from services import audit_service, billing, loyalty_service, otp_service, stock
 from services.receipt_service import build_receipt
+from services.clock import today_nairobi
 from services.sms_service import SendSMS
 
 pos_bp = Blueprint('pos', __name__)
@@ -647,6 +648,7 @@ def transaction_complete(txn_id):
 
     # ----- Mutate stock & log movements -----
     uid = _user_id()
+    low_stock = []                       # alerted after the commit
     for li in txn.items:
         if not li.inventory_item_id:
             continue
@@ -663,16 +665,9 @@ def transaction_complete(txn_id):
             return jsonify({'error': str(e)}), 409
         li.batch_number = stock.batch_label(taken) if taken else li.batch_number
         item = db.session.get(InventoryItem, li.inventory_item_id)
-        # Low-stock alert
         if int(item.stock or 0) <= int(item.reorder_level or 0):
-            try:
-                admin_phones = [u.phone_number for u in
-                                User.query.filter(User.role.in_((ROLE_ADMIN, ROLE_SUPERUSER)),
-                                                  User.phone_number.isnot(None)).all()]
-                SendSMS.send_low_stock_alert(admin_phones, item.name,
-                                             item.stock, item.reorder_level)
-            except Exception:
-                logger.warning('low-stock SMS failed', exc_info=True)
+            low_stock.append((item.id, item.name, int(item.stock or 0),
+                              int(item.reorder_level or 0)))
 
     # ----- Invoice and payments -----
     if invoice is None:
@@ -722,13 +717,25 @@ def transaction_complete(txn_id):
                       None, {'total': float(total), 'method': method})
     db.session.commit()
 
-    # ----- SMS receipt (best-effort) -----
+    # ----- SMS receipt and low-stock alerts (best-effort, after the commit) -----
     try:
         if customer and customer.phone_number:
             SendSMS.send_payment_confirmation(customer.phone_number,
                                               total, txn.transaction_ref)
     except Exception:
+        db.session.rollback()
         logger.warning('payment SMS failed', exc_info=True)
+    if low_stock:
+        try:
+            admin_phones = [u.phone_number for u in
+                            User.query.filter(User.role.in_((ROLE_ADMIN, ROLE_SUPERUSER)),
+                                              User.phone_number.isnot(None)).all()]
+            for item_id, name, left, reorder in low_stock:
+                SendSMS.send_low_stock_alert(admin_phones, name, left, reorder,
+                                             item_id=item_id, today=today_nairobi())
+        except Exception:
+            db.session.rollback()
+            logger.warning('low-stock SMS failed', exc_info=True)
 
     return jsonify({
         'message': 'Transaction completed',

@@ -34,6 +34,7 @@ UNSCOPED_ALLOWLIST = {
     ("auth/auth_routes.py", "_login_user"),     # emails are global; find the user's tenant
     ("auth/auth_routes.py", "login_local"),
     ("auth/auth_routes.py", "register"),        # create tenant + owner
+    ("services/sms_service.py", "_message_tenant"),  # delivery reports: one global URL
 }
 
 

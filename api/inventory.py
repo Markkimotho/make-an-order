@@ -370,7 +370,8 @@ def place_inventory_order():
     try:
         if customer and customer.phone_number:
             SendSMS.send_order_confirmation(
-                customer.phone_number, customer.name, ', '.join(summary_parts)
+                customer.phone_number, customer.name, ', '.join(summary_parts),
+                order_id=order.id,
             )
     except Exception:
         logger.warning("SMS send failed after order commit.", exc_info=True)

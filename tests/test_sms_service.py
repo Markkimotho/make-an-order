@@ -27,9 +27,12 @@ def test_import_without_credentials_does_not_raise(monkeypatch):
     _fresh_sms(monkeypatch)
 
 
-def test_send_without_credentials_returns_false(monkeypatch):
+def test_send_without_credentials_returns_false(app, monkeypatch):
     sms = _fresh_sms(monkeypatch)
     assert sms.SendSMS.send_payment_confirmation("0712345678", 100, "TXN1") is False
+    from models import SmsMessage
+    row = SmsMessage.query.one()
+    assert (row.status, row.error) == ("failed", "SMS not configured")
 
 
 def test_client_initialises_once(monkeypatch):
@@ -43,7 +46,7 @@ def test_client_initialises_once(monkeypatch):
     assert first is second is not None
 
 
-def test_initialise_failure_returns_none(monkeypatch):
+def test_initialise_failure_returns_none(app, monkeypatch):
     sms = _fresh_sms(monkeypatch, AT_USERNAME="sandbox", AT_API_KEY="k")
 
     def boom(*a, **k):

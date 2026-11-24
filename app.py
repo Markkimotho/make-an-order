@@ -633,9 +633,22 @@ def _register_core_routes(app):
 
     @app.route('/delivery-reports', methods=['POST'])
     def delivery_reports():
-        """Africa's Talking delivery report webhook."""
-        data = request.get_json(force=True)
-        app.logger.info(f'Delivery report: {data}')
+        """Africa's Talking delivery reports (one URL for every business).
+
+        Sent form-encoded: id, status, phoneNumber, failureReason, ...
+        Always 200 so Africa's Talking does not retry; unknown ids are ignored.
+        """
+        from services import sms_service
+        if not sms_service.delivery_token_ok(request.args.get('token')):
+            return Response(status=404)
+        data = request.form.to_dict() or (request.get_json(silent=True) or {})
+        try:
+            sms_service.record_delivery(data.get('id'), data.get('status'),
+                                        data.get('failureReason'))
+        except Exception:
+            db.session.rollback()
+            app.logger.error('delivery report not applied: id=%s status=%s',
+                             data.get('id'), data.get('status'), exc_info=True)
         return Response(status=200)
 
 

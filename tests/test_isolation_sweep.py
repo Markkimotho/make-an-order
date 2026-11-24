@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from auth.tenancy import tenant_scope, unscoped
 from models import (AuditLog, CashMovement, Category, Customer, InventoryItem, Invoice,
-                    ItemVariant,
+                    ItemVariant, SmsMessage,
                     InvoiceAdjustment, Payment, PaymentAllocation, PaymentIntent,
                     LoyaltyTransaction, Order, OrderItem, Prescription,
                     PrescriptionItem, PurchaseOrder, PurchaseOrderItem, Shift,
@@ -96,6 +96,9 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             LoyaltyTransaction(customer_id=cust.id, transaction_id=txn.id, points_earned=1,
                                balance_after=1, note=mark),
             AuditLog(user_id=user.id, action="seed", entity_type=mark),
+            SmsMessage(to_phone=f"254{phone_base[1:]}01", body=mark, kind="seed",
+                       status="sent", provider_message_id=f"ATXid_{tag}",
+                       dedupe_key=f"seed:{tag}"),
         ])
         line = TransactionItem(transaction_id=txn.id, inventory_item_id=item.id, item_name=mark,
                                quantity=Decimal("1"), unit_price=Decimal("10"),
