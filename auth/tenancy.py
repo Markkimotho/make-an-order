@@ -12,7 +12,8 @@ Reads (do_orm_execute)
 What the filter will not run outside unscoped() (UnscopedStatement)
     - Core or text() SQL, from_statement(), or text() inside a tenant query.
     - Bulk insert(), update() and delete() on tenant tables, including
-      Query.update/delete. Every bypass found in review was a bulk-write
+      Query.update/delete and the legacy bulk_insert_mappings,
+      bulk_update_mappings and bulk_save_objects (which skip every hook). Every bypass found in review was a bulk-write
       shape; the app needs none. Change rows by loading them (with
       .with_for_update() when it must be atomic) and editing them.
     - Any session other than the app's db.session. One session per request
@@ -275,6 +276,29 @@ def check_merged(session, merged):
         raise
 
 
+def _refuse_legacy_bulk(name, original, mapper_of):
+    """bulk_insert_mappings / bulk_update_mappings / bulk_save_objects write
+    without do_orm_execute or before_flush, so the hooks never see them.
+    Refused for tenant tables outside unscoped()."""
+    def guarded(self, *args, **kwargs):
+        if not in_unscoped():
+            for cls in mapper_of(*args, **kwargs):
+                if isinstance(cls, type) and issubclass(cls, TenantMixin):
+                    raise UnscopedStatement(
+                        f"Session.{name}() bypasses tenant checks; use add() and edits")
+        return original(self, *args, **kwargs)
+    guarded._tenancy_checked = True
+    return guarded
+
+
+def _mapper_arg(mapper, *args, **kwargs):
+    return [inspect(mapper).class_ if not isinstance(mapper, type) else mapper]
+
+
+def _objects_arg(objects, *args, **kwargs):
+    return {type(o) for o in objects}
+
+
 def _checked_merge(original):
     def merge(self, instance, *args, **kwargs):
         merged = original(self, instance, *args, **kwargs)
@@ -431,6 +455,12 @@ def _check_writes(session, flush_context, instances):
 def _install():
     if not getattr(Session.merge, "_tenancy_checked", False):
         Session.merge = _checked_merge(Session.merge)
+    for name, mapper_of in (("bulk_insert_mappings", _mapper_arg),
+                            ("bulk_update_mappings", _mapper_arg),
+                            ("bulk_save_objects", _objects_arg)):
+        original = getattr(Session, name)
+        if not getattr(original, "_tenancy_checked", False):
+            setattr(Session, name, _refuse_legacy_bulk(name, original, mapper_of))
     for name, fn in (("do_orm_execute", _scope_statement),
                      ("before_flush", _check_writes),
                      ("before_attach", _check_attach)):

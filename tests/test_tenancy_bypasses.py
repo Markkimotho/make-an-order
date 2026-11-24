@@ -363,3 +363,28 @@ def test_platform_admin_with_own_tenant_can_act_in_another(ab):
         with pytest.raises(CrossTenantWrite):
             db.session.commit()
         db.session.rollback()
+
+
+# --- final pass: legacy bulk helpers skip every hook -------------------------------
+
+@pytest.mark.parametrize("helper", ["insert", "update", "save"])
+def test_legacy_bulk_helpers_are_refused(ab, helper):
+    """bulk_*_mappings and bulk_save_objects write without do_orm_execute or
+    before_flush. A probe showed all three writing another tenant's rows."""
+    row = {"name": "X", "phone_number": "254700000001", "code": "X", "tenant_id": ab["B"],
+           "loyalty_points": 0, "credit_limit": 0, "credit_balance": 0,
+           "customer_type": "retail"}
+    attempts = {
+        "insert": lambda: db.session.bulk_insert_mappings(Customer, [row]),
+        "update": lambda: db.session.bulk_update_mappings(
+            Customer, [{"id": ab["B_customer"], "name": "pwned"}]),
+        "save": lambda: db.session.bulk_save_objects(
+            [Customer(name="Y", phone_number="0700000002", code="Y", tenant_id=ab["B"])]),
+    }
+    with tenant_scope(ab["A"]):
+        with pytest.raises(UnscopedStatement):
+            attempts[helper]()
+        db.session.rollback()
+    assert names_in(ab["B"]) == [SECRET]
+    with unscoped():
+        assert Customer.query.count() == 2
