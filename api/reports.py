@@ -1,10 +1,11 @@
 from flask import Blueprint, jsonify, request, Response
 from models import (
-    db, Order, OrderItem, StockMovement, InventoryItem, User,
+    db, Batch, Order, OrderItem, StockMovement, InventoryItem, User,
     Transaction, TransactionItem, Shift,
     TXN_COMPLETED, TXN_REFUNDED, PAYMENT_METHODS,
 )
 from auth.auth_middleware import admin_api_required
+from services.clock import today_nairobi
 from sqlalchemy import func
 from datetime import datetime, timedelta, date
 from decimal import Decimal
@@ -373,22 +374,26 @@ def expiry_report():
         days = int(request.args.get('days', 30))
     except ValueError:
         return jsonify({'error': 'days must be an integer'}), 400
-    cutoff = date.today() + timedelta(days=max(days, 0))
-    rows = (InventoryItem.query
-            .filter(InventoryItem.expiry_date.isnot(None),
-                    InventoryItem.expiry_date <= cutoff)
-            .order_by(InventoryItem.expiry_date.asc()).all())
+    today = today_nairobi()
+    cutoff = today + timedelta(days=max(days, 0))
+    rows = (db.session.query(Batch, InventoryItem)
+            .join(InventoryItem, InventoryItem.id == Batch.inventory_item_id)
+            .filter(Batch.quantity_on_hand > 0, Batch.expiry_date.isnot(None),
+                    Batch.expiry_date <= cutoff)
+            .order_by(Batch.expiry_date.asc(), Batch.id.asc()).all())
     out = []
     cost_at_risk = Decimal('0')
-    for it in rows:
-        cost = Decimal(str(it.cost_price or 0)) * Decimal(int(it.stock or 0))
+    for batch, it in rows:
+        unit_cost = batch.unit_cost if batch.unit_cost is not None else (it.cost_price or 0)
+        cost = Decimal(str(unit_cost)) * Decimal(int(batch.quantity_on_hand))
         cost_at_risk += cost
         out.append({
             'id': it.id, 'name': it.name,
-            'stock': int(it.stock or 0), 'unit': it.unit,
-            'batch_number': it.batch_number,
-            'expiry_date': it.expiry_date.isoformat() if it.expiry_date else None,
-            'days_to_expiry': (it.expiry_date - date.today()).days if it.expiry_date else None,
+            'stock': int(batch.quantity_on_hand), 'unit': it.unit,
+            'batch_id': batch.id, 'batch_number': batch.batch_number,
+            'expiry_date': batch.expiry_date.isoformat(),
+            'days_to_expiry': (batch.expiry_date - today).days,
+            'expired': batch.expiry_date < today,
             'cost_at_risk': float(cost),
         })
     return jsonify({'cutoff': cutoff.isoformat(),

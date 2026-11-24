@@ -19,8 +19,11 @@ def till(app, login_as, monkeypatch):
     monkeypatch.setattr(Config, "TAX_RATE", 0)
     fake = daraja_fakes.install(monkeypatch)
     slug, token = daraja_fakes.configure(app, monkeypatch, app.acme_id)
-    item = InventoryItem(name="Sugar 1kg", price=D("100"), stock=40)
+    from services import stock
+    item = InventoryItem(name="Sugar 1kg", price=D("100"))
     db.session.add(item)
+    db.session.flush()
+    stock.receive(item, 40)
     db.session.commit()
     item_id = item.id
     client = login_as("cashier")

@@ -14,10 +14,12 @@ from sqlalchemy import text
 
 from auth.tenancy import tenant_scope, unscoped
 from models import (AuditLog, CashMovement, Category, Customer, InventoryItem, Invoice,
+                    ItemVariant,
                     InvoiceAdjustment, Payment, PaymentAllocation, PaymentIntent,
                     LoyaltyTransaction, Order, OrderItem, Prescription,
                     PrescriptionItem, PurchaseOrder, PurchaseOrderItem, Shift,
                     StockMovement, Supplier, Transaction, TransactionItem, User, db)
+from services import stock
 from tests.test_migrations import HEAD_TABLES
 
 MARK = "ALPHA-SECRET"
@@ -58,13 +60,19 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
         sup = Supplier(name=f"{mark} supplier", phone=f"0{phone_base}10")
         db.session.add_all([user, cat, sup])
         db.session.flush()
-        item = InventoryItem(name=f"{mark} item", price=Decimal("10"), stock=50,
+        item = InventoryItem(name=f"{mark} item", price=Decimal("10"),
                              sku=f"{tag}-SKU", category_id=cat.id, supplier_id=sup.id,
                              is_drug=True, requires_prescription=True)
         cust = Customer(name=f"{mark} customer", phone_number=f"0{phone_base}01", code=tag)
         shift = Shift(cashier_id=user.id, opening_float=Decimal("100"))
-        db.session.add_all([item, cust, shift])
+        sized = InventoryItem(name=f"{mark} sized", price=Decimal("10"), has_variants=True)
+        db.session.add_all([item, sized, cust, shift])
         db.session.flush()
+        variant = ItemVariant(inventory_item_id=sized.id, label=mark)
+        db.session.add(variant)
+        db.session.flush()
+        stock.receive(item, 50, batch_number=mark, expiry_date=date(2027, 1, 1))
+        stock.receive(sized, 4, variant=variant)
         order = Order(customer_id=cust.id, item=f"{mark} order", amount=Decimal("10"))
         txn = Transaction(transaction_ref=f"{tag}-TXN", customer_id=cust.id, cashier_id=user.id,
                           shift_id=shift.id, total=Decimal("10"), notes=mark,
@@ -80,9 +88,6 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             StockMovement(item_id=item.id, item_name=mark, delta=5, reason="restock"),
             CashMovement(shift_id=shift.id, movement_type="cash_in", amount=Decimal("5"),
                          reason=mark),
-            TransactionItem(transaction_id=txn.id, inventory_item_id=item.id, item_name=mark,
-                            quantity=Decimal("1"), unit_price=Decimal("10"),
-                            line_total=Decimal("10"), batch_number=mark),
             PurchaseOrderItem(po_id=po.id, inventory_item_id=item.id,
                               quantity_ordered=Decimal("5"), unit_cost=Decimal("2"),
                               batch_number=mark),
@@ -92,7 +97,12 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
                                balance_after=1, note=mark),
             AuditLog(user_id=user.id, action="seed", entity_type=mark),
         ])
+        line = TransactionItem(transaction_id=txn.id, inventory_item_id=item.id, item_name=mark,
+                               quantity=Decimal("1"), unit_price=Decimal("10"),
+                               line_total=Decimal("10"), batch_number=mark)
+        db.session.add(line)
         db.session.flush()
+        stock.take(item, 1, transaction_item=line)          # one line_batches row
         invoice = Invoice(invoice_number=f"INV{tag[:3]}01", kind="credit", customer_id=cust.id,
                           transaction_id=txn.id, order_id=order.id, total=Decimal("100"),
                           notes=mark)

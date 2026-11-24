@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, session, Response  # type: ignore
 from models import db, Order, OrderItem, Customer, InventoryItem, StockMovement
+from services import stock
 from services.sms_service import SendSMS
 from sqlalchemy.exc import IntegrityError
 from auth.auth_middleware import login_required, admin_api_required
@@ -221,26 +222,18 @@ def _restore_stock(order: Order, reason: str = 'cancel'):
         for oi in order.order_items:
             if oi.inventory_item_id:
                 inv = db.session.get(InventoryItem, oi.inventory_item_id)
-                if inv:
-                    inv.stock += oi.quantity
-                    db.session.add(StockMovement(
-                        item_id=inv.id, item_name=oi.item_name,
-                        delta=oi.quantity, reason=reason, user_id=uid,
-                        note=f"order #{order.id}",
-                    ))
+                if inv and oi.quantity > 0:
+                    stock.give_back(inv, oi.quantity, order_item=oi, reason=reason,
+                                    user_id=uid, note=f"order #{order.id}")
                     logger.info(f"Restored {oi.quantity}× '{oi.item_name}' (order {order.id}).")
     else:
         # Legacy order: parse the item summary string
         for segment in order.item.split(', '):
             item_name, qty = _parse_order_label(segment.strip())
             inv = InventoryItem.query.filter_by(name=item_name).first()
-            if inv:
-                inv.stock += qty
-                db.session.add(StockMovement(
-                    item_id=inv.id, item_name=item_name,
-                    delta=qty, reason=reason, user_id=uid,
-                    note=f"legacy order #{order.id}",
-                ))
+            if inv and qty > 0:
+                stock.give_back(inv, qty, reason=reason, user_id=uid,
+                                note=f"legacy order #{order.id}")
                 logger.info(f"Restored {qty}× '{item_name}' from legacy order {order.id}.")
 
 

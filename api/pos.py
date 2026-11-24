@@ -46,7 +46,7 @@ from models import (
     PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAYMENT_METHODS,
     ROLE_ADMIN, ROLE_SUPERUSER,
 )
-from services import audit_service, billing, loyalty_service, otp_service
+from services import audit_service, billing, loyalty_service, otp_service, stock
 from services.receipt_service import build_receipt
 from services.sms_service import SendSMS
 
@@ -474,7 +474,7 @@ def transaction_add_item(txn_id):
         unit_price=unit_price,
         discount=discount,
         line_total=line_total,
-        batch_number=item.batch_number,
+        batch_number=None,          # set at checkout from the batches actually taken
     )
     db.session.add(line)
     db.session.flush()
@@ -654,12 +654,15 @@ def transaction_complete(txn_id):
         if not item:
             continue
         units = _stock_units_for(li.quantity)
-        item.stock = max(int(item.stock or 0) - units, 0)
-        db.session.add(StockMovement(
-            item_id=item.id, item_name=item.name, delta=-units,
-            reason='sale', user_id=uid,
-            note=f'TXN {txn.transaction_ref}',
-        ))
+        try:
+            taken = stock.take(item, units, transaction_item=li, reason='sale', user_id=uid,
+                               note=f'TXN {txn.transaction_ref}')
+        except stock.StockError as e:
+            # Nothing is committed yet: no stock, invoice or payment changes.
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 409
+        li.batch_number = stock.batch_label(taken) if taken else li.batch_number
+        item = db.session.get(InventoryItem, li.inventory_item_id)
         # Low-stock alert
         if int(item.stock or 0) <= int(item.reorder_level or 0):
             try:
@@ -774,12 +777,8 @@ def transaction_void(txn_id):
             if not item:
                 continue
             units = _stock_units_for(li.quantity)
-            item.stock = int(item.stock or 0) + units
-            db.session.add(StockMovement(
-                item_id=item.id, item_name=item.name, delta=units,
-                reason='cancel', user_id=uid,
-                note=f'VOID {txn.transaction_ref}',
-            ))
+            stock.give_back(item, units, transaction_item=li, reason='cancel', user_id=uid,
+                            note=f'VOID {txn.transaction_ref}')
         # Reverse loyalty earned on the original sale
         if txn.customer_id:
             earned = (db.session.query(func.coalesce(func.sum(LoyaltyTransaction.points_earned), 0))
@@ -892,13 +891,9 @@ def transaction_refund(txn_id):
         if line.inventory_item_id:
             item = db.session.get(InventoryItem, line.inventory_item_id)
             if item:
-                units = _stock_units_for(qty)
-                item.stock = int(item.stock or 0) + units
-                db.session.add(StockMovement(
-                    item_id=item.id, item_name=item.name, delta=units,
-                    reason='refund', user_id=uid,
-                    note=f'REFUND {txn.transaction_ref}',
-                ))
+                stock.give_back(item, _stock_units_for(qty), transaction_item=line,
+                                reason='refund', user_id=uid,
+                                note=f'REFUND {txn.transaction_ref}')
     fully_refunded = all(Decimal(str(li.refunded_quantity or 0)) >= Decimal(str(li.quantity))
                          for li in txn.items)
 

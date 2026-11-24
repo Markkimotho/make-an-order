@@ -1,4 +1,6 @@
 """Tenant-owned models: every class here carries TenantMixin."""
+from decimal import Decimal
+
 from sqlalchemy.orm import validates
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -139,12 +141,33 @@ class InventoryItem(TenantMixin, db.Model):
     sku         = db.Column(db.String(50), nullable=True)
     barcode     = db.Column(db.String(64), nullable=True)
     reorder_level         = db.Column(db.Integer, default=5, nullable=False)
-    expiry_date           = db.Column(db.Date, nullable=True)
-    batch_number          = db.Column(db.String(64), nullable=True)
+    # Stock is held in batches (each with its own expiry) or, for sized
+    # goods, in variants; ``stock`` is their total, kept by services/stock.py.
+    has_variants          = db.Column(db.Boolean, default=False, nullable=False,
+                                      server_default=db.false())
     supplier_id           = db.Column(db.Integer, db.ForeignKey('suppliers.id', ondelete='SET NULL'), nullable=True)
     unit                  = db.Column(db.String(20), nullable=True, default='pcs')
     is_drug               = db.Column(db.Boolean, default=False, nullable=False)
     requires_prescription = db.Column(db.Boolean, default=False, nullable=False)
+
+    def _soonest_batch(self):
+        from models.stock import Batch
+        return (Batch.query.filter(Batch.inventory_item_id == self.id,
+                                   Batch.quantity_on_hand > 0)
+                .order_by(Batch.expiry_date.is_(None), Batch.expiry_date.asc(), Batch.id.asc())
+                .first())
+
+    @property
+    def expiry_date(self):
+        """Expiry of the batch that will be sold next (read-only)."""
+        batch = self._soonest_batch()
+        return batch.expiry_date if batch else None
+
+    @property
+    def batch_number(self):
+        """Number of the batch that will be sold next (read-only)."""
+        batch = self._soonest_batch()
+        return batch.batch_number if batch else None
 
     def to_dict(self):
         return {
@@ -164,6 +187,7 @@ class InventoryItem(TenantMixin, db.Model):
             'batch_number': self.batch_number,
             'supplier_id': self.supplier_id,
             'unit':        self.unit,
+            'has_variants': bool(self.has_variants),
             'is_drug':     self.is_drug,
             'requires_prescription': self.requires_prescription,
         }
@@ -492,6 +516,10 @@ class PurchaseOrder(TenantMixin, db.Model):
             'status':        self.status,
             'ordered_by':    self.ordered_by,
             'expected_date': self.expected_date.isoformat() if self.expected_date else None,
+            'expected_delivery_date': self.expected_date.isoformat() if self.expected_date else None,
+            'supplier_name': self.supplier.name if self.supplier_id and self.supplier else None,
+            'total':         float(sum((Decimal(str(i.quantity_ordered)) * Decimal(str(i.unit_cost))
+                                        for i in self.items), Decimal('0'))),
             'notes':         self.notes,
             'created_at':    self.created_at.isoformat() if self.created_at else None,
             'updated_at':    self.updated_at.isoformat() if self.updated_at else None,

@@ -7,7 +7,7 @@ import pytest
 from auth.tenancy import tenant_scope
 from models import (Customer, InventoryItem, Invoice, Payment, Transaction, TransactionItem,
                     db)
-from services import billing
+from services import billing, stock
 from tests.conftest import on_mysql
 
 D = Decimal
@@ -18,10 +18,12 @@ def till(app, login_as, monkeypatch):
     """A cashier with an open shift, an item at KES 100 (tax off)."""
     from config import Config
     monkeypatch.setattr(Config, "TAX_RATE", 0)
-    item = InventoryItem(name="Unga 2kg", price=D("100"), stock=50)
+    item = InventoryItem(name="Unga 2kg", price=D("100"))
     duka = Customer(name="Duka Mosi", phone_number="0712000333", code="DUKA",
                     credit_limit=D("500"))
     db.session.add_all([item, duka])
+    db.session.flush()
+    stock.receive(item, 50)
     db.session.commit()
     ids = {"item": item.id, "duka": duka.id}   # read before any request empties the session
     client = login_as("cashier")

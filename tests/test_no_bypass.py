@@ -155,3 +155,61 @@ def test_the_scanner_catches_what_it_should(tmp_path):
     for needle in ("merge()", "from_statement()", "'tenancy_internal'"):
         assert needle in flagged, needle
     assert finder.unscoped == [("sample.py", "leak", 14)]
+
+
+# --- stock has one writer -----------------------------------------------------
+
+STOCK_FIELDS = {"stock", "quantity_on_hand"}
+STOCK_MODELS = {"InventoryItem", "Batch", "ItemVariant"}
+STOCK_WRITER = "services/stock.py"
+
+
+def stock_writes(tree, rel):
+    """Assignments to .stock / .quantity_on_hand, and those fields passed to
+    a stock model's constructor."""
+    found = []
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        for target in targets:
+            for t in ast.walk(target):
+                if isinstance(t, ast.Attribute) and t.attr in STOCK_FIELDS:
+                    found.append(f"{rel}:{node.lineno} .{t.attr} =")
+        if isinstance(node, ast.Call) and call_name(node) in STOCK_MODELS:
+            for kw in node.keywords:
+                if kw.arg in STOCK_FIELDS:
+                    found.append(f"{rel}:{node.lineno} {call_name(node)}({kw.arg}=)")
+        if (isinstance(node, ast.Call) and call_name(node) == "setattr" and len(node.args) > 1
+                and isinstance(node.args[1], ast.Constant) and node.args[1].value in STOCK_FIELDS):
+            found.append(f"{rel}:{node.lineno} setattr(..., {node.args[1].value!r})")
+    return found
+
+
+def test_only_the_stock_service_writes_stock():
+    found = []
+    for path in python_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == STOCK_WRITER:
+            continue
+        found += stock_writes(ast.parse(path.read_text(), filename=rel), rel)
+    assert found == [], ("stock changes go through services/stock.py (receive, take, "
+                         "give_back, adjust):\n  " + "\n  ".join(found))
+
+
+def test_the_stock_scanner_catches_what_it_should():
+    sample = (
+        "item.stock = 5\n"
+        "item.stock -= qty\n"
+        "batch.quantity_on_hand += 1\n"
+        "a.stock, b = 1, 2\n"
+        "InventoryItem(name='x', stock=3)\n"
+        "Batch(quantity_on_hand=1)\n"
+        "setattr(item, 'stock', 0)\n"
+        "dict(stock=3)\n"                  # plain data: allowed
+        "x = item.stock\n"                  # reading: allowed
+    )
+    found = stock_writes(ast.parse(sample), "sample.py")
+    assert [f.split(" ", 1)[0] for f in found] == [f"sample.py:{n}" for n in range(1, 8)]
