@@ -13,6 +13,11 @@ class Config:
     # Base URL for generating absolute URLs (e.g., for OAuth redirects)
     APP_URL = os.environ.get("APP_URL", "http://localhost:5001")
 
+    # Number of reverse-proxy hops to trust for X-Forwarded-For / -Proto.
+    # Heroku's router is 1. Add one per CDN/WAF placed in front of it.
+    PROXY_FIX_X_FOR   = int(os.environ.get("PROXY_FIX_X_FOR", "1"))
+    PROXY_FIX_X_PROTO = int(os.environ.get("PROXY_FIX_X_PROTO", "1"))
+
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 

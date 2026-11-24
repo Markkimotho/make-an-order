@@ -336,7 +336,8 @@ All external HTTP calls go through one of these symbols:
 - `services.mpesa_service.requests.get` / `.post`
 - `services.mpesa_service.get_access_token` (cached; patch to skip OAuth)
 - `services.flutterwave_service.requests.get` / `.post`
-- `services.sms_service.sms.send`
+- `services.sms_service._client` (returns the Africa's Talking SMS client, or `None`
+  when unconfigured; patch it to return a fake with a `send` method)
 
 Patch those with `pytest-mock` in tests so the suite never hits the network
 and never needs real credentials.

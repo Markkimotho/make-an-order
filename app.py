@@ -1,169 +1,43 @@
-from flask import Flask, request, Response, render_template, redirect, url_for, session, jsonify
-from config import Config
-from models import db, Customer, Order, OrderItem, StockMovement, SystemConfig
-from api.customers import customers_bp
-from api.orders import orders_bp
-from api.inventory import inventory_bp
-from api.users import users_bp
-from api.reports import reports_bp
-from api.pos import pos_bp
-from api.payments import payments_bp
-from api.pharmacy import pharmacy_bp
-from services.database_service import create_database
-from services.seed_service import seed_inventory
-from authlib.integrations.flask_client import OAuth # type: ignore
-from flask_migrate import Migrate
-from datetime import timedelta
-from dotenv import load_dotenv
-from auth.auth_routes import create_auth_blueprint
-from auth.auth_middleware import login_required, admin_required, superuser_required
-from auth.auth_middleware import (
-    cashier_required, pharmacist_required, stock_clerk_required,
-)
-import os
+"""Application factory.
+
+``create_app()`` builds a fully wired Flask app. Importing this module, or
+calling the factory, performs no database, Redis or Africa's Talking I/O:
+the schema is owned by Alembic (``flask db upgrade``), and a local MySQL
+database is created on demand with ``flask create-db``.
+
+``app = create_app()`` at the bottom is what gunicorn loads (``Procfile``).
+"""
 import logging
+import os
+from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 
-# dotenv setup
+import click
+from authlib.integrations.flask_client import OAuth  # type: ignore
+from dotenv import load_dotenv
+from flask import (Flask, Response, jsonify, redirect, render_template, request,
+                   session, url_for)
+from flask_migrate import Migrate
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from api.customers import customers_bp
+from api.inventory import inventory_bp
+from api.orders import orders_bp
+from api.payments import payments_bp
+from api.pharmacy import pharmacy_bp
+from api.pos import pos_bp
+from api.reports import reports_bp
+from api.users import users_bp
+from auth.auth_middleware import (admin_required, cashier_required,
+                                  login_required, pharmacist_required,
+                                  stock_clerk_required)
+from auth.auth_routes import create_auth_blueprint
+from config import Config
+from models import Customer, Order, SystemConfig, db
+
 load_dotenv()
 
-app = Flask(__name__)
-app.config.from_object(Config)
-
-app.secret_key = os.getenv("APP_SECRET_KEY")
-app.config['SESSION_COOKIE_NAME'] = 'google-login-session'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
-
-# Handle proxy (for HTTPS behind reverse proxy like Nginx/Heroku)
-# This tells Flask to trust X-Forwarded-Proto header
-app.config['PREFERRED_URL_SCHEME'] = 'https' if os.getenv("APP_URL", "").startswith("https") else 'http'
-# For production deployments behind a proxy, uncomment this:
-# from werkzeug.middleware.proxy_fix import ProxyFix
-# app = ProxyFix(app, x_for=1, x_proto=1, x_host=1, x_port=1)
-
-# Configure logging
-if not app.debug:
-    if not os.path.exists('logs'):
-        os.mkdir('logs')
-    file_handler = RotatingFileHandler('logs/make-an-order.log', maxBytes=10240, backupCount=10)
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
-    file_handler.setLevel(logging.INFO)
-    app.logger.addHandler(file_handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.info('Make-An-Order startup')
-else:
-    # For debug mode, log to console
-    logging.basicConfig(level=logging.DEBUG)
-
-
-# Create the database if it doesn't exist (only for local dev, skipped for prod DB)
-import sys; print("[app.py] calling create_database...", flush=True)
-create_database()
-print("[app.py] create_database done, init_app...", flush=True)
-
-# Initialize the database
-db.init_app(app)
-migrate = Migrate(app, db)
-
-def migrate_schema():
-    """Add new columns to existing tables without dropping data.
-
-    This is a lightweight in-process migrator kept from the original project
-    so that `python app.py` still produces a working DB on first run.
-    For schema changes going forward prefer Flask-Migrate (Alembic):
-
-        flask db init        # one-off
-        flask db migrate -m "add pos models"
-        flask db upgrade
-    """
-    from sqlalchemy import text, inspect as sa_inspect
-    inspector = sa_inspect(db.engine)
-
-    def add_missing_columns(table, additions):
-        if not inspector.has_table(table):
-            return
-        existing = {c['name'] for c in inspector.get_columns(table)}
-        stmts = [sql for col, sql in additions if col not in existing]
-        if stmts:
-            with db.engine.begin() as conn:
-                for sql in stmts:
-                    conn.execute(text(sql))
-            print(f"[app.py] migrated {table}: {stmts}", flush=True)
-
-    add_missing_columns('users', [
-        ('phone_number',  "ALTER TABLE users ADD COLUMN phone_number VARCHAR(20) NULL"),
-        ('status',        "ALTER TABLE users ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending'"),
-        ('password_hash', "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL"),
-    ])
-
-    add_missing_columns('customers', [
-        ('email',          "ALTER TABLE customers ADD COLUMN email VARCHAR(255) NULL"),
-        ('loyalty_points', "ALTER TABLE customers ADD COLUMN loyalty_points INT NOT NULL DEFAULT 0"),
-        ('credit_limit',   "ALTER TABLE customers ADD COLUMN credit_limit DECIMAL(12,2) NOT NULL DEFAULT 0"),
-        ('credit_balance', "ALTER TABLE customers ADD COLUMN credit_balance DECIMAL(12,2) NOT NULL DEFAULT 0"),
-        ('customer_type',  "ALTER TABLE customers ADD COLUMN customer_type VARCHAR(20) NOT NULL DEFAULT 'retail'"),
-        ('created_at',     "ALTER TABLE customers ADD COLUMN created_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP"),
-    ])
-
-    add_missing_columns('orders', [
-        ('status',            "ALTER TABLE orders ADD COLUMN `status` VARCHAR(20) NOT NULL DEFAULT 'pending'"),
-        ('payment_method',    "ALTER TABLE orders ADD COLUMN payment_method VARCHAR(20) NULL"),
-        ('payment_reference', "ALTER TABLE orders ADD COLUMN payment_reference VARCHAR(100) NULL"),
-    ])
-
-    add_missing_columns('inventory_items', [
-        ('sku',                   "ALTER TABLE inventory_items ADD COLUMN sku VARCHAR(50) NULL"),
-        ('barcode',               "ALTER TABLE inventory_items ADD COLUMN barcode VARCHAR(64) NULL"),
-        ('cost_price',            "ALTER TABLE inventory_items ADD COLUMN cost_price DECIMAL(12,2) NULL"),
-        ('reorder_level',         "ALTER TABLE inventory_items ADD COLUMN reorder_level INT NOT NULL DEFAULT 5"),
-        ('expiry_date',           "ALTER TABLE inventory_items ADD COLUMN expiry_date DATE NULL"),
-        ('batch_number',          "ALTER TABLE inventory_items ADD COLUMN batch_number VARCHAR(64) NULL"),
-        ('supplier_id',           "ALTER TABLE inventory_items ADD COLUMN supplier_id INT NULL"),
-        ('category_id',           "ALTER TABLE inventory_items ADD COLUMN category_id INT NULL"),
-        ('unit',                  "ALTER TABLE inventory_items ADD COLUMN unit VARCHAR(20) NULL DEFAULT 'pcs'"),
-        ('is_drug',               "ALTER TABLE inventory_items ADD COLUMN is_drug TINYINT(1) NOT NULL DEFAULT 0"),
-        ('requires_prescription', "ALTER TABLE inventory_items ADD COLUMN requires_prescription TINYINT(1) NOT NULL DEFAULT 0"),
-    ])
-
-with app.app_context():
-    print("[app.py] db.create_all()...", flush=True)
-    db.create_all()
-    migrate_schema()
-    print("[app.py] seeding...", flush=True)
-    seed_inventory(SystemConfig.get('business_type') or 'general')
-    print("[app.py] startup complete", flush=True)
-
-# OAuth Setup
-oauth = OAuth(app)
-# Construct the redirect URI that matches what's registered in Google Console
-app_url = os.getenv("APP_URL", "http://localhost:5001").rstrip('/')
-redirect_uri = f"{app_url}/auth/authorize"
-
-google = oauth.register(
-    name='google',
-    client_id=os.getenv("GOOGLE_CLIENT_ID"),
-    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-    access_token_url='https://accounts.google.com/o/oauth2/token',
-    authorize_url='https://accounts.google.com/o/oauth2/auth',
-    api_base_url='https://www.googleapis.com/oauth2/v1/',
-    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
-    client_kwargs={'scope': 'email profile'},
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration'
-)
-
-app.logger.info(f"OAuth redirect_uri configured: {redirect_uri}")
-
-# Register the endpoint blueprints
-app.register_blueprint(customers_bp, url_prefix='/customers')
-app.register_blueprint(orders_bp, url_prefix='/orders')
-app.register_blueprint(inventory_bp, url_prefix='/inventory')
-app.register_blueprint(users_bp, url_prefix='/users')
-app.register_blueprint(reports_bp, url_prefix='/reports')
-app.register_blueprint(pos_bp, url_prefix='/pos')
-app.register_blueprint(payments_bp, url_prefix='/payments')
-app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
-app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
+migrate = Migrate()
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +115,6 @@ def _get_business_type():
         return None
 
 
-# ---------------------------------------------------------------------------
-# User context helper
-# ---------------------------------------------------------------------------
 def get_user_context():
     btype    = _get_business_type()
     features = BUSINESS_CONFIGS.get(btype or 'general',
@@ -271,9 +142,6 @@ def get_user_context():
     return {**base, 'user_email': '', 'user_name': '', 'user_role': 'guest'}
 
 
-# ---------------------------------------------------------------------------
-# Onboarding gate
-# ---------------------------------------------------------------------------
 _ONBOARDING_EXEMPT = frozenset({
     'static', 'onboarding', 'onboarding_save',
     'index', 'logout', 'login_page', 'register_page',
@@ -283,135 +151,95 @@ _API_PREFIXES = ('/pos/', '/payments/', '/pharmacy/', '/inventory/',
                  '/auth/', '/static/')
 
 
-@app.before_request
-def check_onboarding():
-    """Send superuser/admin to /onboarding when business type is not yet set."""
-    if request.endpoint in _ONBOARDING_EXEMPT or request.endpoint is None:
-        return
-    if any(request.path.startswith(p) for p in _API_PREFIXES):
-        return
-    if session.get('role') in ('superuser', 'admin'):
-        try:
-            if SystemConfig.get('business_type') is None:
-                return redirect(url_for('onboarding'))
-        except Exception:
-            pass
-
-
 # ---------------------------------------------------------------------------
-# Onboarding route
+# Factory
 # ---------------------------------------------------------------------------
-@app.route('/onboarding', methods=['GET', 'POST'])
-def onboarding():
-    """First-run (and re-run) business-type selection.
+def create_app(config_override=None):
+    """Build the app. ``config_override`` keys win over ``Config``."""
+    app = Flask(__name__)
+    app.config.from_object(Config)
+    app.config['SESSION_COOKIE_NAME'] = 'google-login-session'
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
+    app.config['PREFERRED_URL_SCHEME'] = (
+        'https' if os.getenv("APP_URL", "").startswith("https") else 'http')
+    if config_override:
+        app.config.update(config_override)
 
-    GET  — show the selector (redirect to dashboard if already configured
-            and not superuser requesting a change).
-    POST — save the selection and re-seed inventory if empty.
-    """
-    if request.method == 'POST':
-        if 'profile' not in session:
-            return redirect(url_for('index'))
-        btype = request.form.get('business_type', '').strip()
-        bname = request.form.get('business_name', '').strip()
-        if btype not in BUSINESS_CONFIGS:
-            ctx = get_user_context()
-            ctx['error'] = 'Please select a valid business type.'
-            return render_template('onboarding.html', **ctx)
-        SystemConfig.set_value('business_type', btype)
-        if bname:
-            SystemConfig.set_value('business_name', bname)
-        db.session.commit()
-        # Seed type-appropriate inventory on first setup only
-        from services.seed_service import seed_inventory
-        seed_inventory(btype)
-        app.logger.info(f"Business configured as '{btype}' by {session.get('profile', {}).get('email')}")
-        return redirect(url_for('dashboard'))
+    # Trust exactly the configured number of proxy hops (Heroku's router is 1),
+    # so request.remote_addr is the real client, not the router.
+    app.wsgi_app = ProxyFix(app.wsgi_app,
+                            x_for=int(app.config['PROXY_FIX_X_FOR']),
+                            x_proto=int(app.config['PROXY_FIX_X_PROTO']))
 
-    # GET — if already configured, only superuser may access for changes
-    ctx = get_user_context()
-    if _get_business_type() and session.get('role') not in ('superuser', 'admin'):
-        return redirect(url_for('dashboard'))
-    return render_template('onboarding.html', **ctx)
+    _configure_logging(app)
 
+    db.init_app(app)
+    migrate.init_app(app, db)
 
-# --- Frontend Routes ---
-@app.route('/')
-def index():
-    if 'profile' in session:
-        return redirect(url_for('dashboard')) # Redirect to dashboard if logged in
-    return render_template('landing.html') # Landing page gateway
+    oauth = _register_oauth(app)
+    app.register_blueprint(customers_bp, url_prefix='/customers')
+    app.register_blueprint(orders_bp, url_prefix='/orders')
+    app.register_blueprint(inventory_bp, url_prefix='/inventory')
+    app.register_blueprint(users_bp, url_prefix='/users')
+    app.register_blueprint(reports_bp, url_prefix='/reports')
+    app.register_blueprint(pos_bp, url_prefix='/pos')
+    app.register_blueprint(payments_bp, url_prefix='/payments')
+    app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
+    app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
+
+    _register_core_routes(app)
+    _register_cli(app)
+    return app
 
 
-# --- Top-level logout ---
-# The auth blueprint also exposes /auth/logout; this convenience alias works
-# whether the user signed in via Google OAuth or email/password and also
-# clears any customer-side session keys.
-@app.route('/logout')
-def logout():
-    user_email = (session.get('profile') or {}).get('email') or 'unknown'
-    session.clear()
-    app.logger.info(f"User {user_email} logged out.")
-    return redirect(url_for('index'))
+def _configure_logging(app):
+    if app.testing:
+        return
+    if app.debug:
+        logging.basicConfig(level=logging.DEBUG)
+        return
+    if any(isinstance(h, RotatingFileHandler) for h in app.logger.handlers):
+        return
+    os.makedirs('logs', exist_ok=True)
+    handler = RotatingFileHandler('logs/make-an-order.log', maxBytes=10240, backupCount=10)
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+    handler.setLevel(logging.INFO)
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Make-An-Order startup')
 
 
-# /role-select kept as a redirect for any old bookmarks
-@app.route('/role-select')
-def role_select():
-    if 'profile' in session:
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login_page'))
+def _register_oauth(app):
+    """Register Google OAuth. Metadata is fetched lazily on first login."""
+    oauth = OAuth(app)
+    app_url = os.getenv("APP_URL", "http://localhost:5001").rstrip('/')
+    oauth.register(
+        name='google',
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        access_token_url='https://accounts.google.com/o/oauth2/token',
+        authorize_url='https://accounts.google.com/o/oauth2/auth',
+        api_base_url='https://www.googleapis.com/oauth2/v1/',
+        userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
+        client_kwargs={'scope': 'email profile'},
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    )
+    app.logger.info(f"OAuth redirect_uri configured: {app_url}/auth/authorize")
+    return oauth
 
 
-@app.route('/login')
-def login_page():
-    if 'profile' in session:
-        return redirect(url_for('dashboard'))
-    return render_template('index.html')  # Business operator login
+def _register_cli(app):
+    @app.cli.command('create-db')
+    def create_db_command():
+        """Create the local MySQL database if missing (not for JawsDB)."""
+        from services.database_service import create_database
+        create_database()
+        click.echo('Database checked/created. Next: flask db upgrade')
 
 
-@app.route('/register')
-def register_page():
-    if 'profile' in session:
-        return redirect(url_for('dashboard'))
-    return render_template('register.html') # Registration form page (for operators)
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    return render_template('dashboard.html', **get_user_context())
-
-@app.route('/customers-ui')
-@admin_required
-def customers_page():
-    return render_template('customers.html', **get_user_context())
-
-@app.route('/orders-ui')
-@admin_required
-def orders_page():
-    return render_template('orders.html', **get_user_context())
-
-@app.route('/inventory-ui')
-@login_required
-def inventory_page():
-    return render_template('inventory.html', **get_user_context())
-
-
-@app.route('/users-ui')
-@admin_required
-def users_page():
-    return render_template('users.html', **get_user_context())
-
-@app.route('/reports-ui')
-@admin_required
-def reports_page():
-    return render_template('reports.html', **get_user_context())
-
-
-# --- POS UI page routes (templates land in Phase 4) ---
 def _safe_render(template, **ctx):
-    """Render template; if missing, return a minimal placeholder.
-    Lets us land Phase-3 routes before Phase-4 templates exist."""
+    """Render template; if missing, return a minimal placeholder."""
     from jinja2 import TemplateNotFound
     try:
         return render_template(template, **ctx)
@@ -424,119 +252,211 @@ def _safe_render(template, **ctx):
                                **ctx), 200
 
 
-@app.route('/pos-ui')
-@cashier_required
-def pos_page():
-    return _safe_render('pos.html', **get_user_context())
+def _register_core_routes(app):
+    """Page routes, onboarding gate, error handlers and SMS webhooks.
 
-
-@app.route('/shift-ui')
-@cashier_required
-def shift_page():
-    return _safe_render('shift.html', **get_user_context())
-
-
-@app.route('/pharmacy-ui')
-@pharmacist_required
-def pharmacy_page():
-    return _safe_render('pharmacy.html', **get_user_context())
-
-
-@app.route('/purchase-orders-ui')
-@stock_clerk_required
-def purchase_orders_page():
-    return _safe_render('purchase_orders.html', **get_user_context())
-
-
-@app.route('/reports-dashboard')
-@admin_required
-def reports_dashboard_page():
-    return _safe_render('reports_dashboard.html', **get_user_context())
-
-@app.route('/orders/<int:order_id>/receipt')
-@admin_required
-def order_receipt_page(order_id):
-    order = db.session.get(Order, order_id)
-    if not order:
-        return render_template('404.html', message="Order not found"), 404
-    return render_template('receipt.html', order=order, **get_user_context())
-
-
-# --- Customer Detail/Edit Pages ---
-@app.route('/customers/<int:customer_id>')
-@admin_required
-def customer_detail_page(customer_id):
-    customer = db.session.get(Customer, customer_id)
-    if not customer:
-        return render_template('404.html', message="Customer not found"), 404
-    return render_template('customer_detail.html', customer=customer, **get_user_context())
-
-@app.route('/customers/<int:customer_id>/edit')
-@admin_required
-def customer_edit_page(customer_id):
-    customer = db.session.get(Customer, customer_id)
-    if not customer:
-        return render_template('404.html', message="Customer not found"), 404
-    return render_template('customer_edit.html', customer=customer, **get_user_context())
-
-# --- Order Edit Page ---
-@app.route('/orders/<int:order_id>/edit')
-@admin_required
-def order_edit_page(order_id):
-    order = db.session.get(Order, order_id)
-    if not order:
-        return render_template('404.html', message="Order not found"), 404
-    return render_template('order_edit.html', order=order, **get_user_context())
-
-
-# --- Centralized Error Handlers ---
-@app.errorhandler(400)
-def bad_request_error(error):
-    app.logger.error(f"Bad Request: {request.url} - {str(error)}")
-    return jsonify({"error": "Bad Request", "message": str(error)}), 400
-
-@app.errorhandler(401)
-def unauthorized_error(error):
-    app.logger.warning(f"Unauthorized Access: {request.url}")
-    return jsonify({"error": "Unauthorized", "message": "Authentication required or invalid credentials"}), 401
-
-@app.errorhandler(404)
-def not_found_error(error):
-    app.logger.warning(f"Not Found: {request.url}")
-    # Render a more user-friendly 404 page for UI
-    return render_template('404.html', message="The page you are looking for does not exist."), 404
-
-@app.errorhandler(500)
-def internal_server_error(error):
-    app.logger.exception(f"Internal Server Error: {request.url}") # Logs traceback
-    return jsonify({"error": "Internal Server Error", "message": "An unexpected error occurred."}), 500
-
-
-# Route to handle incoming messages
-@app.route('/incoming-messages', methods=['POST'])
-def incoming_messages():
+    Endpoint names are the function names, unchanged from the pre-factory
+    module, because templates resolve them with ``url_for``.
     """
-    This route handles incoming messages sent to your shortcode.
-    Africa's Talking will send POST requests to this URL.
-    """
-    data = request.get_json(force=True)  # Get the incoming message data
-    app.logger.info(f'Incoming message: {data}') # Use app.logger
 
-    # Handle the incoming message here if needed, e.g., respond to the user or log it
-    return Response(status=200)  # Return 200 OK to acknowledge receipt
+    @app.before_request
+    def check_onboarding():
+        """Send superuser/admin to /onboarding when business type is not yet set."""
+        if request.endpoint in _ONBOARDING_EXEMPT or request.endpoint is None:
+            return
+        if any(request.path.startswith(p) for p in _API_PREFIXES):
+            return
+        if session.get('role') in ('superuser', 'admin'):
+            try:
+                if SystemConfig.get('business_type') is None:
+                    return redirect(url_for('onboarding'))
+            except Exception:
+                pass
 
-# Route to handle delivery reports
-@app.route('/delivery-reports', methods=['POST'])
-def delivery_reports():
-    """
-    This route handles the delivery reports for messages sent.
-    Africa's Talking will send POST requests with delivery status updates.
-    """
-    data = request.get_json(force=True)
-    app.logger.info(f'Delivery report: {data}') # Use app.logger
+    @app.route('/onboarding', methods=['GET', 'POST'])
+    def onboarding():
+        """First-run (and re-run) business-type selection."""
+        if request.method == 'POST':
+            if 'profile' not in session:
+                return redirect(url_for('index'))
+            btype = request.form.get('business_type', '').strip()
+            bname = request.form.get('business_name', '').strip()
+            if btype not in BUSINESS_CONFIGS:
+                ctx = get_user_context()
+                ctx['error'] = 'Please select a valid business type.'
+                return render_template('onboarding.html', **ctx)
+            SystemConfig.set_value('business_type', btype)
+            if bname:
+                SystemConfig.set_value('business_name', bname)
+            db.session.commit()
+            from services.seed_service import seed_inventory
+            seed_inventory(btype)
+            app.logger.info(f"Business configured as '{btype}' by "
+                            f"{session.get('profile', {}).get('email')}")
+            return redirect(url_for('dashboard'))
 
-    # Handle the delivery report here, e.g., log the delivery status or update the database
-    return Response(status=200)  # Return 200 OK to acknowledge receipt
+        ctx = get_user_context()
+        if _get_business_type() and session.get('role') not in ('superuser', 'admin'):
+            return redirect(url_for('dashboard'))
+        return render_template('onboarding.html', **ctx)
+
+    @app.route('/')
+    def index():
+        if 'profile' in session:
+            return redirect(url_for('dashboard'))
+        return render_template('landing.html')
+
+    @app.route('/logout')
+    def logout():
+        user_email = (session.get('profile') or {}).get('email') or 'unknown'
+        session.clear()
+        app.logger.info(f"User {user_email} logged out.")
+        return redirect(url_for('index'))
+
+    @app.route('/role-select')
+    def role_select():
+        if 'profile' in session:
+            return redirect(url_for('dashboard'))
+        return redirect(url_for('login_page'))
+
+    @app.route('/login')
+    def login_page():
+        if 'profile' in session:
+            return redirect(url_for('dashboard'))
+        return render_template('index.html')
+
+    @app.route('/register')
+    def register_page():
+        if 'profile' in session:
+            return redirect(url_for('dashboard'))
+        return render_template('register.html')
+
+    @app.route('/dashboard')
+    @login_required
+    def dashboard():
+        return render_template('dashboard.html', **get_user_context())
+
+    @app.route('/customers-ui')
+    @admin_required
+    def customers_page():
+        return render_template('customers.html', **get_user_context())
+
+    @app.route('/orders-ui')
+    @admin_required
+    def orders_page():
+        return render_template('orders.html', **get_user_context())
+
+    @app.route('/inventory-ui')
+    @login_required
+    def inventory_page():
+        return render_template('inventory.html', **get_user_context())
+
+    @app.route('/users-ui')
+    @admin_required
+    def users_page():
+        return render_template('users.html', **get_user_context())
+
+    @app.route('/reports-ui')
+    @admin_required
+    def reports_page():
+        return render_template('reports.html', **get_user_context())
+
+    @app.route('/pos-ui')
+    @cashier_required
+    def pos_page():
+        return _safe_render('pos.html', **get_user_context())
+
+    @app.route('/shift-ui')
+    @cashier_required
+    def shift_page():
+        return _safe_render('shift.html', **get_user_context())
+
+    @app.route('/pharmacy-ui')
+    @pharmacist_required
+    def pharmacy_page():
+        return _safe_render('pharmacy.html', **get_user_context())
+
+    @app.route('/purchase-orders-ui')
+    @stock_clerk_required
+    def purchase_orders_page():
+        return _safe_render('purchase_orders.html', **get_user_context())
+
+    @app.route('/reports-dashboard')
+    @admin_required
+    def reports_dashboard_page():
+        return _safe_render('reports_dashboard.html', **get_user_context())
+
+    @app.route('/orders/<int:order_id>/receipt')
+    @admin_required
+    def order_receipt_page(order_id):
+        order = db.session.get(Order, order_id)
+        if not order:
+            return render_template('404.html', message="Order not found"), 404
+        return render_template('receipt.html', order=order, **get_user_context())
+
+    @app.route('/customers/<int:customer_id>')
+    @admin_required
+    def customer_detail_page(customer_id):
+        customer = db.session.get(Customer, customer_id)
+        if not customer:
+            return render_template('404.html', message="Customer not found"), 404
+        return render_template('customer_detail.html', customer=customer, **get_user_context())
+
+    @app.route('/customers/<int:customer_id>/edit')
+    @admin_required
+    def customer_edit_page(customer_id):
+        customer = db.session.get(Customer, customer_id)
+        if not customer:
+            return render_template('404.html', message="Customer not found"), 404
+        return render_template('customer_edit.html', customer=customer, **get_user_context())
+
+    @app.route('/orders/<int:order_id>/edit')
+    @admin_required
+    def order_edit_page(order_id):
+        order = db.session.get(Order, order_id)
+        if not order:
+            return render_template('404.html', message="Order not found"), 404
+        return render_template('order_edit.html', order=order, **get_user_context())
+
+    @app.errorhandler(400)
+    def bad_request_error(error):
+        app.logger.error(f"Bad Request: {request.url} - {str(error)}")
+        return jsonify({"error": "Bad Request", "message": str(error)}), 400
+
+    @app.errorhandler(401)
+    def unauthorized_error(error):
+        app.logger.warning(f"Unauthorized Access: {request.url}")
+        return jsonify({"error": "Unauthorized",
+                        "message": "Authentication required or invalid credentials"}), 401
+
+    @app.errorhandler(404)
+    def not_found_error(error):
+        app.logger.warning(f"Not Found: {request.url}")
+        return render_template('404.html',
+                               message="The page you are looking for does not exist."), 404
+
+    @app.errorhandler(500)
+    def internal_server_error(error):
+        app.logger.exception(f"Internal Server Error: {request.url}")
+        return jsonify({"error": "Internal Server Error",
+                        "message": "An unexpected error occurred."}), 500
+
+    @app.route('/incoming-messages', methods=['POST'])
+    def incoming_messages():
+        """Africa's Talking inbound SMS webhook."""
+        data = request.get_json(force=True)
+        app.logger.info(f'Incoming message: {data}')
+        return Response(status=200)
+
+    @app.route('/delivery-reports', methods=['POST'])
+    def delivery_reports():
+        """Africa's Talking delivery report webhook."""
+        data = request.get_json(force=True)
+        app.logger.info(f'Delivery report: {data}')
+        return Response(status=200)
+
+
+app = create_app()
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
