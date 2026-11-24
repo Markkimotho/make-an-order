@@ -33,7 +33,7 @@ python-dotenv==1.0.1
 redis==5.1.1
 requests==2.32.3
 schema==0.7.7
-SQLAlchemy==2.0.36
+SQLAlchemy==2.0.58
 typing_extensions==4.12.2
 urllib3==2.2.3
 Werkzeug==3.1.3

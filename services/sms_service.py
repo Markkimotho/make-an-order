@@ -1,18 +1,37 @@
 from config import Config
 import africastalking # type: ignore
 import logging
-# import time # Uncomment if implementing blocking in-request retry (not recommended)
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-username = Config.AT_USERNAME
-api_key = Config.AT_API_KEY
-sender_id = Config.AT_SENDER_ID
+# The SDK is initialised on first use, not at import: importing this module
+# must not need credentials or a network, so the app and tests can load
+# without Africa's Talking configured.
+_sms = None
+_initialised = False
 
-# Initialize Africa's Talking SDK
-africastalking.initialize(username, api_key)
-sms = africastalking.SMS
+
+def _client():
+    """Return the Africa's Talking SMS client, or None if it is unavailable.
+
+    Initialises once. Missing credentials or an SDK error give None (logged),
+    so callers degrade to "SMS not sent" instead of failing a checkout.
+    """
+    global _sms, _initialised
+    if _initialised:
+        return _sms
+    _initialised = True
+    username, api_key = Config.AT_USERNAME, Config.AT_API_KEY
+    if not username or not api_key:
+        logger.warning("SMS disabled: AT_USERNAME / AT_API_KEY not configured")
+        return None
+    try:
+        africastalking.initialize(username, api_key)
+        _sms = africastalking.SMS
+    except Exception as e:
+        logger.error("Africa's Talking initialisation failed: %s", e)
+        _sms = None
+    return _sms
 
 
 def _send(message: str, recipients):
@@ -27,6 +46,11 @@ def _send(message: str, recipients):
     if not recipients:
         logger.warning("SMS skipped — no recipients (msg=%r)", message[:60])
         return False
+    sms = _client()
+    if sms is None:
+        logger.warning("SMS not sent to %s: client unavailable", recipients)
+        return False
+    sender_id = Config.AT_SENDER_ID
     try:
         if sender_id:
             response = sms.send(message, recipients, sender_id)
