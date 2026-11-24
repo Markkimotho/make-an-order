@@ -220,16 +220,15 @@ class TestCustomerPosFields:
         c = Customer(name='New', phone_number='+254712345678', code='Z')
         db.session.add(c); db.session.commit()
         assert c.loyalty_points == 0
-        assert float(c.credit_balance) == 0.0
+        assert c.credit_term_days == 30
         assert c.customer_type == 'retail'
 
-    def test_credit_limit_balance(self, client):
+    def test_credit_limit_and_term(self, client):
         c = Customer(name='Credit', phone_number='+254712345678', code='CR',
-                     credit_limit=Decimal('10000'),
-                     credit_balance=Decimal('2500'))
+                     credit_limit=Decimal('10000'), credit_term_days=14)
         db.session.add(c); db.session.commit()
         assert float(c.credit_limit) == 10000.0
-        assert float(c.credit_balance) == 2500.0
+        assert c.credit_term_days == 14
 
 
 # --------------------------------------------------------------------------

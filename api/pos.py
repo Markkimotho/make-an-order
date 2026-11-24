@@ -30,8 +30,10 @@ import math
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
+from datetime import date
+
 from flask import Blueprint, jsonify, request, session
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from auth.auth_middleware import cashier_api_required
 from config import Config
@@ -44,7 +46,7 @@ from models import (
     PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAYMENT_METHODS,
     ROLE_ADMIN, ROLE_SUPERUSER,
 )
-from services import audit_service, loyalty_service, otp_service
+from services import audit_service, billing, loyalty_service, otp_service
 from services.receipt_service import build_receipt
 from services.sms_service import SendSMS
 
@@ -151,6 +153,14 @@ def _ensure_open_shift_or_403():
     if shift is None:
         return None, (jsonify({'error': 'No open shift. Open a shift first.'}), 403)
     return shift, None
+
+
+def _invoice_payments(invoice):
+    from models import Payment, PaymentAllocation
+    ids = [a.payment_id for a in PaymentAllocation.query.filter(
+        PaymentAllocation.invoice_id == invoice.id,
+        PaymentAllocation.voided_at.is_(None))]
+    return Payment.query.filter(Payment.id.in_(ids)).all() if ids else []
 
 
 def _txn_or_404(txn_id: int):
@@ -527,6 +537,7 @@ def transaction_complete(txn_id):
 
     _recalc_totals(txn)
     total = Decimal(str(txn.total))
+    cash_a = mpesa_a = card_a = Decimal('0')
 
     # Validate split amounts
     if method == PAY_SPLIT:
@@ -560,16 +571,31 @@ def transaction_complete(txn_id):
             return jsonify({'error': 'Prescription required for: ' + ', '.join(missing),
                             'requires_prescription': missing}), 403
 
-    # Credit pre-check
+    # ----- Payment checks (nothing is written until all of them pass) -----
     customer = db.session.get(Customer, txn.customer_id) if txn.customer_id else None
+    invoice = billing.open_invoice_for_transaction(txn.id)
+    paid_so_far = billing.money(invoice.amount_paid) if invoice else Decimal('0')
+    if invoice is not None and billing.money(invoice.total) != _q(total) and paid_so_far > 0:
+        return jsonify({'error': 'The cart changed after a payment was received; '
+                                 'void and start again'}), 409
+    if method == PAY_MPESA and (invoice is None or paid_so_far < _q(total)):
+        return jsonify({'error': 'M-Pesa payment not received yet',
+                        'invoice': invoice.to_dict() if invoice else None}), 409
+    if method == PAY_SPLIT and mpesa_a > 0 and paid_so_far < mpesa_a:
+        return jsonify({'error': f'M-Pesa part not received yet ({paid_so_far} of {mpesa_a})'}), 409
     if method == PAY_CREDIT:
         if customer is None:
             return jsonify({'error': 'credit payment requires a customer'}), 400
-        new_balance = Decimal(str(customer.credit_balance or 0)) + total
+        # Lock the customer so two credit sales cannot both pass the ceiling.
+        customer = db.session.execute(select(Customer).where(Customer.id == customer.id)
+                                      .with_for_update()
+                                      .execution_options(populate_existing=True)).scalar_one()
+        exposure = billing.customer_exposure(customer.id)
         limit = Decimal(str(customer.credit_limit or 0))
-        if new_balance > limit:
+        if exposure + _q(total) - paid_so_far > limit:
+            db.session.rollback()
             return jsonify({'error': f'Customer credit limit exceeded '
-                                      f'(limit {limit}, would be {new_balance})'}), 400
+                                     f'(limit {limit}, would be {exposure + _q(total)})'}), 400
 
     # ----- Mutate stock & log movements -----
     uid = _user_id()
@@ -597,9 +623,39 @@ def transaction_complete(txn_id):
             except Exception:
                 logger.warning('low-stock SMS failed', exc_info=True)
 
+    # ----- Invoice and payments -----
+    if invoice is None:
+        invoice = billing.create_invoice(
+            total=total, kind='credit' if method == PAY_CREDIT else 'sale',
+            customer_id=customer.id if customer else None, transaction_id=txn.id)
+    elif billing.money(invoice.total) != _q(total):
+        invoice.total = _q(total)          # cart edited after an unpaid STK attempt
+        billing.recompute(invoice)
+    if method == PAY_CREDIT:
+        invoice.kind = 'credit'
+        invoice.customer_id = customer.id
+        invoice.due_date = billing.credit_due_date(customer, date.today())
+    customer_id = customer.id if customer else None
+    to_record = []
+    if method in (PAY_CASH, PAY_CARD):
+        to_record.append((method, None))
+    elif method == PAY_SPLIT:
+        to_record += [(PAY_CASH, cash_a), (PAY_CARD, card_a)]
+    for pay_method, amount in to_record:
+        invoice = billing.recompute(invoice)
+        amount = invoice.balance if amount is None else min(amount, invoice.balance)
+        if amount > 0:
+            billing.record_payment(method=pay_method, amount=amount, invoice=invoice,
+                                   customer_id=customer_id, recorded_by=_user_id())
+    invoice = billing.recompute(invoice)
+    if method != PAY_CREDIT and invoice.status != 'paid':
+        db.session.rollback()
+        return jsonify({'error': 'Payment does not cover the total'}), 409
+
     # ----- Update transaction header -----
     txn.payment_method = method
-    txn.mpesa_ref = (body.get('mpesa_ref') or txn.mpesa_ref)
+    receipts = [p.mpesa_receipt for p in _invoice_payments(invoice) if p.mpesa_receipt]
+    txn.mpesa_ref = receipts[0] if receipts else txn.mpesa_ref
     txn.card_ref  = (body.get('card_ref')  or txn.card_ref)
     txn.status    = TXN_COMPLETED
     txn.updated_at = datetime.utcnow()
@@ -610,10 +666,6 @@ def transaction_complete(txn_id):
             loyalty_service.award_points(customer.id, txn.id, total)
         except Exception:
             logger.warning('loyalty award failed', exc_info=True)
-
-    # ----- Credit balance update -----
-    if method == PAY_CREDIT and customer:
-        customer.credit_balance = _q(Decimal(str(customer.credit_balance or 0)) + total)
 
     audit_service.log(uid, 'transaction.complete', 'Transaction', txn.id,
                       None, {'total': float(total), 'method': method})
@@ -630,6 +682,7 @@ def transaction_complete(txn_id):
     return jsonify({
         'message': 'Transaction completed',
         'transaction': txn.to_dict(),
+        'invoice': invoice.to_dict(),
         'receipt': build_receipt(txn.id),
     }), 200
 
@@ -693,14 +746,13 @@ def transaction_void(txn_id):
                         balance_after=cust.loyalty_points,
                         note=f'reversal: void {txn.transaction_ref}',
                     ))
-        # Reverse credit balance
-        if txn.payment_method == PAY_CREDIT and txn.customer_id:
-            cust = db.session.get(Customer, txn.customer_id)
-            if cust:
-                cust.credit_balance = _q(max(
-                    Decimal(str(cust.credit_balance or 0)) - Decimal(str(txn.total or 0)),
-                    Decimal('0'),
-                ))
+
+    # The invoice goes too. Cash/card already taken is handed back; M-Pesa
+    # money (including an STK paid on a sale still open) becomes credit.
+    invoice = billing.open_invoice_for_transaction(txn.id)
+    if invoice is not None:
+        _, released = billing.void_invoice(invoice, uid, reason=reason, roll=False)
+        billing.settle_released(released, uid, note=f'VOID {txn.transaction_ref}')
 
     txn.status = TXN_VOIDED
     txn.notes = ((txn.notes or '') + f'\nVOID: {reason}').strip()
@@ -721,7 +773,7 @@ def transaction_refund(txn_id):
           "reason": "Defective" }
 
     Restocks the refunded units, reverses loyalty earned proportionally,
-    decrements credit_balance if originally a credit sale.
+    lowers the sale's invoice with a credit note (cash/card handed back, M-Pesa kept as credit).
     Marks the transaction ``refunded`` only when fully refunded;
     otherwise leaves it ``completed`` and records the partial refund in notes.
     """
@@ -797,12 +849,17 @@ def transaction_refund(txn_id):
                         note=f'reversal: refund {txn.transaction_ref}',
                     ))
 
-    # Credit reversal
-    if txn.payment_method == PAY_CREDIT and txn.customer_id and refunded_value > 0:
-        cust = db.session.get(Customer, txn.customer_id)
-        if cust:
-            cust.credit_balance = _q(max(
-                Decimal(str(cust.credit_balance or 0)) - refunded_value, Decimal('0')))
+    # Credit note on the sale's invoice. For a credit sale it lowers what is
+    # owed; money already paid above the new amount goes back (cash/card)
+    # or stays as the customer's credit (M-Pesa).
+    invoice = billing.open_invoice_for_transaction(txn.id)
+    if invoice is not None and refunded_value > 0:
+        still_invoiced = billing.money(invoice.total) - billing.money(invoice.amount_adjusted)
+        credit = min(refunded_value, still_invoiced)
+        if credit > 0:
+            _, released = billing.adjust(invoice, credit, 'return', note=reason, user_id=uid,
+                                         roll=False)
+            billing.settle_released(released, uid, note=f'REFUND {txn.transaction_ref}')
 
     txn.notes = ((txn.notes or '') +
                  f'\nREFUND {refunded_value} ({reason})').strip()

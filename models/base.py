@@ -73,6 +73,10 @@ class Tenant(db.Model):
     ppb_premises_license_expiry = db.Column(db.Date, nullable=True)
     superintendent_reg_no       = db.Column(db.String(64), nullable=True)
 
+    # Staff may type an M-Pesa code to close an invoice (until Daraja is live).
+    manual_mpesa_enabled = db.Column(db.Boolean, nullable=False, default=True,
+                                     server_default=db.true())
+
     created_at          = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
 
     @validates("vertical")
@@ -117,6 +121,7 @@ class Tenant(db.Model):
             "trial_ends_at": self.trial_ends_at.isoformat() if self.trial_ends_at else None,
             "ppb_premises_license": self.ppb_premises_license,
             "superintendent_reg_no": self.superintendent_reg_no,
+            "manual_mpesa_enabled": bool(self.manual_mpesa_enabled),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

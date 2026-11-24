@@ -2,6 +2,7 @@
 
 models.base   db, naming convention, Tenant, TenantMixin
 models.core   the tenant-owned business models
+models.billing invoices, payments, allocations, STK intents
 models.types  custom column types (EncryptedString)
 
 Importing this package installs the tenant-scoping session hooks
@@ -22,6 +23,12 @@ from models.core import (  # noqa: F401
     PrescriptionItem, PurchaseOrder, PurchaseOrderItem, Shift, StockMovement,
     Supplier, Transaction, TransactionItem, User,
 )
+from models.billing import (  # noqa: F401
+    ADJUSTMENT_REASONS, INTENT_STATUSES, INVOICE_KINDS, INVOICE_STATUSES,
+    MATCH_STATUSES, MPESA_METHODS, PAYMENT_STATUSES, Invoice, InvoiceAdjustment,
+    Payment, PaymentAllocation, PaymentIntent,
+)
+from models.billing import PAYMENT_METHODS as BILLING_PAYMENT_METHODS  # noqa: F401
 from models.types import EncryptedString, SecretsKeyMissing  # noqa: F401
 
 import auth.tenancy  # noqa: E402,F401  installs the session hooks

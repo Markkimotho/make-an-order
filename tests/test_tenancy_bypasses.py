@@ -372,7 +372,7 @@ def test_legacy_bulk_helpers_are_refused(ab, helper):
     """bulk_*_mappings and bulk_save_objects write without do_orm_execute or
     before_flush. A probe showed all three writing another tenant's rows."""
     row = {"name": "X", "phone_number": "254700000001", "code": "X", "tenant_id": ab["B"],
-           "loyalty_points": 0, "credit_limit": 0, "credit_balance": 0,
+           "loyalty_points": 0, "credit_limit": 0,
            "customer_type": "retail"}
     attempts = {
         "insert": lambda: db.session.bulk_insert_mappings(Customer, [row]),

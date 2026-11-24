@@ -184,7 +184,10 @@ class Customer(TenantMixin, db.Model):
     # POS extensions
     loyalty_points = db.Column(db.Integer, default=0, nullable=False)
     credit_limit   = db.Column(db.Numeric(12, 2), default=0, nullable=False)
-    credit_balance = db.Column(db.Numeric(12, 2), default=0, nullable=False)
+    # What the customer owes is the sum of their open invoices (services/
+    # billing), not a stored running balance, so it cannot drift.
+    credit_term_days = db.Column(db.Integer, default=30, nullable=False,
+                                 server_default='30')
     customer_type  = db.Column(db.String(20), default='retail', nullable=False)
     # 'retail' | 'wholesale' | 'vip'
     created_at     = db.Column(db.DateTime, server_default=db.func.now())
@@ -210,7 +213,7 @@ class Customer(TenantMixin, db.Model):
             'code':         self.code,
             'loyalty_points': self.loyalty_points,
             'credit_limit':   float(self.credit_limit or 0),
-            'credit_balance': float(self.credit_balance or 0),
+            'credit_term_days': self.credit_term_days,
             'customer_type':  self.customer_type,
         }
 

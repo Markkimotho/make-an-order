@@ -45,6 +45,12 @@ def alembic(action, revision):
     getattr(command, action)(config, revision)
 
 
+def head():
+    from alembic.script import ScriptDirectory
+    config = current_app.extensions["migrate"].migrate.get_config()
+    return ScriptDirectory.from_config(config).get_current_head()
+
+
 def version():
     return fetch("SELECT version_num FROM alembic_version")[0][0]
 
@@ -137,7 +143,7 @@ def test_upgrade_after_fixing_phones_succeeds(legacy):
     with db.engine.begin() as conn:
         conn.exec_driver_sql("UPDATE customers SET phone_number = '0712345678'")
     upgrade()
-    assert version() == "0003_tenants_contract"
+    assert version() == head()
     assert diff_against_models(legacy) == []
 
 
@@ -160,9 +166,9 @@ def test_uniques_are_per_tenant_after_upgrade(legacy):
     other = fetch("SELECT id FROM tenants WHERE slug = 'other'")[0][0]
     customers = sa.table("customers", *(sa.column(c) for c in (
         "tenant_id", "name", "phone_number", "code", "loyalty_points", "credit_limit",
-        "credit_balance", "customer_type")))
+        "customer_type")))
     row = {"name": "X", "phone_number": "254712345678", "code": "C0", "loyalty_points": 0,
-           "credit_limit": 0, "credit_balance": 0, "customer_type": "retail"}
+           "credit_limit": 0, "customer_type": "retail"}
     with db.engine.begin() as conn:
         conn.execute(customers.insert(), {**row, "tenant_id": other})   # same phone, other tenant
     with pytest.raises(sa.exc.IntegrityError):
@@ -207,7 +213,7 @@ def test_empty_staff_phones_become_null(legacy):
            {"email": "b@shop.co", "role": "cashier", "status": "approved",
             "phone_number": "  "})
     upgrade()
-    assert version() == "0003_tenants_contract"
+    assert version() == head()
     phones = dict(fetch("SELECT email, phone_number FROM users"))
     assert phones["a@shop.co"] is None and phones["b@shop.co"] is None
     assert diff_against_models(legacy) == []

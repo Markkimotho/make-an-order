@@ -196,6 +196,15 @@ def create_app(config_override=None):
     if config_override:
         app.config.update(config_override)
 
+    # MySQL defaults to REPEATABLE READ, where a transaction keeps reading the
+    # snapshot taken at its first read, even after waiting for a row lock.
+    # Billing locks a row and then reads (next invoice number, credit owed);
+    # READ COMMITTED makes those reads see what the lock holder committed.
+    if app.config['SQLALCHEMY_DATABASE_URI'].startswith('mysql'):
+        options = dict(app.config.get('SQLALCHEMY_ENGINE_OPTIONS') or {})
+        options.setdefault('isolation_level', 'READ COMMITTED')
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = options
+
     # Trust exactly the configured number of proxy hops (Heroku's router is 1),
     # so request.remote_addr is the real client, not the router.
     app.wsgi_app = ProxyFix(app.wsgi_app,

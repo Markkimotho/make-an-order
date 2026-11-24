@@ -47,7 +47,7 @@ def test_customer_to_dict(client):
         "code": "CUST003",
         "loyalty_points": 0,
         "credit_limit": 0.0,
-        "credit_balance": 0.0,
+        "credit_term_days": 30,
         "customer_type": "retail",
     }
 

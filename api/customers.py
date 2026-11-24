@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from auth.auth_middleware import (
     admin_api_required, superuser_api_required, cashier_api_required, login_required,
 )
-from services import audit_service, loyalty_service
+from services import audit_service, billing, loyalty_service
 from services.phone import InvalidPhone
 from decimal import Decimal
 import logging
@@ -230,37 +230,44 @@ def customer_loyalty_redeem(id):
 @customers_bp.route('/<int:id>/credit', methods=['GET'])
 @login_required
 def customer_credit(id):
-    """Customer credit summary: limit, balance, recent credit-paid transactions."""
+    """Credit summary: limit, what is owed on open credit invoices, available."""
+    from models import Invoice
     customer = db.session.get(Customer, id)
     if not customer:
         return jsonify({'error': 'Customer not found'}), 404
-    recent = (Transaction.query
-              .filter(Transaction.customer_id == id,
-                      Transaction.payment_method == 'credit')
-              .order_by(Transaction.created_at.desc()).limit(50).all())
+    exposure = billing.customer_exposure(customer.id)
+    limit = billing.money(customer.credit_limit)
+    open_invoices = (Invoice.query
+                     .filter(Invoice.customer_id == id,
+                             Invoice.status.in_(('open', 'partial')))
+                     .order_by(Invoice.issued_at.asc()).all())
     return jsonify({
         'customer_id': customer.id,
-        'credit_limit':   float(customer.credit_limit or 0),
-        'credit_balance': float(customer.credit_balance or 0),
-        'available':      float((customer.credit_limit or 0) - (customer.credit_balance or 0)),
-        'recent_credit_sales': [t.to_dict() for t in recent],
+        'credit_limit': float(limit),
+        'credit_term_days': customer.credit_term_days,
+        'owed': float(exposure),
+        'available': float(limit - exposure),
+        'open_invoices': [i.to_dict() for i in open_invoices],
     }), 200
 
 
 @customers_bp.route('/<int:id>/credit/payment', methods=['POST'])
 @cashier_api_required
 def customer_credit_payment(id):
-    """Record a payment against a customer's credit balance.
+    """Record money a credit customer brought in; it pays their oldest
+    invoices first, and anything over stays as their credit.
 
-    Body: ``{"amount": 500.00, "payment_method": "cash"|"mpesa"|"card",
-             "mpesa_ref": "..."}``.
+    Body: ``{"amount": 500.00, "payment_method": "cash"|"card"|"mpesa",
+             "mpesa_ref": "SJK82910PL"}``. An M-Pesa payment needs its code
+    and is recorded as a typed code, verified when Daraja reports it.
     """
+    from models import Tenant
     customer = db.session.get(Customer, id)
     if not customer:
         return jsonify({'error': 'Customer not found'}), 404
     body = request.get_json(silent=True) or {}
     try:
-        amount = Decimal(str(body.get('amount', 0)))
+        amount = billing.money(body.get('amount', 0))
     except Exception:
         return jsonify({'error': 'amount must be numeric'}), 400
     if amount <= 0:
@@ -268,18 +275,25 @@ def customer_credit_payment(id):
     method = (body.get('payment_method') or '').lower()
     if method not in (PAY_CASH, PAY_MPESA, PAY_CARD):
         return jsonify({'error': 'payment_method must be cash, mpesa, or card'}), 400
-
-    current = Decimal(str(customer.credit_balance or 0))
-    if amount > current:
-        return jsonify({'error': f'amount exceeds outstanding balance ({current})'}), 400
-    customer.credit_balance = (current - amount).quantize(Decimal('0.01'))
-
-    audit_service.log(session.get('user_id'), 'credit.payment',
-                      'Customer', customer.id,
-                      {'credit_balance': float(current)},
-                      {'amount': float(amount), 'method': method,
-                       'mpesa_ref': body.get('mpesa_ref'),
-                       'credit_balance': float(customer.credit_balance)})
+    receipt = None
+    if method == PAY_MPESA:
+        receipt = (body.get('mpesa_ref') or '').strip()
+        if not receipt:
+            return jsonify({'error': 'mpesa_ref (the M-Pesa code) is required'}), 400
+        tenant = db.session.get(Tenant, customer.tenant_id)
+        if not tenant.manual_mpesa_enabled:
+            return jsonify({'error': 'Typed M-Pesa codes are switched off for this business'}), 403
+    try:
+        payment = billing.record_payment(
+            method='mpesa_manual' if method == PAY_MPESA else method, amount=amount,
+            receipt=receipt, customer_id=customer.id, recorded_by=session.get('user_id'),
+            verified=method != PAY_MPESA)
+    except billing.DuplicateReceipt as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    audit_service.log(session.get('user_id'), 'credit.payment', 'Customer', customer.id,
+                      None, {'amount': str(amount), 'method': method, 'mpesa_ref': receipt,
+                             'payment_id': payment.id})
     db.session.commit()
-    return jsonify({'message': 'Payment recorded',
-                    'credit_balance': float(customer.credit_balance)}), 200
+    return jsonify({'message': 'Payment recorded', 'payment': payment.to_dict(),
+                    'owed': float(billing.customer_exposure(customer.id))}), 200

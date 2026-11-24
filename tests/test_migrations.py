@@ -16,7 +16,9 @@ BASELINE_TABLES = {
     "transaction_items", "purchase_orders", "purchase_order_items", "prescriptions",
     "prescription_items", "loyalty_transactions", "audit_logs", "system_config",
 }
-HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"}
+BILLING_TABLES = {"invoices", "payments", "payment_allocations", "payment_intents",
+                  "invoice_adjustments"}
+HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES
 
 
 @pytest.fixture

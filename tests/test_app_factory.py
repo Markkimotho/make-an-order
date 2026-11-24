@@ -105,3 +105,13 @@ def test_no_tables_created_at_startup(tmp_path):
 def test_create_db_command_registered(tmp_path):
     app = _app(tmp_path)
     assert "create-db" in app.cli.commands
+
+
+def test_mysql_connections_use_read_committed(tmp_path):
+    """Billing locks a row, then reads; under MySQL's default REPEATABLE
+    READ those reads saw a stale snapshot (two sales got INV000001)."""
+    app = create_app({"TESTING": True, "SECRET_KEY": "t",
+                      "SQLALCHEMY_DATABASE_URI": "mysql+pymysql://u:p@127.0.0.1:1/d"})
+    assert app.config["SQLALCHEMY_ENGINE_OPTIONS"]["isolation_level"] == "READ COMMITTED"
+    sqlite_app = _app(tmp_path)
+    assert "isolation_level" not in (sqlite_app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {})

@@ -13,7 +13,8 @@ import pytest
 from sqlalchemy import text
 
 from auth.tenancy import tenant_scope, unscoped
-from models import (AuditLog, CashMovement, Category, Customer, InventoryItem,
+from models import (AuditLog, CashMovement, Category, Customer, InventoryItem, Invoice,
+                    InvoiceAdjustment, Payment, PaymentAllocation, PaymentIntent,
                     LoyaltyTransaction, Order, OrderItem, Prescription,
                     PrescriptionItem, PurchaseOrder, PurchaseOrderItem, Shift,
                     StockMovement, Supplier, Transaction, TransactionItem, User, db)
@@ -21,9 +22,10 @@ from tests.test_migrations import HEAD_TABLES
 
 MARK = "ALPHA-SECRET"
 # Everything identifying about tenant A that must never reach tenant B.
-LEAK_MARKERS = (MARK, "ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "alpha@x.co",
+LEAK_MARKERS = (MARK, "ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "alpha@x.co", "ALPHARCPT",
+                "INVALP01",
                 "254712000001", "254712000009", "254712000010")
-STRING_ARGS = ("ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "ws_CO_ALPHA")
+STRING_ARGS = ("ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "ws_CO_ALPHA", "ALPHARCPT", "INVALP01")
 SKIP_PREFIXES = ("/static", "/auth/", "/platform/")
 SKIP_RULES = {"/logout"}
 FK_FIELDS = ("customer_id", "inventory_item_id", "item_id", "supplier_id", "category_id",
@@ -89,6 +91,23 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             LoyaltyTransaction(customer_id=cust.id, transaction_id=txn.id, points_earned=1,
                                balance_after=1, note=mark),
             AuditLog(user_id=user.id, action="seed", entity_type=mark),
+        ])
+        db.session.flush()
+        invoice = Invoice(invoice_number=f"INV{tag[:3]}01", kind="credit", customer_id=cust.id,
+                          transaction_id=txn.id, order_id=order.id, total=Decimal("100"),
+                          notes=mark)
+        payment = Payment(method="mpesa_c2b", amount=Decimal("40"), mpesa_receipt=f"{tag}RCPT",
+                          payer_name=mark, bill_ref_raw=f"INV{tag[:3]}01", customer_id=cust.id,
+                          match_status="matched")
+        db.session.add_all([invoice, payment])
+        db.session.flush()
+        db.session.add_all([
+            PaymentAllocation(payment_id=payment.id, invoice_id=invoice.id, amount=Decimal("40")),
+            InvoiceAdjustment(invoice_id=invoice.id, amount=Decimal("5"), reason="return",
+                              note=mark),
+            PaymentIntent(invoice_id=invoice.id, phone=f"0{phone_base}01", amount=Decimal("60"),
+                          checkout_request_id=f"ws_CO_INV_{tag}", status="pending",
+                          result_desc=mark),
         ])
         db.session.commit()
 
