@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import re
 import time
 from datetime import datetime
 from typing import Any
@@ -22,6 +21,7 @@ from typing import Any
 import requests
 
 from config import Config
+from services.phone import normalize_ke_phone
 
 logger = logging.getLogger(__name__)
 
@@ -46,25 +46,12 @@ def _base_url() -> str:
 
 
 def format_phone(phone: str) -> str:
-    """Normalise a phone number to Daraja's ``2547XXXXXXXX`` / ``2541XXXXXXXX`` form.
+    """Normalise to Daraja's ``2547XXXXXXXX`` / ``2541XXXXXXXX`` form.
 
-    Accepts ``+2547...``, ``07...``, ``7...``, ``254...``, ``01...``.
-    Raises :class:`ValueError` for clearly invalid input.
+    Same rules as :func:`services.phone.normalize_ke_phone` (raises
+    ``InvalidPhone``, a ``ValueError``).
     """
-    if not phone:
-        raise ValueError("phone is required")
-    digits = re.sub(r"\D", "", phone)
-    if digits.startswith("254"):
-        normalised = digits
-    elif digits.startswith("0") and len(digits) == 10:
-        normalised = "254" + digits[1:]
-    elif len(digits) == 9 and digits[0] in ("7", "1"):
-        normalised = "254" + digits
-    else:
-        raise ValueError(f"unrecognised Kenyan phone format: {phone!r}")
-    if len(normalised) != 12 or not normalised.startswith("254"):
-        raise ValueError(f"unrecognised Kenyan phone format: {phone!r}")
-    return normalised
+    return normalize_ke_phone(phone)
 
 
 def _timestamp() -> str:
