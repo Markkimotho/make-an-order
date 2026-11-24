@@ -105,8 +105,8 @@
                     {% endif %}
                     {% if user_role == 'superuser' %}
                     <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == 'onboarding' %}active{% endif %}"
-                           href="{{ url_for('onboarding') }}" title="Business Settings">
+                        <a class="nav-link {% if request.endpoint in ('onboarding', 'settings.page') %}active{% endif %}"
+                           href="{{ url_for('settings.page') }}" title="Business Settings">
                             <i class="fas fa-gear me-1"></i> Settings
                         </a>
                     </li>

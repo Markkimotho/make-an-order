@@ -30,6 +30,7 @@ from api.pharmacy import pharmacy_bp
 from api.platform import platform_bp
 from api.pos import pos_bp
 from api.reports import reports_bp
+from api.settings import settings_bp
 from api.users import users_bp
 from auth.auth_middleware import (admin_required, cashier_required,
                                   login_required, pharmacist_required,
@@ -229,6 +230,7 @@ def create_app(config_override=None):
     app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
     app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
+    app.register_blueprint(settings_bp, url_prefix='/settings')
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
 
     app.before_request(bind_request_tenant)
@@ -341,6 +343,52 @@ def _register_cli(app):
             user.is_platform_admin = True
             db.session.commit()
         click.echo(f'{email} is a platform admin while listed in PLATFORM_ADMIN_EMAILS.')
+
+    tenants_cli = click.Group('tenants', help='Business (tenant) administration.')
+
+    @tenants_cli.command('import-env-credentials')
+    @click.argument('slug')
+    def import_env_credentials(slug):
+        """Copy the old single-business MPESA_* settings into a business."""
+        mapping = {
+            'daraja_shortcode': Config.MPESA_BUSINESS_SHORT_CODE,
+            'daraja_consumer_key': Config.MPESA_CONSUMER_KEY,
+            'daraja_consumer_secret': Config.MPESA_CONSUMER_SECRET,
+            'daraja_passkey': Config.MPESA_PASSKEY,
+        }
+        missing = [k for k, v in mapping.items() if not v]
+        if missing:
+            raise click.ClickException(f'MPESA_* settings missing for: {", ".join(missing)}')
+        with unscoped():
+            tenant = Tenant.query.filter_by(slug=slug).first()
+            if tenant is None:
+                raise click.ClickException(f'No tenant with slug {slug!r}')
+            for field, value in mapping.items():
+                setattr(tenant, field, value)
+            tenant.daraja_shortcode_type = tenant.daraja_shortcode_type or 'paybill'
+            tenant.daraja_env = Config.MPESA_ENV or 'sandbox'
+            summary = f'type {tenant.daraja_shortcode_type}, {tenant.daraja_env}'
+            db.session.commit()
+        click.echo(f'Daraja credentials copied into {slug} ({summary}). '
+                   'The MPESA_* settings can now be removed.')
+
+    @tenants_cli.command('register-c2b')
+    @click.argument('slug')
+    def register_c2b(slug):
+        """Register a business's Paybill confirmation URLs with Safaricom."""
+        from services.daraja import DarajaClient, DarajaError, callback_url
+        with unscoped():
+            tenant = Tenant.query.filter_by(slug=slug).first()
+            if tenant is None:
+                raise click.ClickException(f'No tenant with slug {slug!r}')
+            try:
+                DarajaClient(tenant).register_c2b()
+            except DarajaError as e:
+                raise click.ClickException(f'Safaricom refused: {e}')
+            url = callback_url(tenant, 'c2b').rsplit('/', 1)[0] + '/[token]'
+        click.echo(f'Registered {url} for {slug} (ResponseType Completed).')
+
+    app.cli.add_command(tenants_cli)
 
     @app.cli.command('payments-sweep')
     def payments_sweep_command():

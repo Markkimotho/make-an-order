@@ -26,6 +26,8 @@ UNSCOPED_ALLOWLIST = {
     ("api/payments.py", "_owning_tenant"),      # webhooks: which tenant owns this reference
     ("api/daraja.py", "_tenant_for"),           # webhook URL slug + token -> tenant
     ("app.py", "payments_sweep_command"),       # which businesses have silent STK pushes
+    ("app.py", "import_env_credentials"),       # CLI: copy MPESA_* into a named business
+    ("app.py", "register_c2b"),                 # CLI: register a named business's URLs
     ("app.py", "seed_demo_command"),            # resolve slug -> tenant id
     ("api/platform.py", "tenants"),             # platform admins list all tenants
     ("api/platform.py", "act_as"),

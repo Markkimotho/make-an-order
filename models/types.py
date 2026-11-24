@@ -20,6 +20,10 @@ def _secrets_key():
     return key or os.environ.get("TENANT_SECRETS_KEY")
 
 
+def secrets_key_configured():
+    return bool(_secrets_key())
+
+
 class EncryptedString(TypeDecorator):
     """A string column stored Fernet-encrypted, returned as plaintext.
 

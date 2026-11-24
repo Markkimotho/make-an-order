@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="container py-4" style="max-width: 760px;">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h4 mb-0"><i class="fas fa-gear me-2"></i>{{ t.name }}: settings</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('onboarding') }}">Business name &amp; type</a>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }} py-2 small">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% for e in errors %}<div class="alert alert-danger py-2 small">{{ e }}</div>{% endfor %}
+
+  <form method="POST" action="{{ url_for('settings.save') }}" autocomplete="off">
+    <h2 class="h6 mt-3">M-Pesa (Safaricom Daraja)</h2>
+    <p class="small text-muted mb-2">Money goes straight into your own Till or Paybill. Get these from
+      the Safaricom Daraja portal after your shortcode goes live.</p>
+    <div class="row g-2">
+      <div class="col-sm-4">
+        <label class="form-label small">Type</label>
+        <select name="daraja_shortcode_type" class="form-select form-select-sm">
+          <option value="">Not set</option>
+          {% for k in shortcode_types %}
+          <option value="{{ k }}" {% if (form.daraja_shortcode_type or t.daraja_shortcode_type) == k %}selected{% endif %}>{{ k|title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Paybill / store number</label>
+        <input name="daraja_shortcode" class="form-control form-control-sm" inputmode="numeric"
+               value="{{ form.daraja_shortcode or t.daraja_shortcode or '' }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Till number (Till only)</label>
+        <input name="daraja_till_number" class="form-control form-control-sm" inputmode="numeric"
+               value="{{ form.daraja_till_number or t.daraja_till_number or '' }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Environment</label>
+        <select name="daraja_env" class="form-select form-select-sm">
+          {% for e in daraja_envs %}
+          <option value="{{ e }}" {% if (form.daraja_env or t.daraja_env) == e %}selected{% endif %}>{{ e|title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% for field, label in secret_fields %}
+      <div class="col-sm-4">
+        <label class="form-label small">{{ label }}
+          {% if secret_state[field] %}<span class="badge bg-success">set</span>{% else %}<span class="badge bg-secondary">not set</span>{% endif %}
+        </label>
+        <input name="{{ field }}" type="password" class="form-control form-control-sm"
+               placeholder="{% if secret_state[field] %}leave blank to keep{% endif %}" autocomplete="new-password">
+      </div>
+      {% endfor %}
+    </div>
+    <div class="form-check mt-2">
+      <input class="form-check-input" type="checkbox" name="manual_mpesa_enabled" id="manualMpesa"
+             {% if t.manual_mpesa_enabled %}checked{% endif %}>
+      <label class="form-check-label small" for="manualMpesa">Let staff type an M-Pesa code to mark a sale paid
+        (turn off once M-Pesa confirmations arrive automatically)</label>
+    </div>
+
+    <h2 class="h6 mt-4">SMS</h2>
+    <div class="row g-2">
+      <div class="col-sm-4">
+        <label class="form-label small">Sender ID (Africa's Talking)</label>
+        <input name="at_sender_id" class="form-control form-control-sm" maxlength="11"
+               value="{{ form.at_sender_id or t.at_sender_id or '' }}">
+      </div>
+    </div>
+
+    <h2 class="h6 mt-4">Compliance</h2>
+    <div class="row g-2">
+      <div class="col-sm-4">
+        <label class="form-label small">KRA PIN</label>
+        <input name="kra_pin" class="form-control form-control-sm text-uppercase" maxlength="11"
+               value="{{ form.kra_pin or t.kra_pin or '' }}">
+      </div>
+      {% if t.vertical == 'pharmacy' %}
+      <div class="col-sm-4">
+        <label class="form-label small">PPB premises licence no.</label>
+        <input name="ppb_premises_license" class="form-control form-control-sm"
+               value="{{ form.ppb_premises_license or t.ppb_premises_license or '' }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Licence expiry</label>
+        <input name="ppb_premises_license_expiry" type="date" class="form-control form-control-sm"
+               value="{{ form.ppb_premises_license_expiry or (t.ppb_premises_license_expiry.isoformat() if t.ppb_premises_license_expiry else '') }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Superintendent pharmacist reg. no.</label>
+        <input name="superintendent_reg_no" class="form-control form-control-sm"
+               value="{{ form.superintendent_reg_no or t.superintendent_reg_no or '' }}">
+      </div>
+      {% endif %}
+    </div>
+
+    <button class="btn btn-primary btn-sm mt-3" type="submit">Save settings</button>
+  </form>
+
+  <h2 class="h6 mt-5">Give these URLs to Safaricom</h2>
+  <p class="small text-muted mb-1">STK push results (sent automatically with every prompt):</p>
+  <code class="d-block small text-break mb-2">{{ stk_url }}</code>
+  <p class="small text-muted mb-1">Paybill confirmations:</p>
+  <code class="d-block small text-break mb-3">{{ c2b_url }}</code>
+  <div class="d-flex gap-2">
+    {% if t.daraja_shortcode_type == 'paybill' %}
+    <form method="POST" action="{{ url_for('settings.register_c2b') }}">
+      <button class="btn btn-outline-primary btn-sm" type="submit">Register Paybill URLs</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="{{ url_for('settings.rotate_token') }}">
+      <button class="btn btn-outline-danger btn-sm" type="submit">Change callback token</button>
+    </form>
+  </div>
+  <p class="small text-muted mt-2">Changing the token stops the old URLs at once. Do it if a URL was shared by mistake.</p>
+</div>
+{% endblock %}
