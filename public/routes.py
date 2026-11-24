@@ -16,7 +16,7 @@ from flask import Blueprint, abort, g, jsonify, render_template, request
 
 from auth.tenancy import tenant_scope, unscoped
 from models import (Invoice, OrderItem, PaymentIntent, Tenant, TransactionItem, db)
-from public.limits import limiter, per_invoice, pushed
+from public.limits import limiter
 from services import billing
 from services.billing import stk
 from services.daraja import DarajaBusy, DarajaError, DarajaNotConfigured, DarajaUnavailable
@@ -28,6 +28,9 @@ public_bp = Blueprint("public", __name__)
 
 # A poll asks Daraja at most this often per intent, whatever the client does.
 QUERY_EVERY = timedelta(seconds=15)
+# M-Pesa prompts one invoice may send in a window, from any number of IPs.
+PROMPTS_PER_INVOICE = 3
+PROMPT_WINDOW = timedelta(minutes=10)
 
 STATUS_TEXT = {
     "initiating": "Sending the M-Pesa prompt...",
@@ -45,7 +48,8 @@ def _business(slug):
     """The business for a public slug, or None. Lapsed businesses are hidden."""
     with unscoped():
         tenant = Tenant.query.filter_by(slug=slug).first()
-        if tenant is None or not tenant.is_active_subscription():
+        # MySQL compares case-insensitively; only the exact slug is this page.
+        if tenant is None or tenant.slug != slug or not tenant.is_active_subscription():
             return None
         return tenant.id, tenant.name
 
@@ -73,7 +77,7 @@ def _private(response):
 
 def _invoice(pay_token):
     invoice = Invoice.query.filter_by(pay_token=pay_token).first()
-    if invoice is None or invoice.status == "void":
+    if invoice is None or invoice.pay_token != pay_token or invoice.status == "void":
         abort(404)
     return invoice
 
@@ -125,7 +129,6 @@ def pay_page(slug, pay_token):
 
 @public_bp.route("/<slug>/pay/<pay_token>/stk", methods=["POST"])
 @limiter.limit("5 per minute")
-@limiter.limit("3 per 10 minutes", key_func=per_invoice, deduct_when=pushed)
 @public_tenant
 def pay_stk(slug, pay_token):
     invoice = _invoice(pay_token)
@@ -135,6 +138,17 @@ def pay_stk(slug, pay_token):
         return _error("Enter the M-Pesa phone number to pay from", 400)
     if invoice.status == "paid":
         return _error("This invoice is already paid", 409)
+    # The per-invoice cap counts prompts actually attempted, under the invoice
+    # row lock: start_stk commits its intent before calling Daraja, so a
+    # concurrent request waits here and then sees it.
+    invoice = billing.lock_invoice(invoice)
+    since = datetime.utcnow() - PROMPT_WINDOW
+    recent = PaymentIntent.query.filter(PaymentIntent.invoice_id == invoice.id,
+                                        PaymentIntent.created_at > since).count()
+    if recent >= PROMPTS_PER_INVOICE:
+        db.session.rollback()
+        return _error("Too many payment prompts for this invoice. Try again in a few "
+                      "minutes.", 429)
     try:
         intent = stk.start_stk(invoice, phone)
     except InvalidPhone:

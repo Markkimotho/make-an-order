@@ -21,6 +21,10 @@ class Batch(TenantMixin, db.Model):
     quantity_on_hand  = db.Column(db.Integer, nullable=False, default=0)
     unit_cost         = db.Column(db.Numeric(12, 2), nullable=True)
     received_at       = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Returned goods whose batch and expiry are unknown: never sold until an
+    # admin checks them and releases the batch (PUT /inventory/batches/<id>).
+    quarantined       = db.Column(db.Boolean, nullable=False, default=False,
+                                  server_default=db.false())
 
     def to_dict(self):
         return {"id": self.id, "inventory_item_id": self.inventory_item_id,
@@ -28,6 +32,7 @@ class Batch(TenantMixin, db.Model):
                 "expiry_date": self.expiry_date.isoformat() if self.expiry_date else None,
                 "quantity_on_hand": self.quantity_on_hand,
                 "unit_cost": float(self.unit_cost) if self.unit_cost is not None else None,
+                "quarantined": bool(self.quarantined),
                 "received_at": self.received_at.isoformat() if self.received_at else None}
 
 

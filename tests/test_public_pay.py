@@ -211,3 +211,48 @@ def test_pay_tokens_are_kept_out_of_logs(link):
     RedactCallbackTokens().filter(record)
     assert link["token"] not in record.getMessage()
     assert f"/o/{link['slug']}/pay/[token]/status" in record.getMessage()
+
+
+def test_case_variants_of_the_link_are_404(client, link):
+    """MySQL compares case-insensitively; a variant would otherwise be a
+    second identity for the same invoice."""
+    assert client.get(f"/o/{link['slug'].upper()}/pay/{link['token']}").status_code == 404
+    assert client.get(f"/o/{link['slug']}/pay/{link['token'].swapcase()}").status_code == 404
+
+
+def test_the_invoice_cap_counts_prompts_in_the_database(client, link):
+    """Counted from payment_intents under the invoice lock, so it holds for
+    requests racing in parallel, not just one after another."""
+    for i in range(3):
+        db.session.add(PaymentIntent(invoice_id=link["id"], phone=f"25471234560{i}",
+                                     amount=D("1501"), status="failed"))
+    db.session.commit()
+    r = push(client, link, ip="41.90.9.9")
+    assert r.status_code == 429 and "Too many" in r.get_json()["error"]
+    assert link["fake"].posts("/processrequest") == []
+    old = PaymentIntent.query.all()
+    for intent in old:
+        intent.created_at = datetime.utcnow() - timedelta(minutes=11)
+    db.session.commit()
+    assert push(client, link, ip="41.90.9.9").status_code == 201
+
+
+@pytest.mark.skipif(not __import__("tests.conftest", fromlist=["on_mysql"]).on_mysql(),
+                    reason="row locks need MySQL")
+def test_parallel_pushes_send_at_most_three_prompts(app, link):
+    import threading
+    results, barrier = [], threading.Barrier(5)
+
+    def worker(i):
+        with app.app_context():
+            c = app.test_client()
+            barrier.wait()
+            results.append(push(c, link, phone=f"07123456{i:02d}", ip=f"41.90.8.{i}").status_code)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [201, 201, 201, 429, 429]
+    assert len(link["fake"].posts("/processrequest")) == 3

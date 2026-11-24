@@ -5,9 +5,12 @@ goods, in variants. ``InventoryItem.stock`` is their total and is set here
 and nowhere else (tests/test_no_bypass.py checks the source).
 
 Sales take first-expiry-first-out from batches that have not expired by
-today in Nairobi; expired stock leaves only through an adjustment or
-write-off. Every unit taken for a sale or order line is recorded in
-LineBatch, so a void or return puts it back in the batch it came from.
+today in Nairobi and are not quarantined; expired or quarantined stock
+leaves only through an adjustment or write-off. Every unit taken for a sale
+or order line is recorded in LineBatch, so a void or return puts it back in
+the batch it came from, and never more than was taken. Goods returned with
+no such record go to the batch named on the line if it exists, else into a
+quarantined batch an admin must check before it can be sold.
 
 Locking: the item row first, then its batches (in id order), then the
 variant, so concurrent sales of the last unit cannot both succeed.
@@ -21,6 +24,7 @@ from models import Batch, InventoryItem, ItemVariant, LineBatch, StockMovement, 
 from services.clock import today_nairobi
 
 DEFAULT_BATCH = "UNBATCHED"
+QUARANTINE_BATCH = "QUARANTINE"
 
 
 class StockError(ValueError):
@@ -31,7 +35,7 @@ class InsufficientStock(StockError):
     def __init__(self, item, wanted, sellable, expired=0):
         self.item_name, self.wanted, self.sellable, self.expired = (
             item.name, wanted, sellable, expired)
-        extra = f" ({expired} more expired)" if expired else ""
+        extra = f" ({expired} more expired or on hold)" if expired else ""
         super().__init__(f"Only {sellable} of {item.name} in stock{extra}; {wanted} wanted")
 
 
@@ -131,7 +135,8 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
     else:
         today = today or today_nairobi()
         batches = [b for b in _locked_batches(item) if (b.quantity_on_hand or 0) > 0]
-        expired = [b for b in batches if b.expiry_date and b.expiry_date < today]
+        expired = [b for b in batches
+                   if b.quarantined or (b.expiry_date and b.expiry_date < today)]
         usable = batches if allow_expired else [b for b in batches if b not in expired]
         sellable = sum(b.quantity_on_hand for b in usable)
         if sellable < qty:
@@ -157,10 +162,24 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
     return taken
 
 
+def _line_batches(transaction_item, order_item):
+    if transaction_item is not None:
+        return LineBatch.query.filter(LineBatch.transaction_item_id == transaction_item.id)
+    if order_item is not None:
+        return LineBatch.query.filter(LineBatch.order_item_id == order_item.id)
+    return None
+
+
 def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None,
               reason="refund", note=None, user_id=None):
-    """Return units: to the batches the line took them from (latest taken
-    first), else into the default batch. Returns [(batch, units)]."""
+    """Return units to stock. Returns [(batch, units)].
+
+    A line with batch records gets its units back in those batches (latest
+    taken first), and asking for more than it has out raises StockError.
+    A line without them (sold before batches existed) returns to the batch
+    named on the line if there is one; anything else, and returns with no
+    line at all, goes to a quarantined batch that is not sold until checked.
+    """
     qty = _units(qty)
     item = _lock_item(item)
     restored = []
@@ -169,18 +188,15 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
         row.stock = int(row.stock or 0) + qty
     else:
         batches = {b.id: b for b in _locked_batches(item)}
-        remaining = qty
-        line_filter = None
-        if transaction_item is not None:
-            line_filter = LineBatch.transaction_item_id == transaction_item.id
-        elif order_item is not None:
-            line_filter = LineBatch.order_item_id == order_item.id
-        if line_filter is not None:
-            for lb in LineBatch.query.filter(line_filter).order_by(LineBatch.id.desc()):
-                if remaining == 0:
-                    break
-                open_units = lb.quantity - (lb.returned_quantity or 0)
-                units = min(open_units, remaining)
+        query = _line_batches(transaction_item, order_item)
+        records = query.order_by(LineBatch.id.desc()).all() if query is not None else []
+        if records:
+            out = sum(lb.quantity - (lb.returned_quantity or 0) for lb in records)
+            if qty > out:
+                raise StockError(f"only {out} of {item.name} from this line can come back")
+            remaining = qty
+            for lb in records:
+                units = min(lb.quantity - (lb.returned_quantity or 0), remaining)
                 if units <= 0:
                     continue
                 lb.returned_quantity = (lb.returned_quantity or 0) + units
@@ -188,14 +204,22 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
                 batch.quantity_on_hand += units
                 restored.append((batch, units))
                 remaining -= units
-        if remaining > 0:
-            batch = next((b for b in batches.values() if b.batch_number == DEFAULT_BATCH), None)
+                if remaining == 0:
+                    break
+        else:
+            named = getattr(transaction_item, "batch_number", None)
+            batch = next((b for b in batches.values()
+                          if named and b.batch_number == named and not b.quarantined), None)
             if batch is None:
-                batch = Batch(inventory_item_id=item.id, batch_number=DEFAULT_BATCH,
-                              quantity_on_hand=0, received_at=datetime.utcnow())
+                batch = next((b for b in batches.values()
+                              if b.batch_number == QUARANTINE_BATCH and b.quarantined), None)
+            if batch is None:
+                batch = Batch(inventory_item_id=item.id, batch_number=QUARANTINE_BATCH,
+                              quantity_on_hand=0, quarantined=True,
+                              received_at=datetime.utcnow())
                 db.session.add(batch)
-            batch.quantity_on_hand = int(batch.quantity_on_hand or 0) + remaining
-            restored.append((batch, remaining))
+            batch.quantity_on_hand = int(batch.quantity_on_hand or 0) + qty
+            restored.append((batch, qty))
     db.session.flush()
     _resync(item)
     _movement(item, qty, reason, user_id, note)

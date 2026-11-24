@@ -1,13 +1,16 @@
 """Stock in batches: batches, item_variants, line_batches.
 
 Every item with stock gets one batch holding all of it, numbered from the
-item's batch_number (or LEGACY) with the item's expiry date. Then
+item's batch_number (or LEGACY) with the item's expiry date. An empty item
+with a batch number or expiry keeps them in an empty batch, so returns of
+earlier sales can find the batch they came from. Then
 inventory_items.batch_number and expiry_date are dropped: an item has as
 many batches as deliveries, each with its own expiry, and sales take the
 soonest-expiring stock first.
 
 Downgrade puts the soonest-expiring stocked batch's number and expiry back
-on each item (that is all the old columns could hold).
+on each item, or an empty batch's for an empty item (that is all the old
+columns could hold).
 
 Revision ID: 0005_batches
 Revises: 0004_billing
@@ -40,6 +43,7 @@ def upgrade():
         sa.Column("quantity_on_hand", sa.Integer(), nullable=False),
         sa.Column("unit_cost", sa.Numeric(precision=12, scale=2), nullable=True),
         sa.Column("received_at", sa.DateTime(), nullable=False),
+        sa.Column("quarantined", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.ForeignKeyConstraint(["inventory_item_id"], ["inventory_items.id"],
                                 name="fk_batches_inventory_item_id_inventory_items",
                                 ondelete="CASCADE"),
@@ -111,11 +115,14 @@ def upgrade():
     now = datetime.utcnow()
     for item_id, tenant_id, stock, number, expiry, cost in bind.execute(
             sa.select(items.c.id, items.c.tenant_id, items.c.stock, items.c.batch_number,
-                      items.c.expiry_date, items.c.cost_price).where(items.c.stock > 0)):
+                      items.c.expiry_date, items.c.cost_price)).all():
+        number = (number or "").strip()
+        if (stock or 0) <= 0 and not number and expiry is None:
+            continue
         bind.execute(batches.insert().values(
             tenant_id=tenant_id, inventory_item_id=item_id,
-            batch_number=(number or "").strip() or "LEGACY", expiry_date=expiry,
-            quantity_on_hand=stock, unit_cost=cost, received_at=now))
+            batch_number=number or "LEGACY", expiry_date=expiry,
+            quantity_on_hand=max(stock or 0, 0), unit_cost=cost, received_at=now))
 
     with op.batch_alter_table("inventory_items") as batch:
         batch.drop_column("batch_number")
@@ -133,9 +140,9 @@ def downgrade():
                        sa.column("quantity_on_hand", sa.Integer))
     rows = bind.execute(
         sa.select(batches.c.inventory_item_id, batches.c.batch_number, batches.c.expiry_date)
-        .where(batches.c.quantity_on_hand > 0)
-        .order_by(batches.c.inventory_item_id, batches.c.expiry_date.is_(None),
-                  batches.c.expiry_date, batches.c.id)).all()
+        .order_by(batches.c.inventory_item_id,
+                  sa.case((batches.c.quantity_on_hand > 0, 0), else_=1),
+                  batches.c.expiry_date.is_(None), batches.c.expiry_date, batches.c.id)).all()
     items = sa.table("inventory_items", sa.column("id", sa.Integer),
                      sa.column("batch_number", sa.String), sa.column("expiry_date", sa.Date))
     seen = set()

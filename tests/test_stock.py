@@ -179,9 +179,10 @@ def test_partial_returns_go_back_to_the_batch_last_taken_and_never_twice(app):
     assert batches_of(item) == {"A": 2, "B": 10}
     stock.give_back(item, 2, transaction_item=li)
     assert batches_of(item) == {"A": 4, "B": 10}
-    # Beyond what the line took: lands in the default batch, not in A or B.
-    stock.give_back(item, 1, transaction_item=li)
-    assert batches_of(item) == {"A": 4, "B": 10, "UNBATCHED": 1}
+    # Beyond what the line took: refused, nothing moves.
+    with pytest.raises(stock.StockError, match="only 0"):
+        stock.give_back(item, 1, transaction_item=li)
+    assert batches_of(item) == {"A": 4, "B": 10}
     assert_invariant(item)
 
 
@@ -507,3 +508,83 @@ def test_item_list_reads_batches_in_one_query(app, admin):
     assert len(statements) == 1
     first = next(r for r in rows if r["name"] == "Item 0")
     assert (first["batch_number"], first["expiry_date"]) == ("B0", "2027-01-01")
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_returns_without_batch_records_go_to_the_named_batch_or_quarantine(app):
+    item = make_item()
+    stock.receive(item, 5, batch_number="OLD-7", expiry_date=date(2027, 1, 1))
+    li = line(item, 3)                    # a sale made before batches existed
+    li.batch_number = "OLD-7"
+    stock.give_back(item, 2, transaction_item=li)
+    assert batches_of(item) == {"OLD-7": 7}
+    li.batch_number = "GONE"              # its batch no longer exists
+    stock.give_back(item, 1, transaction_item=li)
+    stock.give_back(item, 1)              # no line at all (legacy order)
+    q = Batch.query.filter_by(batch_number=stock.QUARANTINE_BATCH).one()
+    assert (q.quantity_on_hand, q.quarantined) == (2, True)
+    # Held stock is never sold.
+    with pytest.raises(stock.InsufficientStock) as e:
+        stock.take(item, 8, today=TODAY)
+    assert (e.value.sellable, e.value.expired) == (7, 2)
+    assert_invariant(item)
+
+
+def test_released_quarantine_is_sellable_and_new_returns_start_a_new_hold(app, admin):
+    item = make_item()
+    stock.give_back(item, 3)
+    held = Batch.query.filter_by(batch_number=stock.QUARANTINE_BATCH).one()
+    held_id, item_id = held.id, item.id
+    db.session.commit()
+    assert admin.put(f"/inventory/batches/{held_id}",
+                     json={"quarantined": False}).status_code == 400   # needs a real number
+    r = admin.put(f"/inventory/batches/{held_id}", json={
+        "quarantined": False, "batch_number": "RET-1", "expiry_date": "2027-05-01"})
+    assert r.status_code == 200 and r.get_json()["batch"]["quarantined"] is False
+    item = db.session.get(InventoryItem, item_id)
+    assert stock.take(item, 3, today=TODAY)[0][0].batch_number == "RET-1"
+    stock.give_back(item, 1)
+    assert batches_of(item_id) == {"RET-1": 0, stock.QUARANTINE_BATCH: 1}
+
+
+def test_void_after_partial_refund_restores_only_what_is_out(app, till):
+    from services import otp_service
+    client, item = till                              # A 4, B 10
+    txn = sell(client, item, 4)
+    client.post(f"/pos/transaction/{txn}/complete",
+                json={"payment_method": "cash", "amount_tendered": 400})
+    line_id = TransactionItem.query.filter_by(transaction_id=txn).one().id
+    client.post(f"/pos/transaction/{txn}/refund",
+                json={"items": [{"transaction_item_id": line_id, "quantity": 1}]})
+    client.post(f"/pos/transaction/{txn}/void", json={"reason": "x"})
+    otp = otp_service.peek_otp(f"void:txn:{txn}")
+    assert client.post(f"/pos/transaction/{txn}/void",
+                       json={"reason": "x", "otp": otp}).status_code == 200
+    db.session.expire_all()
+    assert batches_of(item) == {"A": 4, "B": 10}      # 14, not 15
+    assert_invariant(item)
+
+
+def test_fractional_refunds_never_return_more_than_was_taken(app, till):
+    client, item = till
+    txn = sell(client, item, 4)
+    client.post(f"/pos/transaction/{txn}/complete",
+                json={"payment_method": "cash", "amount_tendered": 400})
+    line_id = TransactionItem.query.filter_by(transaction_id=txn).one().id
+    for _ in range(2):
+        r = client.post(f"/pos/transaction/{txn}/refund",
+                        json={"items": [{"transaction_item_id": line_id, "quantity": 0.5}]})
+        assert r.status_code == 200, r.get_json()
+    db.session.expire_all()
+    assert sum(batches_of(item).values()) == 11       # 10 left after sale + 1 back
+
+
+def test_sms_send_refuses_after_a_flush(app):
+    from services import sms_service
+    item = make_item()
+    stock.receive(item, 2)                            # flushed, not committed
+    with pytest.raises(sms_service.UnsavedChanges):
+        sms_service.send("0712345678", "hi", "test")
+    db.session.rollback()
+    sms_service.send("0712345678", "hi", "test")      # clean again after rollback

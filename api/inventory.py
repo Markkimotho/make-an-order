@@ -13,7 +13,7 @@ from auth.auth_middleware import (
     stock_clerk_api_required,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func
+from sqlalchemy import func, select
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import logging
@@ -508,7 +508,9 @@ def item_batches(id):
 @inventory_bp.route('/batches/<int:id>', methods=['PUT'])
 @admin_api_required
 def update_batch(id):
-    """Correct a batch's number or expiry (not its quantity: use adjustments)."""
+    """Correct a batch's number or expiry, or release a quarantined batch
+    (``"quarantined": false``) once its goods are checked. Quantities change
+    only through adjustments."""
     batch = db.session.get(Batch, id)
     if not batch:
         return jsonify({'error': 'Batch not found'}), 404
@@ -520,6 +522,12 @@ def update_batch(id):
         batch.batch_number = number
     if 'expiry_date' in data:
         batch.expiry_date = _parse_date(data.get('expiry_date'))
+    if data.get('quarantined') is False and batch.quarantined:
+        if batch.batch_number == stock.QUARANTINE_BATCH:
+            return jsonify({'error': 'Give the checked goods their batch number to release them'}), 400
+        batch.quarantined = False
+        audit_service.log(session.get('user_id'), 'inventory.batch_release', 'Batch', batch.id,
+                          None, batch.to_dict())
     try:
         db.session.commit()
     except IntegrityError:
@@ -771,7 +779,18 @@ def receive_purchase_order(id):
     if not payload_items:
         return jsonify({'error': 'items list is required'}), 400
 
-    po_items_by_id = {pi.id: pi for pi in po.items}
+    # Two receipts of one PO at once must not both read the same received
+    # quantities: lock the PO, then its lines, before checking anything.
+    po = db.session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po.id)
+                            .with_for_update()
+                            .execution_options(populate_existing=True)).scalar_one()
+    if po.status in (PO_RECEIVED, PO_CANCELLED):
+        db.session.rollback()
+        return jsonify({'error': f'PO is {po.status}'}), 400
+    lines = db.session.execute(select(PurchaseOrderItem).where(PurchaseOrderItem.po_id == po.id)
+                               .order_by(PurchaseOrderItem.id).with_for_update()
+                               .execution_options(populate_existing=True)).scalars().all()
+    po_items_by_id = {pi.id: pi for pi in lines}
     for entry in payload_items:
         pid = entry.get('po_item_id')
         po_item = po_items_by_id.get(pid)

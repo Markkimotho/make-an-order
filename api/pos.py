@@ -162,6 +162,15 @@ def _ensure_open_shift_or_403():
     return shift, None
 
 
+def _units_returned(line, refunded=None):
+    """Whole stock units already back on the shelf for a line that has had
+    ``refunded`` (default: its refunded_quantity) returned. Never more than
+    the line took, so repeated fractional refunds or a void after a partial
+    refund cannot put back more than was sold."""
+    refunded = Decimal(str(line.refunded_quantity or 0)) if refunded is None else refunded
+    return min(_stock_units_for(refunded), _stock_units_for(Decimal(str(line.quantity))))
+
+
 def _lock_txn(txn):
     """Serialise money work on this sale: the business's billing lock, then
     the sale row reloaded under lock (two taps on 'complete' cannot both
@@ -776,16 +785,22 @@ def transaction_void(txn_id):
                             'message': 'Manager OTP sent. Re-submit with "otp".'}), 202
         if not otp_service.verify_otp(scope, provided_otp):
             return jsonify({'error': 'Invalid or expired OTP'}), 403
-        # Restore stock
+        # Lock order everywhere: billing lock, then the sale, then stock.
+        txn = _lock_txn(txn)
+        if txn.status != TXN_COMPLETED:
+            db.session.rollback()
+            return jsonify({'error': f'Transaction already {txn.status}'}), 400
+        # Restore what is still out (a partial refund already put some back).
         for li in txn.items:
             if not li.inventory_item_id:
                 continue
             item = db.session.get(InventoryItem, li.inventory_item_id)
             if not item:
                 continue
-            units = _stock_units_for(li.quantity)
-            stock.give_back(item, units, transaction_item=li, reason='cancel', user_id=uid,
-                            note=f'VOID {txn.transaction_ref}')
+            units = _stock_units_for(Decimal(str(li.quantity))) - _units_returned(li)
+            if units > 0:
+                stock.give_back(item, units, transaction_item=li, reason='cancel', user_id=uid,
+                                note=f'VOID {txn.transaction_ref}')
         # Reverse loyalty earned on the original sale
         if txn.customer_id:
             earned = (db.session.query(func.coalesce(func.sum(LoyaltyTransaction.points_earned), 0))
@@ -894,11 +909,13 @@ def transaction_refund(txn_id):
         line_qty = Decimal(str(line.quantity))
         unit_value = Decimal(str(line.line_total)) / line_qty if line_qty > 0 else Decimal('0')
         refunded_value += _q(unit_value * qty * ratio)
+        before = _units_returned(line)
         line.refunded_quantity = Decimal(str(line.refunded_quantity or 0)) + qty
-        if line.inventory_item_id:
+        units = _units_returned(line) - before
+        if line.inventory_item_id and units > 0:
             item = db.session.get(InventoryItem, line.inventory_item_id)
             if item:
-                stock.give_back(item, _stock_units_for(qty), transaction_item=line,
+                stock.give_back(item, units, transaction_item=line,
                                 reason='refund', user_id=uid,
                                 note=f'REFUND {txn.transaction_ref}')
     fully_refunded = all(Decimal(str(li.refunded_quantity or 0)) >= Decimal(str(li.quantity))

@@ -22,7 +22,9 @@ import logging
 from datetime import datetime
 
 import africastalking  # type: ignore
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from auth.tenancy import current_tenant_id, tenant_scope, unscoped
 from config import Config
@@ -73,9 +75,27 @@ def _client():
     return _sms
 
 
+# Whether the current transaction has flushed writes. Pending objects alone
+# are not enough: after a flush (stock.take() flushes) they are gone from
+# session.new/dirty but would still be committed by send().
+_WROTE = "sms_service.flushed_writes"
+
+
+@event.listens_for(Session, "after_flush")
+def _note_flush(session, flush_context):
+    session.info[_WROTE] = True
+
+
+@event.listens_for(Session, "after_commit")
+@event.listens_for(Session, "after_rollback")
+def _forget_flush(session):
+    session.info.pop(_WROTE, None)
+
+
 def _require_clean_session():
     s = db.session
-    if s.new or s.deleted or any(s.is_modified(o) for o in s.dirty):
+    if (s.info.get(_WROTE) or s.new or s.deleted
+            or any(s.is_modified(o) for o in s.dirty)):
         raise UnsavedChanges("sms_service.send() commits; commit your own changes first")
 
 
@@ -194,7 +214,11 @@ def record_delivery(message_id, status, failure_reason=None):
         logger.info("delivery report for unknown message %s", message_id)
         return False
     with tenant_scope(tenant_id):
-        msg = SmsMessage.query.filter_by(provider_message_id=message_id).one()
+        # Locked, so two reports for one message apply one after the other
+        # and the second sees the first's status.
+        msg = db.session.execute(
+            select(SmsMessage).where(SmsMessage.provider_message_id == message_id)
+            .with_for_update().execution_options(populate_existing=True)).scalar_one()
         current = msg.delivery_status
         if current in _FINAL_DELIVERY:
             return False

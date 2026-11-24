@@ -40,7 +40,8 @@ def seed_items(*rows):
 def test_stocked_items_get_one_batch_each(legacy):
     seed_items(("Amoxil", 40, "AMX-7", date(2027, 3, 1), 12),
                ("Panadol", 15, None, None, None),
-               ("Empty", 0, "OLD-1", date(2026, 1, 1), 5))
+               ("Empty", 0, "OLD-1", date(2026, 1, 1), 5),
+               ("Blank", 0, None, None, None))
     upgrade(revision="0005_batches")
     rows = fetch("SELECT i.name, b.batch_number, b.expiry_date, b.quantity_on_hand, b.unit_cost, "
                  "b.tenant_id = i.tenant_id FROM batches b "
@@ -48,13 +49,15 @@ def test_stocked_items_get_one_batch_each(legacy):
     assert [(r[0], r[1], str(r[2]) if r[2] else None, r[3],
              float(r[4]) if r[4] is not None else None, bool(r[5])) for r in rows] == [
         ("Amoxil", "AMX-7", "2027-03-01", 40, 12.0, True),
+        # Empty but with batch details: kept, so returns of old sales find it.
+        ("Empty", "OLD-1", "2026-01-01", 0, 5.0, True),
         ("Panadol", "LEGACY", None, 15, None, True),
     ]
     columns = {c["name"] for c in db.inspect(db.engine).get_columns("inventory_items")}
     assert {"batch_number", "expiry_date"}.isdisjoint(columns) and "has_variants" in columns
     # Stock totals are untouched: item stock equals the sum of its batches.
     assert fetch("SELECT name, stock FROM inventory_items ORDER BY name") == [
-        ("Amoxil", 40), ("Empty", 0), ("Panadol", 15)]
+        ("Amoxil", 40), ("Blank", 0), ("Empty", 0), ("Panadol", 15)]
 
 
 def test_head_has_no_drift_after_data_migration(legacy):
