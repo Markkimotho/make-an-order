@@ -151,10 +151,9 @@ def test_new_rows_are_stamped(two_tenants):
 
 def test_adding_row_for_other_tenant_raises(two_tenants):
     with tenant_scope(two_tenants["globex"]["tenant"]):
-        db.session.add(Customer(name="Sneaky", phone_number="0722111223", code="S",
-                                tenant_id=two_tenants["acme"]["tenant"]))
         with pytest.raises(CrossTenantWrite):
-            db.session.commit()
+            db.session.add(Customer(name="Sneaky", phone_number="0722111223", code="S",
+                                    tenant_id=two_tenants["acme"]["tenant"]))
         db.session.rollback()
 
 

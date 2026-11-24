@@ -20,10 +20,31 @@ from models import (AuditLog, CashMovement, Category, Customer, InventoryItem,
 from tests.test_migrations import HEAD_TABLES
 
 MARK = "ALPHA-SECRET"
+# Everything identifying about tenant A that must never reach tenant B.
+LEAK_MARKERS = (MARK, "ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "alpha@acme.co",
+                "254712000001", "254700000009", "254700000010")
+STRING_ARGS = ("ALPHA-SKU", "ALPHA-TXN", "ALPHA-PO", "ws_CO_ALPHA")
 SKIP_PREFIXES = ("/static", "/auth/", "/platform/")
 SKIP_RULES = {"/logout"}
-BODY = {"name": "pwned", "item": "pwned", "status": "cancelled", "quantity": 1,
-        "amount": 1, "phone_number": "0799999999", "role": "user"}
+FK_FIELDS = ("customer_id", "inventory_item_id", "item_id", "supplier_id", "category_id",
+             "transaction_id", "prescription_id", "prescription_item_id", "shift_id",
+             "po_id", "order_id", "user_id", "cashier_id")
+
+
+def body_with(foreign_id):
+    """A request body that points every reference at one of A's ids."""
+    body = {"name": "pwned", "item": "pwned", "status": "cancelled", "quantity": 1,
+            "amount": 1, "phone_number": "0799999999", "role": "user", "code": "PWN",
+            "price": 1, "reason": "manual", "delta": 1, "points": 1,
+            "items": [{key: foreign_id for key in FK_FIELDS} | {"quantity": 1,
+                       "quantity_prescribed": 1, "quantity_dispensed": 1,
+                       "quantity_received": 1, "unit_cost": 1}]}
+    body.update({key: foreign_id for key in FK_FIELDS})
+    return body
+
+
+def leaked(text_body):
+    return [m for m in LEAK_MARKERS if m in text_body]
 
 
 def seed_tenant_a(tenant_id):
@@ -44,7 +65,8 @@ def seed_tenant_a(tenant_id):
         db.session.flush()
         order = Order(customer_id=cust.id, item=f"{MARK} order", amount=Decimal("10"))
         txn = Transaction(transaction_ref="ALPHA-TXN", customer_id=cust.id, cashier_id=user.id,
-                          shift_id=shift.id, total=Decimal("10"), notes=MARK)
+                          shift_id=shift.id, total=Decimal("10"), notes=MARK,
+                          checkout_request_id="ws_CO_ALPHA")
         po = PurchaseOrder(po_number="ALPHA-PO", supplier_id=sup.id, notes=MARK)
         rx = Prescription(customer_id=cust.id, doctor_name=f"{MARK} doctor",
                           prescription_date=date(2026, 11, 1))
@@ -87,15 +109,43 @@ def all_ids(snap):
     return sorted({row["id"] for rows in snap.values() for row in rows})
 
 
+def _swept(rule):
+    return not (rule.rule.startswith(SKIP_PREFIXES) or rule.rule in SKIP_RULES)
+
+
 def id_routes(app):
     for rule in app.url_map.iter_rules():
-        if rule.rule.startswith(SKIP_PREFIXES) or rule.rule in SKIP_RULES:
-            continue
         converters = rule._converters
-        if not converters:
-            continue
-        if all(type(c).__name__ == "IntegerConverter" for c in converters.values()):
+        if _swept(rule) and converters and all(
+                type(c).__name__ == "IntegerConverter" for c in converters.values()):
             yield rule
+
+
+def string_routes(app):
+    for rule in app.url_map.iter_rules():
+        converters = rule._converters
+        if _swept(rule) and converters and any(
+                type(c).__name__ != "IntegerConverter" for c in converters.values()):
+            yield rule
+
+
+def foreign_references(tenant_id):
+    """Rows of ``tenant_id`` whose foreign keys point at another tenant's row."""
+    bad = []
+    with unscoped():
+        insp = db.inspect(db.engine)
+        for table in sorted(HEAD_TABLES - {"tenants"}):
+            for fk in insp.get_foreign_keys(table):
+                target = fk["referred_table"]
+                if target == "tenants":
+                    continue
+                col = fk["constrained_columns"][0]
+                rows = db.session.execute(text(
+                    f"SELECT t.id, t.{col} FROM {table} t JOIN {target} r ON r.id = t.{col} "
+                    f"WHERE t.tenant_id = :me AND (r.tenant_id IS NULL OR r.tenant_id != :me)"),
+                    {"me": tenant_id}).all()
+                bad += [f"{table}.id={rid} {col} -> {target}.id={ref}" for rid, ref in rows]
+    return bad
 
 
 def plain_routes(app):
@@ -106,54 +156,93 @@ def plain_routes(app):
             yield rule
 
 
-def call(client, method, url):
-    kwargs = {"json": BODY} if method in ("POST", "PUT", "PATCH") else {}
+def call(client, method, url, foreign_id):
+    kwargs = {"json": body_with(foreign_id)} if method in ("POST", "PUT", "PATCH") else {}
     return client.open(url, method=method, **kwargs)
 
 
 @pytest.fixture
-def swept(app, other_tenant, login_as):
+def no_network(monkeypatch):
+    """Provider calls fail fast instead of reaching Safaricom/Flutterwave."""
+    from services import flutterwave_service, mpesa_service
+
+    def offline(*a, **k):
+        raise mpesa_service.MpesaError("offline in tests")
+
+    def offline_card(*a, **k):
+        raise flutterwave_service.FlutterwaveError("offline in tests")
+
+    for name in ("stk_push", "query_stk_status", "get_access_token"):
+        monkeypatch.setattr(mpesa_service, name, offline)
+    for name in ("verify_transaction", "create_payment_link"):
+        monkeypatch.setattr(flutterwave_service, name, offline_card)
+
+
+@pytest.fixture
+def swept(app, other_tenant, login_as, no_network):
     seed_tenant_a(app.acme_id)
     before = snapshot(app.acme_id)
     assert all(before[t] for t in before), "every table needs an A row for the sweep"
     client = login_as("superuser", tenant_id=other_tenant)
+    app.globex_id = other_tenant
     return app, client, before
+
+
+def sweep(app, client, ids):
+    """Call every swept route; return (leaks, crashes)."""
+    leaks, crashes = [], []
+
+    def check(method, url, response):
+        found = leaked(response.get_data(as_text=True))
+        if found:
+            leaks.append(f"{method} {url} -> {response.status_code} shows {found}")
+        # 502 is the app reporting a payment provider as down (stubbed offline
+        # here), which is correct; anything else 5xx is a crash.
+        if response.status_code >= 500 and response.status_code != 502:
+            crashes.append(f"{method} {url} -> {response.status_code}")
+
+    for rule in id_routes(app):
+        for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+            for value in ids:
+                url = rule.build({arg: value for arg in rule.arguments})[1]
+                check(method, url, call(client, method, url, value))
+    for rule in string_routes(app):
+        for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+            for value in STRING_ARGS:
+                args = {arg: (value if type(conv).__name__ != "IntegerConverter" else ids[0])
+                        for arg, conv in rule._converters.items()}
+                url = rule.build(args)[1]
+                check(method, url, call(client, method, url, ids[0]))
+    for rule in plain_routes(app):
+        check("GET", rule.rule, client.get(rule.rule))
+    for rule in app.url_map.iter_rules():
+        if _swept(rule) and not rule.arguments and "POST" in rule.methods:
+            check("POST", rule.rule, call(client, "POST", rule.rule, ids[0]))
+    return leaks, crashes
 
 
 def test_routes_with_ids_never_reach_tenant_a(swept):
     app, client, before = swept
     ids = all_ids(before)
-    rules = list(id_routes(app))
     # 40 at the time of writing: every route taking a numeric id. A drop
     # means the route filter broke, not that routes were removed.
-    assert len(rules) >= 40, f"only {len(rules)} id routes found"
-    leaks, crashes = [], []
-    for rule in rules:
-        for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
-            for value in ids:
-                url = rule.build({arg: value for arg in rule.arguments})[1]
-                response = call(client, method, url)
-                body = response.get_data(as_text=True)
-                if MARK in body:
-                    leaks.append(f"{method} {url} -> {response.status_code}")
-                if response.status_code >= 500:
-                    crashes.append(f"{method} {url} -> {response.status_code}")
+    assert len(list(id_routes(app))) >= 40
+    assert len(list(string_routes(app))) >= 3
+    leaks, crashes = sweep(app, client, ids)
     assert leaks == [], "tenant A data visible to tenant B:\n" + "\n".join(leaks)
     assert crashes == [], "server errors during sweep:\n" + "\n".join(crashes)
     assert snapshot(app.acme_id) == before, "tenant B changed tenant A's rows"
+    bad = foreign_references(app.globex_id)
+    assert bad == [], "tenant B rows now reference tenant A rows:\n" + "\n".join(bad)
 
 
-def test_list_and_page_routes_show_nothing_of_tenant_a(swept):
-    app, client, before = swept
-    leaks, crashes = [], []
-    for rule in plain_routes(app):
-        response = client.get(rule.rule)
-        if MARK in response.get_data(as_text=True):
-            leaks.append(f"GET {rule.rule}")
-        if response.status_code >= 500:
-            crashes.append(f"GET {rule.rule} -> {response.status_code}")
-    assert leaks == [], "tenant A data visible to tenant B:\n" + "\n".join(leaks)
-    assert crashes == [], "server errors:\n" + "\n".join(crashes)
+def test_anonymous_requests_reach_nothing(app, client, no_network):
+    """No session at all: nothing leaks, nothing crashes, nothing changes."""
+    seed_tenant_a(app.acme_id)
+    before = snapshot(app.acme_id)
+    leaks, crashes = sweep(app, client, all_ids(before))
+    assert leaks == [], "tenant A data visible anonymously:\n" + "\n".join(leaks)
+    assert crashes == [], "server errors for anonymous requests:\n" + "\n".join(crashes)
     assert snapshot(app.acme_id) == before
 
 

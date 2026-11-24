@@ -49,6 +49,19 @@ def version():
     return fetch("SELECT version_num FROM alembic_version")[0][0]
 
 
+def assert_0002_shape():
+    """The schema 0002 leaves behind, so a failed 0003 can be retried."""
+    insp = db.inspect(db.engine)
+    assert "system_config" in insp.get_table_names()
+    for table in ("customers", "orders", "users"):
+        columns = {c["name"]: c for c in insp.get_columns(table)}
+        assert columns["tenant_id"]["nullable"], table
+        assert not any(fk["referred_table"] == "tenants" for fk in insp.get_foreign_keys(table)), table
+        assert not any(ix["column_names"] == ["tenant_id"] for ix in insp.get_indexes(table)), table
+    assert not any("tenant_id" in uq["column_names"]
+                   for uq in insp.get_unique_constraints("customers"))
+
+
 def seed_shop(config=None, phones=("0712345678",)):
     if config:
         insert("system_config", *({"key": k, "value": v} for k, v in config.items()))
@@ -109,10 +122,12 @@ def test_bad_and_colliding_phones_stop_the_upgrade_with_every_problem(legacy):
     assert "+25756098389" in message
     assert "'0712345678'" in message and "'254712345678'" in message
     assert "nothing was changed" in message
-    # 0003 changed nothing: still at 0002, phones untouched, tenant_id nullable.
+    # 0003 changed nothing: still at 0002, phones untouched, and the schema
+    # is exactly the 0002 shape (no NOT NULL, FK, index or unique swap yet).
     assert version() == "0002_tenants_expand"
     assert sorted(r[0] for r in fetch("SELECT phone_number FROM customers")) == [
         "+25756098389", "0712345678", "0722000111", "254712345678"]
+    assert_0002_shape()
 
 
 def test_upgrade_after_fixing_phones_succeeds(legacy):
@@ -181,3 +196,39 @@ def test_downgrade_with_two_tenants_refuses(legacy):
         alembic("downgrade", "0002_tenants_expand")
     assert "2 tenants" in str(excinfo.value)
     assert version() == "0003_tenants_contract"
+
+
+def test_empty_staff_phones_become_null(legacy):
+    """Review finding: two staff with phone '' collided under the new
+    (tenant, phone) unique constraint halfway through the migration."""
+    seed_shop()
+    insert("users", {"email": "a@shop.co", "role": "cashier", "status": "approved",
+                     "phone_number": ""},
+           {"email": "b@shop.co", "role": "cashier", "status": "approved",
+            "phone_number": "  "})
+    upgrade()
+    assert version() == "0003_tenants_contract"
+    phones = dict(fetch("SELECT email, phone_number FROM users"))
+    assert phones["a@shop.co"] is None and phones["b@shop.co"] is None
+    assert diff_against_models(legacy) == []
+
+
+def test_empty_customer_phone_stops_the_upgrade(legacy):
+    seed_shop(phones=("0712345678", ""))
+    with pytest.raises(Exception) as excinfo:
+        alembic("upgrade", "head")
+    assert "phone is empty" in str(excinfo.value)
+    assert_0002_shape()
+
+
+def test_legacy_standalone_unique_index_is_replaced(legacy):
+    """Review finding: uniqueness enforced by CREATE UNIQUE INDEX (not a
+    constraint) was found but then dropped as a constraint, which failed."""
+    with db.engine.begin() as conn:
+        conn.exec_driver_sql("CREATE UNIQUE INDEX legacy_category_name ON categories (name)")
+    seed_shop()
+    insert("categories", {"name": "Pain relief"})
+    upgrade()
+    insp = db.inspect(db.engine)
+    assert "legacy_category_name" not in {ix["name"] for ix in insp.get_indexes("categories")}
+    assert diff_against_models(legacy) == []

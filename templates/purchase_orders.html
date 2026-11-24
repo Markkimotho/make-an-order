@@ -140,7 +140,7 @@
   async function loadSuppliers() {
     suppliers = await api('GET', '/inventory/suppliers');
     $('#supList').innerHTML = suppliers.length ? suppliers.map(s =>
-      `<tr><td>${s.name}</td><td>${s.contact_person||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td></tr>`
+      `<tr><td>${s.name}</td><td>${s.contact_name||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td></tr>`
     ).join('') : '<tr><td colspan="4" class="text-muted">No suppliers.</td></tr>';
     $('#poSupplier').innerHTML = suppliers.map(s =>
       `<option value="${s.id}">${s.name}</option>`).join('');
@@ -286,7 +286,7 @@
   $('#btnSupAdd').addEventListener('click', async () => {
     const body = {
       name: $('#supName').value.trim(),
-      contact_person: $('#supContact').value.trim() || null,
+      contact_name: $('#supContact').value.trim() || null,
       phone: $('#supPhone').value.trim() || null,
       email: $('#supEmail').value.trim() || null,
     };

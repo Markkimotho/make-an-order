@@ -13,13 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SCANNED = [ROOT / "app.py", *(ROOT / d for d in ("api", "auth", "services"))]
 
 BANNED_CALLS = {"text", "insert", "bulk_insert_mappings", "bulk_update_mappings",
-                "bulk_save_objects", "connection", "exec_driver_sql"}
+                "bulk_save_objects", "connection", "exec_driver_sql", "merge",
+                "from_statement"}
+BANNED_STRINGS = {"tenancy_internal"}   # the hooks' private execution option
 BANNED_ATTRIBUTES = {"__table__", "engine"}
 
 # (file, enclosing function) for every permitted unscoped() call.
 UNSCOPED_ALLOWLIST = {
     ("app.py", "bind_request_tenant"),          # load the session's user and tenant
     ("app.py", "create_platform_admin_command"),
+    ("app.py", "grant_platform_admin_command"),
+    ("api/payments.py", "_owning_tenant"),      # webhooks: which tenant owns this reference
     ("app.py", "seed_demo_command"),            # resolve slug -> tenant id
     ("api/platform.py", "tenants"),             # platform admins list all tenants
     ("api/platform.py", "act_as"),
@@ -67,6 +71,11 @@ class Finder(ast.NodeVisitor):
         if name == "unscoped":
             self.unscoped.append((self.rel, self.stack[-1] if self.stack else "<module>",
                                   node.lineno))
+        self.generic_visit(node)
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, str) and node.value in BANNED_STRINGS:
+            self.banned.append(f"{self.rel}:{node.lineno} '{node.value}'")
         self.generic_visit(node)
 
     def visit_Attribute(self, node):
@@ -126,6 +135,10 @@ def test_the_scanner_catches_what_it_should(tmp_path):
         "    db.session.connection()\n"
         "    db.session.bulk_insert_mappings(Customer, [])\n"
         "    db.metadata.tables['customers']\n"
+        "    db.session.merge(obj, load=False)\n"
+        "    select(Customer).from_statement(q)\n"
+        "    q.execution_options(tenancy_internal=True)\n"
+        "    q.execution_options(**{'tenancy_internal': True})\n"
         "    with unscoped():\n"
         "        pass\n"
     )
@@ -135,4 +148,6 @@ def test_the_scanner_catches_what_it_should(tmp_path):
     for needle in ("text()", "insert()", ".__table__", ".engine", "connection()",
                    "bulk_insert_mappings()", "metadata.tables"):
         assert needle in flagged, needle
-    assert finder.unscoped == [("sample.py", "leak", 10)]
+    for needle in ("merge()", "from_statement()", "'tenancy_internal'"):
+        assert needle in flagged, needle
+    assert finder.unscoped == [("sample.py", "leak", 14)]

@@ -192,16 +192,42 @@ def test_google_login_for_known_email(client, app):
 
 # --- platform admins -----------------------------------------------------------
 
-def test_platform_admin_flag_comes_from_config(client, app, monkeypatch):
+def test_signup_with_an_operator_email_does_not_grant_platform_admin(client, monkeypatch):
+    """Review finding: anyone could sign up with an operator's address."""
     from config import Config
-    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "ops@platform.co, other@x.co")
+    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "ops@platform.co")
+    client.post("/auth/register", data={**SIGNUP, "email": "ops@platform.co"})
+    assert not _user("ops@platform.co").is_platform_admin
+    assert client.get("/platform/tenants").status_code == 403
+
+
+def test_staff_created_with_an_operator_email_is_not_platform_admin(login_as, monkeypatch):
+    from config import Config
+    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "ops@platform.co")
+    login_as("superuser").post("/users/", json={"email": "ops@platform.co",
+                                                 "password": "pass-word-1"})
+    from flask import current_app
+    client = current_app.test_client()
+    client.post("/auth/login/local", data={"email": "ops@platform.co",
+                                           "password": "pass-word-1"})
+    assert not _user("ops@platform.co").is_platform_admin
+    assert client.get("/platform/tenants").status_code == 403
+
+
+def test_platform_admin_needs_flag_and_env(client, app, monkeypatch):
+    from config import Config
     _make_user(app.acme_id, "ops@platform.co", role="superuser")
+    result = app.test_cli_runner().invoke(args=["grant-platform-admin", "ops@platform.co"])
+    assert result.exit_code == 0, result.output
+    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "ops@platform.co, other@x.co")
     client.post("/auth/login/local", data={"email": "ops@platform.co", "password": "pass-word-1"})
     assert _user("ops@platform.co").is_platform_admin
-    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "")
+    assert client.get("/platform/tenants").status_code == 200
     client.get("/logout")
+    monkeypatch.setattr(Config, "PLATFORM_ADMIN_EMAILS", "")
     client.post("/auth/login/local", data={"email": "ops@platform.co", "password": "pass-word-1"})
     assert not _user("ops@platform.co").is_platform_admin
+    assert client.get("/platform/tenants").status_code == 403
 
 
 def test_create_platform_admin_command(app):
@@ -292,3 +318,52 @@ def test_owner_settings_page_updates_tenant(login_as, app):
 
 def test_non_owner_cannot_open_settings(login_as):
     assert login_as("admin").get("/onboarding").status_code == 302
+
+
+# --- review findings ------------------------------------------------------------
+
+def test_demoted_owner_loses_owner_rights_on_next_request(login_as, app):
+    client = login_as("superuser")
+    with client.session_transaction() as sess:
+        me = sess["user_id"]
+    with tenant_scope(app.acme_id):
+        db.session.get(User, me).role = "cashier"
+        db.session.commit()
+    r = client.post("/users/", json={"email": "new@acme.co"})
+    assert r.status_code == 403
+    with client.session_transaction() as sess:
+        assert sess["role"] == "cashier"
+
+
+def test_signup_slug_race_takes_next_slug(client, monkeypatch):
+    """Two signups computing the same slug at once: the loser retries."""
+    import migrations.helpers as helpers
+    create_tenant("Kilimani Chemist", "kilimani-chemist")
+    real = helpers.slugify
+    calls = {"n": 0}
+
+    def stale_slugify(name, taken=()):
+        calls["n"] += 1
+        # First attempt behaves as if the other signup had not committed yet.
+        return "kilimani-chemist" if calls["n"] == 1 else real(name, taken)
+
+    monkeypatch.setattr(helpers, "slugify", stale_slugify)
+    r = client.post("/auth/register", data=SIGNUP)
+    assert r.status_code == 302 and r.headers["Location"] == "/dashboard"
+    assert _tenant("kilimani-chemist-2") is not None
+    assert _user(SIGNUP["email"]).tenant_id == _tenant("kilimani-chemist-2").id
+
+
+def test_requests_never_inherit_the_callers_tenant(client, app):
+    """An anonymous request runs with no tenant even when the surrounding
+    code (here, the test) has one bound, exactly as in production."""
+    from auth.tenancy import current_tenant_id
+    seen = {}
+
+    @app.route("/_probe_tenant")
+    def _probe_tenant():
+        seen["tenant"] = current_tenant_id()
+        return ""
+
+    client.get("/_probe_tenant")
+    assert seen["tenant"] is None

@@ -477,6 +477,18 @@ def list_suppliers():
     return jsonify([s.to_dict() for s in rows]), 200
 
 
+SUPPLIER_FIELDS = ('name', 'contact_name', 'phone', 'email', 'address', 'payment_terms')
+
+
+def _supplier_field(data, field):
+    """Trimmed value or None. 'contact_person' is accepted for contact_name
+    (what the purchase-orders page has always sent)."""
+    raw = data.get(field)
+    if raw is None and field == 'contact_name':
+        raw = data.get('contact_person')
+    return (raw or '').strip() or None
+
+
 @inventory_bp.route('/suppliers', methods=['POST'])
 @admin_api_required
 def create_supplier():
@@ -486,11 +498,11 @@ def create_supplier():
         return jsonify({'error': 'name is required'}), 400
     s = Supplier(
         name=name,
-        contact_person=(data.get('contact_person') or '').strip() or None,
-        phone=(data.get('phone') or '').strip() or None,
-        email=(data.get('email') or '').strip() or None,
-        address=(data.get('address') or '').strip() or None,
-        notes=(data.get('notes') or '').strip() or None,
+        contact_name=_supplier_field(data, 'contact_name'),
+        phone=_supplier_field(data, 'phone'),
+        email=_supplier_field(data, 'email'),
+        address=_supplier_field(data, 'address'),
+        payment_terms=_supplier_field(data, 'payment_terms'),
     )
     db.session.add(s)
     try:
@@ -508,12 +520,11 @@ def update_supplier(id):
     if not s:
         return jsonify({'error': 'Supplier not found'}), 404
     data = request.get_json(silent=True) or {}
-    for f in ('name', 'contact_person', 'phone', 'email', 'address', 'notes'):
-        if f in data:
-            v = (data.get(f) or '').strip() or None
-            setattr(s, f, v if v or f == 'name' else None)
-            if f == 'name' and not v:
-                return jsonify({'error': 'name cannot be empty'}), 400
+    if 'name' in data and not (data.get('name') or '').strip():
+        return jsonify({'error': 'name cannot be empty'}), 400
+    for f in SUPPLIER_FIELDS:
+        if f in data or (f == 'contact_name' and 'contact_person' in data):
+            setattr(s, f, _supplier_field(data, f))
     try:
         db.session.commit()
     except IntegrityError:

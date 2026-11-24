@@ -33,7 +33,7 @@ from auth.auth_middleware import (admin_required, cashier_required,
                                   login_required, pharmacist_required,
                                   stock_clerk_required, superuser_required)
 from auth.auth_routes import create_auth_blueprint
-from auth.tenancy import bind_tenant, reset_tenant, unscoped
+from auth.tenancy import CrossTenantWrite, bind_tenant, reset_tenant, unscoped
 from config import Config
 from models import VERTICALS, Customer, Order, Tenant, User, db
 
@@ -124,13 +124,17 @@ def _wants_json():
 def bind_request_tenant():
     """Bind the logged-in user's tenant for this request (before_request).
 
-    Every request with a session is re-checked against the database: a user
-    who was deleted, disabled or moved to another tenant is logged out, and
-    a tenant whose subscription lapsed gets 402. Platform admins may have no
-    tenant and are exempt from the membership and subscription checks.
+    Every request starts with no tenant bound, whatever the surrounding
+    code had bound, so a request can only ever act as its own session's
+    tenant. The session is then re-checked against the database: a user who
+    was deleted, disabled or moved to another tenant is logged out, the
+    session's role is refreshed from the user's current role, and a tenant
+    whose subscription lapsed gets 402. Platform admins may have no tenant
+    and are exempt from the membership and subscription checks.
     """
     g.current_tenant = None
     g.is_platform_admin = False
+    g.base_token = bind_tenant(None)
     g.tenant_token = None
     user_id = session.get('user_id')
     if not user_id:
@@ -150,8 +154,12 @@ def bind_request_tenant():
         if tenant_id and tenant is None:
             session.clear()
             return None
+        # Platform admins act as owner of the tenant they chose.
+        role = 'superuser' if is_platform_admin else user.role
         db.session.expunge_all()   # keep the loaded tenant usable after unscoped()
 
+    if session.get('role') != role:
+        session['role'] = role
     g.is_platform_admin = is_platform_admin
     if tenant is None:
         return None
@@ -168,9 +176,10 @@ def bind_request_tenant():
 
 
 def unbind_request_tenant(exc=None):
-    token = g.pop('tenant_token', None)
-    if token is not None:
-        reset_tenant(token)
+    for name in ('tenant_token', 'base_token'):
+        token = g.pop(name, None)
+        if token is not None:
+            reset_tenant(token)
 
 
 # ---------------------------------------------------------------------------
@@ -275,14 +284,28 @@ def _register_cli(app):
             raise click.ClickException('Password must be at least 8 characters')
         with unscoped(), tenant_scope(None):
             if User.query.filter_by(email=email).first() is not None:
-                raise click.ClickException(f'A user with email {email} already exists')
+                raise click.ClickException(f'A user with email {email} already exists; '
+                                           'use flask grant-platform-admin')
             user = User(email=email, name=name, role='superuser', status='approved',
                         is_platform_admin=True)
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
-        click.echo(f'Created platform admin {email}. Add it to PLATFORM_ADMIN_EMAILS, '
-                   'or the flag is cleared at their next login.')
+        click.echo(f'Created platform admin {email}. It must also be listed in '
+                   'PLATFORM_ADMIN_EMAILS, or the flag is removed at their next login.')
+
+    @app.cli.command('grant-platform-admin')
+    @click.argument('email')
+    def grant_platform_admin_command(email):
+        """Give an existing user platform-admin rights (also needs PLATFORM_ADMIN_EMAILS)."""
+        email = email.strip().lower()
+        with unscoped():
+            user = User.query.filter_by(email=email).first()
+            if user is None:
+                raise click.ClickException(f'No user with email {email}')
+            user.is_platform_admin = True
+            db.session.commit()
+        click.echo(f'{email} is a platform admin while listed in PLATFORM_ADMIN_EMAILS.')
 
     @app.cli.command('seed-demo')
     @click.argument('slug')
@@ -478,6 +501,16 @@ def _register_core_routes(app):
         app.logger.warning(f"Not Found: {request.url}")
         return render_template('404.html',
                                message="The page you are looking for does not exist."), 404
+
+    @app.errorhandler(CrossTenantWrite)
+    def cross_tenant_write(error):
+        # A reference to another business's row: from this tenant's point of
+        # view it does not exist. Logged, because a route let it get this far.
+        app.logger.warning(f"Cross-tenant write refused: {request.method} {request.path}: {error}")
+        db.session.rollback()
+        if _wants_json():
+            return jsonify({"error": "Not found"}), 404
+        return render_template('404.html', message="Not found"), 404
 
     @app.errorhandler(500)
     def internal_server_error(error):

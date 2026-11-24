@@ -25,7 +25,7 @@ from alembic import op
 
 from migrations.helpers import (NULLABLE_TENANT_TABLES, PER_TENANT_UNIQUES,
                                 TENANT_TABLES, VERTICAL_TO_BUSINESS_TYPE,
-                                find_unique_constraint, has_unique)
+                                find_uniques)
 from services.phone import InvalidPhone, normalize_ke_phone
 
 revision = "0003_tenants_contract"
@@ -75,6 +75,10 @@ def _plan_phone_changes(bind, table, nullable):
     for row_id, tenant_id, phone in rows:
         if phone is None or str(phone).strip() == "":
             if nullable:
+                # Empty strings would collide under the new (tenant, phone)
+                # unique constraint; NULLs do not.
+                if phone is not None:
+                    changes[row_id] = None
                 continue
             problems.append(f"{table}.id={row_id}: phone is empty")
             continue
@@ -107,12 +111,13 @@ def _normalise_phones(bind):
 
 
 def _drop_unique(batch, inspector, table, column):
-    """Drop the legacy unique on ``column``, whatever it is called."""
-    if not has_unique(inspector, table, [column]):
-        return
-    name = find_unique_constraint(inspector, table, [column])
-    # Unnamed (SQLite legacy): batch mode names it by the convention.
-    batch.drop_constraint(name or f"uq_{table}_{column}", type_="unique")
+    """Drop every unique constraint and unique index on exactly ``column``."""
+    for kind, name in find_uniques(inspector, table, [column]):
+        if kind == "index":
+            batch.drop_index(name)
+        else:
+            # Unnamed (SQLite legacy): batch mode names it by the convention.
+            batch.drop_constraint(name or f"uq_{table}_{column}", type_="unique")
 
 
 def _swap_uniques(bind):
@@ -128,9 +133,9 @@ def _swap_uniques(bind):
                 batch.create_unique_constraint(f"uq_{table}_tenant_{column}",
                                                ["tenant_id", column])
 
-    email_name = find_unique_constraint(inspector, "users", ["email"])
+    email_uniques = find_uniques(inspector, "users", ["email"])
     with op.batch_alter_table("users", naming_convention=NAMING_CONVENTION) as batch:
-        if email_name != "uq_users_email":
+        if email_uniques != [("constraint", "uq_users_email")]:
             _drop_unique(batch, inspector, "users", "email")
             batch.create_unique_constraint("uq_users_email", ["email"])
         batch.create_unique_constraint("uq_users_tenant_phone_number",

@@ -252,3 +252,21 @@ class TestInventoryItemPosFields:
         assert item.requires_prescription is True
         assert float(item.cost_price) == 30.0
         assert item.reorder_level == 10
+
+
+# --------------------------------------------------------------------------
+# Supplier API (found by the isolation sweep: create always raised TypeError)
+# --------------------------------------------------------------------------
+
+def test_supplier_create_and_update_api(login_as):
+    client = login_as('admin')
+    r = client.post('/inventory/suppliers', json={
+        'name': 'Phillips Pharma', 'contact_person': 'Wambui', 'phone': '0722000000',
+        'payment_terms': 'Net 30'})
+    assert r.status_code == 201, r.get_json()
+    sup = r.get_json()['supplier']
+    assert (sup['contact_name'], sup['payment_terms']) == ('Wambui', 'Net 30')
+    r = client.put(f"/inventory/suppliers/{sup['id']}", json={'contact_name': 'Otieno'})
+    assert r.status_code == 200
+    assert r.get_json()['supplier']['contact_name'] == 'Otieno'
+    assert client.put(f"/inventory/suppliers/{sup['id']}", json={'name': ''}).status_code == 400

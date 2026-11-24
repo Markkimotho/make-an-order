@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from flask_sqlalchemy import SQLAlchemy  # type: ignore
+from flask_sqlalchemy.session import Session as FlaskSession  # type: ignore
 from sqlalchemy import MetaData
 from sqlalchemy.orm import declared_attr, deferred, validates
 
@@ -19,7 +20,20 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-db = SQLAlchemy(metadata=MetaData(naming_convention=NAMING_CONVENTION))
+class TenantSession(FlaskSession):
+    """The app's session. merge() is checked after the fact, because
+    SQLAlchemy attaches the merged copy before filling in its attributes,
+    so the before_attach hook cannot see whose row it is."""
+
+    def merge(self, instance, *args, **kwargs):
+        merged = super().merge(instance, *args, **kwargs)
+        from auth.tenancy import check_merged
+        check_merged(self, merged)
+        return merged
+
+
+db = SQLAlchemy(metadata=MetaData(naming_convention=NAMING_CONVENTION),
+                session_options={"class_": TenantSession})
 
 VERTICALS = ("pharmacy", "distributor", "institution")
 SUBSCRIPTION_STATUSES = ("trial", "active", "past_due", "cancelled")

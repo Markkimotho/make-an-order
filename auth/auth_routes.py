@@ -38,8 +38,8 @@ def _session_for(user_fields):
 def _login_user(email):
     """Find an approved user by email in any tenant and start their session.
 
-    Returns None on success, else the message to show. Refreshes the
-    platform-admin flag from PLATFORM_ADMIN_EMAILS on every login.
+    Returns None on success, else the message to show. Removes the
+    platform-admin flag if the email is no longer in PLATFORM_ADMIN_EMAILS.
     """
     from models import User, db
     with unscoped():
@@ -50,9 +50,12 @@ def _login_user(email):
             return "Your account is awaiting approval by your business owner."
         if user.status == 'rejected':
             return "Your account access has been denied. Contact your business owner."
-        should_be_admin = email in _platform_admin_emails()
-        if bool(user.is_platform_admin) != should_be_admin:
-            user.is_platform_admin = should_be_admin
+        # Platform-admin rights need both the database flag (set only by
+        # `flask create-platform-admin` / `grant-platform-admin`) and the
+        # email in PLATFORM_ADMIN_EMAILS. Login can only remove the flag,
+        # never grant it: anyone can sign up with any email address.
+        if user.is_platform_admin and email not in _platform_admin_emails():
+            user.is_platform_admin = False
             db.session.commit()
         if user.tenant_id is None and not user.is_platform_admin:
             return "This account is not linked to a business."
@@ -151,24 +154,33 @@ def create_auth_blueprint(oauth):
         except InvalidPhone:
             return fail("Enter a Kenyan mobile number, for example 0712 345 678.")
 
+        slug = None
         with unscoped():
             if User.query.filter_by(email=email).first() is not None:
                 return fail("An account with this email already exists.")
-            taken = {slug for (slug,) in db.session.query(Tenant.slug).all()}
-            tenant = Tenant(name=business_name, slug=slugify(business_name, taken),
-                            vertical=vertical)
-            db.session.add(tenant)
-            db.session.flush()
-            owner = User(tenant_id=tenant.id, email=email, name=name, phone_number=phone,
-                         role='superuser', status='approved')
-            owner.set_password(password)
-            db.session.add(owner)
-            try:
-                db.session.commit()
-            except IntegrityError:
-                db.session.rollback()
-                return fail("That business or email was just registered. Try signing in.")
-            slug = tenant.slug
+            # Two signups with the same business name can race for one slug;
+            # the loser retries with the next free one.
+            for _ in range(5):
+                taken = {s for (s,) in db.session.query(Tenant.slug).all()}
+                tenant = Tenant(name=business_name, slug=slugify(business_name, taken),
+                                vertical=vertical)
+                owner = User(email=email, name=name, phone_number=phone,
+                             role='superuser', status='approved')
+                owner.set_password(password)
+                try:
+                    db.session.add(tenant)
+                    db.session.flush()
+                    owner.tenant_id = tenant.id
+                    db.session.add(owner)
+                    db.session.commit()
+                    slug = tenant.slug
+                    break
+                except IntegrityError:
+                    db.session.rollback()
+                    if User.query.filter_by(email=email).first() is not None:
+                        return fail("An account with this email already exists.")
+            if slug is None:
+                return fail("Could not create the business right now. Please try again.")
         logger.info(f"New business signup: {slug} ({vertical}) owner {email}")
         problem = _login_user(email)
         if problem:

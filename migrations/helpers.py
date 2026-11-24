@@ -33,29 +33,27 @@ VERTICAL_TO_BUSINESS_TYPE = {"pharmacy": "pharmacy", "distributor": "supermarket
                              "institution": "general"}
 
 
-def find_unique_constraint(inspector, table, columns):
-    """Name of the unique constraint or unique index over exactly ``columns``.
+def find_uniques(inspector, table, columns):
+    """Every way uniqueness over exactly ``columns`` is enforced.
 
-    Returns None when there is one but it is unnamed (SQLite legacy tables)
-    or when there is none; callers that need to tell those apart use
-    :func:`has_unique`.
+    Returns a list of (kind, name): kind "constraint" for a UNIQUE
+    constraint, "index" for a standalone CREATE UNIQUE INDEX. A legacy table
+    can have both on one column, and all of them must go when the column
+    becomes unique per tenant. name is None for an unnamed constraint
+    (SQLite legacy tables). MySQL reports a UNIQUE constraint as an index
+    too; that duplicate is skipped.
     """
     wanted = list(columns)
+    found, seen = [], set()
     for uq in inspector.get_unique_constraints(table):
         if list(uq["column_names"]) == wanted:
-            return uq["name"]
+            found.append(("constraint", uq["name"]))
+            seen.add(uq["name"])
     for ix in inspector.get_indexes(table):
-        if ix.get("unique") and list(ix["column_names"]) == wanted:
-            return ix["name"]
-    return None
-
-
-def has_unique(inspector, table, columns):
-    wanted = list(columns)
-    if any(list(uq["column_names"]) == wanted for uq in inspector.get_unique_constraints(table)):
-        return True
-    return any(ix.get("unique") and list(ix["column_names"]) == wanted
-               for ix in inspector.get_indexes(table))
+        if (ix.get("unique") and list(ix["column_names"]) == wanted
+                and ix["name"] not in seen and not ix.get("duplicates_constraint")):
+            found.append(("index", ix["name"]))
+    return found
 
 
 def slugify(name, taken=()):
