@@ -478,6 +478,32 @@
 - `GET /reports/payment_breakdown` — Payment method breakdown
 - `GET /reports/export?days={N}` — CSV export
 
+#### Daily profit, expenses and reconciliation
+
+For the owner: what did we sell and make each day, gross vs net, and does the
+cash counted match the system. Numbers come from `services/reports/` (its
+docstrings define every figure); routes are in `api/finance_reports.py`.
+Finance roles (accountant, admin, owner) in every vertical with `finance`.
+
+- **Daily report** (`/reports-dashboard`): revenue (net of VAT, discounts and
+  refunds), cost of goods from the batches each sale drew from, gross profit
+  and margin, expenses, net profit, revenue by payment method, top items,
+  profit by category, 12-month net profit chart, CSV. Days are Nairobi days.
+  Lines with no cost price are counted and flagged, never hidden.
+- **Expenses** (`/money-ui/expenses`): rent, wages, power and other costs.
+  Cash paid from the till by someone with an open shift is also a cash out
+  on that shift.
+- **Reconciliation** (`/money-ui/reconciliation`): per shift and per cashier
+  for a day: opening float, cash sales, cash in/out, expected, counted,
+  variance (red over the business's `cash_variance_alert`, which also texts
+  the admins when the shift closes); M-Pesa sales vs confirmed vs typed codes
+  to check; bank references and how many are unverified.
+
+API: `GET /reports/daily?from=&to=[&format=csv]` (max 366 days),
+`GET /reports/monthly`, `GET|POST /reports/expenses`,
+`DELETE /reports/expenses/<id>`, `GET /reports/reconciliation?date=`,
+`GET /reports/reconciliation/shift/<id>`.
+
 ---
 
 ### Receipts & Exports

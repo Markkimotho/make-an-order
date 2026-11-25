@@ -1,180 +1,211 @@
 {% extends "base.html" %}
-{% block title %}Reports Dashboard{% endblock %}
-
+{% block title %}Daily report{% endblock %}
 {% block content %}
 <style>
-  .kpi { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
-  .kpi .v { font-size: 22px; font-weight:600; }
-  .kpi .l { font-size: 12px; color:#666; text-transform:uppercase; letter-spacing:.5px; }
-  .chart-card { background:#fff; border-radius:10px; padding:14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); height: 320px; }
+  .kpi { background: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: 10px; padding: 12px 14px; height: 100%; }
+  .kpi .l { font-size: 12px; color: var(--bs-secondary-color); text-transform: uppercase; letter-spacing: .4px; }
+  .kpi .v { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chart-box { position: relative; height: 280px; }
+  #drRows td, #drFoot td { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-  <h2 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Reports Dashboard</h2>
-  <div class="d-flex gap-2 align-items-end">
-    <div><label class="form-label small mb-0">From</label><input type="date" class="form-control form-control-sm" id="dFrom"></div>
-    <div><label class="form-label small mb-0">To</label><input type="date" class="form-control form-control-sm" id="dTo"></div>
-    <button class="btn btn-sm btn-primary" id="btnApply"><i class="fas fa-filter me-1"></i>Apply</button>
-    <a class="btn btn-sm btn-outline-secondary" id="csvLink" href="#"><i class="fas fa-file-csv me-1"></i>CSV</a>
+<div class="d-flex align-items-end justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-chart-line me-2"></i>Daily report</h2>
+    <p class="text-muted mb-0 small">Sales, gross profit and net profit per day (Nairobi time). Revenue is
+      after discounts and refunds, without VAT. Gross profit is revenue less the cost of the goods sold;
+      net profit also takes off expenses.</p>
   </div>
+  <form class="d-flex gap-2 align-items-end flex-wrap" id="drForm">
+    <div><label class="form-label small mb-0" for="drFrom">From</label>
+      <input type="date" class="form-control form-control-sm" id="drFrom" required></div>
+    <div><label class="form-label small mb-0" for="drTo">To</label>
+      <input type="date" class="form-control form-control-sm" id="drTo" required></div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Quick ranges">
+      <button type="button" class="btn btn-outline-secondary" data-days="7">7 days</button>
+      <button type="button" class="btn btn-outline-secondary" data-days="30">30 days</button>
+      <button type="button" class="btn btn-outline-secondary" data-month="1">This month</button>
+    </div>
+    <button class="btn btn-sm btn-primary" type="submit"><i class="fas fa-rotate me-1"></i>Show</button>
+    <a class="btn btn-sm btn-outline-secondary" id="drCsv" href="#"><i class="fas fa-file-csv me-1"></i>CSV</a>
+  </form>
+</div>
+
+<div class="alert alert-danger d-none" id="drError" role="alert"></div>
+<div class="alert alert-warning d-none" id="drMissing" role="status"></div>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">Revenue</div><div class="v" id="kRevenue">-</div><div class="small text-muted" id="kSales"></div></div></div>
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">Gross profit</div><div class="v" id="kGross">-</div></div></div>
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">Gross margin</div><div class="v" id="kMargin">-</div></div></div>
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">Expenses</div><div class="v" id="kExpenses">-</div></div></div>
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">Net profit</div><div class="v" id="kNet">-</div></div></div>
+  <div class="col-6 col-lg-2"><div class="kpi"><div class="l">VAT collected</div><div class="v" id="kTax">-</div><div class="small text-muted" id="kDisc"></div></div></div>
 </div>
 
 <div class="row g-3 mb-3">
-  <div class="col-md-3"><div class="kpi"><div class="l">Sales total</div><div class="v" id="kpiSales">0.00</div></div></div>
-  <div class="col-md-3"><div class="kpi"><div class="l">Transactions</div><div class="v" id="kpiCount">0</div></div></div>
-  <div class="col-md-3"><div class="kpi"><div class="l">Avg basket</div><div class="v" id="kpiAvg">0.00</div></div></div>
-  <div class="col-md-3"><div class="kpi"><div class="l">Tax collected</div><div class="v" id="kpiTax">0.00</div></div></div>
+  <div class="col-lg-8"><div class="card h-100"><div class="card-body">
+    <h6 class="card-title">Revenue and gross profit per day</h6>
+    <div class="chart-box"><canvas id="cDaily" aria-label="Daily revenue and gross profit"></canvas></div>
+  </div></div></div>
+  <div class="col-lg-4"><div class="card h-100"><div class="card-body">
+    <h6 class="card-title">Revenue by payment method</h6>
+    <div class="chart-box"><canvas id="cMethods" aria-label="Revenue by payment method"></canvas></div>
+  </div></div></div>
 </div>
 
 <div class="row g-3 mb-3">
-  <div class="col-md-6"><div class="chart-card"><canvas id="byMethodChart"></canvas></div></div>
-  <div class="col-md-6"><div class="chart-card"><canvas id="topProductsChart"></canvas></div></div>
+  <div class="col-lg-6"><div class="card h-100"><div class="card-body">
+    <h6 class="card-title">Top items by gross profit</h6>
+    <div class="chart-box"><canvas id="cTop" aria-label="Top items by gross profit"></canvas></div>
+  </div></div></div>
+  <div class="col-lg-6"><div class="card h-100"><div class="card-body">
+    <h6 class="card-title">Net profit, last 12 months</h6>
+    <div class="chart-box"><canvas id="cMonthly" aria-label="Net profit per month"></canvas></div>
+  </div></div></div>
 </div>
 
-<div class="row g-3 mb-3">
-  <div class="col-md-6">
-    <div class="card"><div class="card-body">
-      <h5>Cashier performance</h5>
-      <div class="table-responsive"><table class="table table-sm">
-        <thead><tr><th>Cashier</th><th>Txns</th><th>Sales</th><th>Refunds</th><th>Net</th></tr></thead>
-        <tbody id="cashierBody"><tr><td colspan="5" class="text-muted">—</td></tr></tbody>
-      </table></div>
-    </div></div>
-  </div>
-  <div class="col-md-6">
-    <div class="card"><div class="card-body">
-      <h5>Inventory value</h5>
-      <div class="d-flex justify-content-between"><span>Cost value:</span><strong id="invCost">0.00</strong></div>
-      <div class="d-flex justify-content-between"><span>Retail value:</span><strong id="invRetail">0.00</strong></div>
-      <div class="d-flex justify-content-between"><span>Projected margin:</span><strong id="invMargin">0.00</strong></div>
-      <div class="d-flex justify-content-between"><span>Total units:</span><strong id="invUnits">0</strong></div>
-    </div></div>
-  </div>
-</div>
+<div class="card mb-3"><div class="card-body">
+  <h6 class="card-title">Profit by category</h6>
+  <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Category</th><th class="text-end">Revenue</th><th class="text-end">Cost of goods</th>
+      <th class="text-end">Gross profit</th><th class="text-end">Margin</th></tr></thead>
+    <tbody id="drCats"><tr><td colspan="5" class="text-muted">Loading…</td></tr></tbody>
+  </table></div>
+</div></div>
 
-<div class="row g-3">
-  <div class="col-md-6">
-    <div class="card"><div class="card-body">
-      <h5>Low stock <span class="badge bg-danger" id="lowCount">0</span></h5>
-      <div class="table-responsive" style="max-height:260px;overflow-y:auto;"><table class="table table-sm">
-        <thead><tr><th>Item</th><th>Stock</th><th>Reorder</th></tr></thead>
-        <tbody id="lowBody"><tr><td colspan="3" class="text-muted">—</td></tr></tbody>
-      </table></div>
-    </div></div>
-  </div>
-  <div class="col-md-6">
-    <div class="card"><div class="card-body">
-      <h5>Expiring soon <span class="badge bg-warning text-dark" id="expCount">0</span></h5>
-      <div class="d-flex justify-content-between mb-2">
-        <span>Cost at risk:</span><strong id="expRisk">0.00</strong>
-      </div>
-      <div class="table-responsive" style="max-height:220px;overflow-y:auto;"><table class="table table-sm">
-        <thead><tr><th>Item</th><th>Stock</th><th>Expiry</th><th>Days</th></tr></thead>
-        <tbody id="expBody"><tr><td colspan="4" class="text-muted">—</td></tr></tbody>
-      </table></div>
-    </div></div>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead><tr><th>Date</th><th class="text-end">Sales</th><th class="text-end">Revenue</th>
+      <th class="text-end">Refunds</th><th class="text-end">Discounts</th><th class="text-end">VAT</th>
+      <th class="text-end">Cost of goods</th><th class="text-end">Gross profit</th><th class="text-end">Margin</th>
+      <th class="text-end">Expenses</th><th class="text-end">Net profit</th>
+      <th class="text-end">Cash</th><th class="text-end">M-Pesa</th><th class="text-end">Bank</th>
+      <th class="text-end">Card</th><th class="text-end">Credit</th></tr></thead>
+    <tbody id="drRows"><tr><td colspan="16" class="text-muted p-3">Loading…</td></tr></tbody>
+    <tfoot id="drFoot" class="fw-semibold"></tfoot>
+  </table>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script>
-'use strict';
 (function () {
-  const $ = s => document.querySelector(s);
-  const fmt = n => Number(n||0).toFixed(2);
-  let charts = {};
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = n => Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const kes = n => 'KES ' + num(n);
+  const pct = n => n == null ? '-' : Number(n).toFixed(1) + '%';
+  const $ = id => document.getElementById(id);
+  const charts = {};
+  const METHODS = [['cash', 'Cash', '#198754'], ['mpesa', 'M-Pesa', '#20c997'], ['bank', 'Bank', '#0d6efd'],
+                   ['card', 'Card', '#6f42c1'], ['credit', 'Credit', '#fd7e14'], ['other', 'Other', '#adb5bd']];
 
-  async function api(url) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+  function iso(d) {
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   }
-
-  function dateRange() {
-    const f = $('#dFrom').value, t = $('#dTo').value;
-    return (f && t) ? `?from=${f}&to=${t}` : '';
+  function setRange(days) {
+    const to = new Date(), from = new Date();
+    from.setDate(to.getDate() - (days - 1));
+    $('drFrom').value = iso(from); $('drTo').value = iso(to);
   }
-
-  function ensureChart(id, type, data, options) {
-    const ctx = document.getElementById(id);
+  function draw(id, config) {
+    if (typeof Chart === 'undefined') return;
     if (charts[id]) charts[id].destroy();
-    charts[id] = new Chart(ctx, { type, data, options });
+    charts[id] = new Chart($(id), config);
+  }
+  function showError(msg) {
+    $('drError').textContent = msg;
+    $('drError').classList.toggle('d-none', !msg);
+  }
+  const axisKes = () => ({ticks: {callback: x => Number(x).toLocaleString('en-KE')}});
+
+  function render(data) {
+    const t = data.totals;
+    $('kRevenue').textContent = kes(t.revenue);
+    $('kSales').textContent = t.sales_count + ' sales' + (t.refunds ? ', ' + kes(t.refunds) + ' refunded' : '');
+    $('kGross').textContent = kes(t.gross_profit);
+    $('kMargin').textContent = pct(t.gross_margin_pct);
+    $('kExpenses').textContent = kes(t.expenses);
+    $('kNet').textContent = kes(t.net_profit);
+    $('kNet').classList.toggle('text-danger', t.net_profit < 0);
+    $('kTax').textContent = kes(t.tax);
+    $('kDisc').textContent = t.discounts ? kes(t.discounts) + ' discounts given' : '';
+    const miss = $('drMissing');
+    if (t.cost_missing_lines) {
+      miss.textContent = `${t.cost_missing_lines} sale line(s) worth ${kes(t.revenue_without_cost)} have no cost price, `
+        + 'so gross profit is too high by their cost. Add a cost price to those items or their batches.';
+      miss.classList.remove('d-none');
+    } else { miss.classList.add('d-none'); }
+
+    const labels = data.days.map(d => d.date.slice(5));
+    draw('cDaily', {type: 'line', data: {labels, datasets: [
+      {label: 'Revenue', data: data.days.map(d => d.revenue), borderColor: '#0d6efd', backgroundColor: '#0d6efd', tension: .2},
+      {label: 'Gross profit', data: data.days.map(d => d.gross_profit), borderColor: '#198754', backgroundColor: '#198754', tension: .2}]},
+      options: {maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+        plugins: {tooltip: {callbacks: {label: c => c.dataset.label + ': ' + kes(c.parsed.y)}}},
+        scales: {y: {beginAtZero: true, ...axisKes()}}}});
+
+    const used = METHODS.filter(m => Math.abs(t.by_method[m[0]] || 0) > 0.004);
+    draw('cMethods', {type: 'doughnut', data: {labels: used.map(m => m[1]),
+      datasets: [{data: used.map(m => t.by_method[m[0]]), backgroundColor: used.map(m => m[2])}]},
+      options: {maintainAspectRatio: false, plugins: {legend: {position: 'bottom'},
+        tooltip: {callbacks: {label: c => c.label + ': ' + kes(c.parsed)}}}}});
+
+    draw('cTop', {type: 'bar', data: {labels: data.top_items.map(i => i.name),
+      datasets: [{label: 'Gross profit', data: data.top_items.map(i => i.gross_profit), backgroundColor: '#198754'}]},
+      options: {indexAxis: 'y', maintainAspectRatio: false, plugins: {legend: {display: false},
+        tooltip: {callbacks: {label: c => kes(c.parsed.x)}}}, scales: {x: {beginAtZero: true, ...axisKes()}}}});
+
+    $('drCats').innerHTML = data.by_category.length ? data.by_category.map(c => `<tr>
+      <td>${esc(c.category)}</td><td class="text-end">${num(c.revenue)}</td><td class="text-end">${num(c.cogs)}</td>
+      <td class="text-end">${num(c.gross_profit)}</td><td class="text-end">${pct(c.gross_margin_pct)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="text-muted">No sales in this range.</td></tr>';
+
+    const cells = d => `<td class="text-end">${d.sales_count}</td><td class="text-end">${num(d.revenue)}</td>
+      <td class="text-end">${num(d.refunds)}</td><td class="text-end">${num(d.discounts)}</td><td class="text-end">${num(d.tax)}</td>
+      <td class="text-end">${num(d.cogs)}${d.cost_missing_lines ? ' <i class="fas fa-triangle-exclamation text-warning" title="Some lines have no cost"></i>' : ''}</td>
+      <td class="text-end">${num(d.gross_profit)}</td><td class="text-end">${pct(d.gross_margin_pct)}</td>
+      <td class="text-end">${num(d.expenses)}</td>
+      <td class="text-end ${d.net_profit < 0 ? 'text-danger' : ''}">${num(d.net_profit)}</td>
+      ${['cash', 'mpesa', 'bank', 'card', 'credit'].map(m => `<td class="text-end">${num(d.by_method[m])}</td>`).join('')}`;
+    $('drRows').innerHTML = data.days.slice().reverse().map(d =>
+      `<tr class="${d.sales_count || d.expenses ? '' : 'text-muted'}"><td class="text-nowrap">${esc(d.date)}</td>${cells(d)}</tr>`).join('');
+    $('drFoot').innerHTML = `<tr><td>Total</td>${cells(t)}</tr>`;
   }
 
-  async function loadAll() {
-    const range = dateRange();
-    $('#csvLink').href = '/reports/sales_summary' + (range ? range + '&format=csv' : '?format=csv');
-
-    try {
-      const s = await api('/reports/sales_summary' + range);
-      $('#kpiSales').textContent = fmt(s.total);
-      $('#kpiCount').textContent = s.transaction_count || 0;
-      $('#kpiAvg').textContent   = fmt(s.average_basket);
-      $('#kpiTax').textContent   = fmt(s.tax);
-
-      const labels = Object.keys(s.by_method||{});
-      const values = labels.map(k => s.by_method[k]);
-      ensureChart('byMethodChart', 'doughnut',
-        { labels, datasets: [{ data: values,
-            backgroundColor: ['#198754','#0dcaf0','#0d6efd','#ffc107','#6f42c1','#adb5bd']}] },
-        { plugins: { title: { display: true, text: 'Sales by payment method' } } });
-    } catch (e) { console.error('summary', e); }
-
-    try {
-      const top = await api('/reports/top_products' + range);
-      ensureChart('topProductsChart', 'bar',
-        { labels: top.map(t => t.item),
-          datasets: [{ label: 'Revenue', data: top.map(t => t.revenue), backgroundColor: '#0d6efd' }] },
-        { plugins: { title: { display: true, text: 'Top products (revenue)' } },
-          scales: { y: { beginAtZero: true } } });
-    } catch (e) { console.error('top', e); }
-
-    try {
-      const rows = await api('/reports/cashier_performance' + range);
-      $('#cashierBody').innerHTML = rows.length ? rows.map(r => `
-        <tr><td>${r.cashier_name||r.cashier_id||'—'}</td>
-            <td>${r.transaction_count}</td>
-            <td>${fmt(r.sales_total)}</td>
-            <td>${fmt(r.refund_total)}</td>
-            <td><strong>${fmt(r.net)}</strong></td></tr>`).join('')
-        : '<tr><td colspan="5" class="text-muted">No data.</td></tr>';
-    } catch (e) { console.error('cashier', e); }
-
-    try {
-      const v = await api('/reports/inventory_valuation');
-      $('#invCost').textContent = fmt(v.cost_value);
-      $('#invRetail').textContent = fmt(v.retail_value);
-      $('#invMargin').textContent = fmt(v.projected_margin);
-      $('#invUnits').textContent = v.total_units || 0;
-    } catch (e) { console.error('val', e); }
-
-    try {
-      const low = await api('/reports/low_stock');
-      $('#lowCount').textContent = low.length;
-      $('#lowBody').innerHTML = low.length ? low.map(r =>
-        `<tr><td>${r.name}</td><td>${r.stock}</td><td>${r.reorder_level}</td></tr>`).join('')
-        : '<tr><td colspan="3" class="text-muted">All good.</td></tr>';
-    } catch (e) { console.error('low', e); }
-
-    try {
-      const exp = await api('/reports/expiry?days=60');
-      $('#expCount').textContent = (exp.items||[]).length;
-      $('#expRisk').textContent = fmt(exp.cost_at_risk);
-      $('#expBody').innerHTML = (exp.items||[]).length ? exp.items.map(r =>
-        `<tr><td>${r.name}</td><td>${r.stock}</td><td>${r.expiry_date||''}</td>
-             <td><span class="badge bg-${r.days_to_expiry<=0?'danger':r.days_to_expiry<=14?'warning text-dark':'secondary'}">
-             ${r.days_to_expiry}</span></td></tr>`).join('')
-        : '<tr><td colspan="4" class="text-muted">Nothing expiring.</td></tr>';
-    } catch (e) { console.error('exp', e); }
+  async function loadMonthly() {
+    const r = await fetch('/reports/monthly?months=12');
+    if (!r.ok) return;
+    const m = (await r.json()).months;
+    draw('cMonthly', {type: 'bar', data: {labels: m.map(x => x.month), datasets: [
+      {label: 'Net profit', data: m.map(x => x.net_profit),
+       backgroundColor: m.map(x => x.net_profit < 0 ? '#dc3545' : '#198754')}]},
+      options: {maintainAspectRatio: false, plugins: {legend: {display: false},
+        tooltip: {callbacks: {label: c => 'Net profit: ' + kes(c.parsed.y),
+          afterLabel: c => 'Revenue ' + kes(m[c.dataIndex].revenue) + ', expenses ' + kes(m[c.dataIndex].expenses)}}},
+        scales: {y: axisKes()}}});
   }
 
-  // default range: last 30 days
-  const today = new Date();
-  const thirty = new Date(); thirty.setDate(today.getDate() - 30);
-  $('#dFrom').valueAsDate = thirty;
-  $('#dTo').valueAsDate   = today;
-  $('#btnApply').addEventListener('click', loadAll);
-  loadAll();
+  async function load() {
+    const q = `from=${encodeURIComponent($('drFrom').value)}&to=${encodeURIComponent($('drTo').value)}`;
+    $('drCsv').href = '/reports/daily?' + q + '&format=csv';
+    let r;
+    try { r = await fetch('/reports/daily?' + q); } catch (e) { showError('Could not reach the server.'); return; }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { showError(data.error || 'Could not load the report.'); return; }
+    showError('');
+    render(data);
+  }
+
+  $('drForm').addEventListener('submit', e => { e.preventDefault(); load(); });
+  document.querySelectorAll('[data-days]').forEach(b => b.addEventListener('click', () => { setRange(+b.dataset.days); load(); }));
+  document.querySelector('[data-month]').addEventListener('click', () => {
+    const to = new Date(); $('drFrom').value = iso(new Date(to.getFullYear(), to.getMonth(), 1)); $('drTo').value = iso(to); load();
+  });
+  setRange(30);
+  load();
+  loadMonthly();
 })();
 </script>
 {% endblock %}

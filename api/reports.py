@@ -466,3 +466,6 @@ def cashier_performance():
                               'sales_total', 'refund_total', 'net'],
                              'cashier_performance.csv')
     return jsonify(out), 200
+
+
+import api.finance_reports  # noqa: E402,F401  daily profit, expenses, reconciliation routes
