@@ -84,6 +84,14 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             ContainerMovement(customer_id=cust.id, inventory_item_id=item.id, delta=2, note=mark),
         ])
         db.session.flush()
+        from models import Campaign, CampaignItem, Member
+        member = Member(member_ref=f"{tag}-M1", name=f"{mark} member", group_label=mark)
+        campaign = Campaign(name=f"{mark} campaign", slug=f"{tag.lower()}-camp", status="open")
+        db.session.add_all([member, campaign])
+        db.session.flush()
+        db.session.add(CampaignItem(campaign_id=campaign.id, inventory_item_id=item.id,
+                                    price=Decimal("10")))
+        db.session.flush()
         from services.controlled import Register
         morphine = InventoryItem(name=f"{mark} morphine", price=Decimal("10"), is_controlled=True)
         db.session.add(morphine)

@@ -52,12 +52,16 @@ def client():
     return DarajaClient(_tenant())
 
 
-def start_stk(invoice, phone, user_id=None, now=None):
-    """Send an STK push for the invoice's balance. Commits."""
+def start_stk(invoice, phone, user_id=None, now=None, amount=None):
+    """Send an STK push for the invoice's balance, or for ``amount`` (an
+    instalment; never more than the balance). Commits."""
     now = now or datetime.utcnow()
     invoice = recompute(invoice)
     if invoice.status in ("paid", "void"):
         raise BillingError(f"invoice is {invoice.status}")
+    due = invoice.balance if amount is None else min(money(amount), invoice.balance)
+    if due <= 0:
+        raise BillingError("amount must be greater than zero")
     phone = normalize_ke_phone(phone)
     recent = (PaymentIntent.query
               .filter(PaymentIntent.phone == phone, PaymentIntent.status.in_(OPEN),
@@ -66,7 +70,7 @@ def start_stk(invoice, phone, user_id=None, now=None):
         raise PromptPending("Check the phone for the M-Pesa prompt already sent")
     daraja = client()                       # fail fast if Daraja is not set up
     intent = PaymentIntent(invoice_id=invoice.id, phone=phone,
-                           amount=stk_amount(invoice.balance), status="initiating",
+                           amount=stk_amount(due), status="initiating",
                            initiated_by=user_id, created_at=now)
     db.session.add(intent)
     db.session.commit()

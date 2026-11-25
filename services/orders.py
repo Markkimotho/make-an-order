@@ -65,7 +65,7 @@ def _summary(lines):
 
 def create_order(lines, *, customer_id=None, channel="staff", pay_now, due_date=None,
                  delivery_address=None, prescription_id=None, hold=HOLD, now=None,
-                 user_id=None, notes=None):
+                 user_id=None, notes=None, member_id=None, campaign_id=None):
     """Place an order. Returns (order, invoice). Raises OrderError, or
     stock.StockError when a line cannot be filled (nothing is written that
     the caller's rollback will not undo)."""
@@ -92,6 +92,7 @@ def create_order(lines, *, customer_id=None, channel="staff", pay_now, due_date=
     order = Order(customer_id=customer_id, item=_summary(lines), amount=total, status="pending",
                   order_number=_next_number(), channel=channel, fulfillment_status="pending",
                   delivery_address=delivery_address, prescription_id=prescription_id,
+                  member_id=member_id, campaign_id=campaign_id,
                   reserved_until=now + hold if pay_now else None)
     db.session.add(order)
     db.session.flush()
@@ -108,7 +109,8 @@ def create_order(lines, *, customer_id=None, channel="staff", pay_now, due_date=
                    note=f"order {order.order_number}")
     invoice = billing.create_invoice(total=total, kind="sale" if pay_now else "credit",
                                      customer_id=customer_id, order_id=order.id,
-                                     due_date=None if pay_now else due_date, notes=notes)
+                                     due_date=None if pay_now else due_date, notes=notes,
+                                     member_id=member_id)
     return order, invoice
 
 

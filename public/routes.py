@@ -121,10 +121,13 @@ def _error(message, status):
 @public_tenant
 def pay_page(slug, pay_token):
     invoice = billing.recompute(_invoice(pay_token))
+    from verticals.institution import service as institution
+    instalments, minimum = institution.instalment_terms(invoice)
     db.session.commit()
     return render_template("public/pay.html", business=g.public_business_name,
                            invoice=_public_invoice(invoice), lines=_lines(invoice),
-                           slug=slug, pay_token=pay_token)
+                           slug=slug, pay_token=pay_token, instalments=instalments,
+                           min_instalment=minimum)
 
 
 @public_bp.route("/<slug>/pay/<pay_token>/stk", methods=["POST"])
@@ -138,6 +141,14 @@ def pay_stk(slug, pay_token):
         return _error("Enter the M-Pesa phone number to pay from", 400)
     if invoice.status == "paid":
         return _error("This invoice is already paid", 409)
+    amount = None
+    if body.get("amount") not in (None, ""):
+        from verticals.institution import service as institution
+        try:
+            amount = institution.check_instalment(billing.recompute(invoice), body.get("amount"))
+        except (institution.InstitutionError, ValueError, ArithmeticError) as e:
+            db.session.rollback()
+            return _error(str(e), 400)
     # The per-invoice cap counts prompts actually attempted, under the invoice
     # row lock: start_stk commits its intent before calling Daraja, so a
     # concurrent request waits here and then sees it.
@@ -150,7 +161,7 @@ def pay_stk(slug, pay_token):
         return _error("Too many payment prompts for this invoice. Try again in a few "
                       "minutes.", 429)
     try:
-        intent = stk.start_stk(invoice, phone)
+        intent = stk.start_stk(invoice, phone, amount=amount)
     except InvalidPhone:
         db.session.rollback()
         return _error("Enter a Kenyan mobile number, like 0712 345 678", 400)
@@ -195,5 +206,11 @@ def pay_status(slug, pay_token):
     if intent.last_queried_at is None or intent.last_queried_at < now - QUERY_EVERY:
         intent = stk.refresh_intent(intent, now=now, min_age=stk.POLL_QUERY_AFTER)
     invoice = billing.recompute(db.session.get(Invoice, invoice.id))
+    if invoice.status == "paid" and invoice.order_id:
+        # Campaign orders: the pickup code goes out as soon as it is paid.
+        from verticals.institution import service as institution
+        db.session.commit()
+        institution.issue_pickup_codes(order_id=invoice.order_id)
+        invoice = db.session.get(Invoice, invoice.id)
     db.session.commit()
     return jsonify({"intent": _public_intent(intent), "invoice": _public_invoice(invoice)}), 200

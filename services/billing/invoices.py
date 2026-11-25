@@ -58,13 +58,14 @@ def _next_number():
 
 
 def create_invoice(*, total, kind="sale", customer_id=None, transaction_id=None,
-                   order_id=None, due_date=None, notes=None):
+                   order_id=None, due_date=None, notes=None, member_id=None):
     total = money(total)
     if total <= 0:
         raise BillingError("invoice total must be greater than zero")
     lock_tenant()
     invoice = Invoice(invoice_number=_next_number(), kind=kind, customer_id=customer_id,
-                      transaction_id=transaction_id, order_id=order_id, total=total,
+                      transaction_id=transaction_id, order_id=order_id, member_id=member_id,
+                      total=total,
                       amount_paid=Decimal("0"), amount_adjusted=Decimal("0"),
                       status="open", due_date=due_date, notes=notes)
     db.session.add(invoice)

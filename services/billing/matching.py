@@ -14,6 +14,7 @@ from models import Invoice
 class Match:
     invoice: object = None
     customer_id: int | None = None
+    member_id: int | None = None
 
 
 C2B_MATCHERS = []
@@ -30,7 +31,8 @@ def match_reference(reference):
         return Match()
     invoice = Invoice.query.filter_by(invoice_number=ref).first()
     if invoice is not None:
-        return Match(invoice=invoice, customer_id=invoice.customer_id)
+        return Match(invoice=invoice, customer_id=invoice.customer_id,
+                     member_id=invoice.member_id)
     for matcher in C2B_MATCHERS:
         found = matcher(ref)
         if found is not None:

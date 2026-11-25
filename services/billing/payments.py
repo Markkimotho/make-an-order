@@ -31,8 +31,12 @@ def refresh_match_status(payment):
         payment.match_status = "matched"
 
 
-def _payer_invoices(customer_id, exclude=()):
-    q = Invoice.query.filter(Invoice.customer_id == customer_id, Invoice.status.in_(OWING))
+def _payer_invoices(customer_id=None, exclude=(), member_id=None):
+    """A payer's owing invoices, oldest first: a customer's, or a member's
+    (institutions bill students and houses, not customers)."""
+    payer = (Invoice.customer_id == customer_id if customer_id is not None
+             else Invoice.member_id == member_id)
+    q = Invoice.query.filter(payer, Invoice.status.in_(OWING))
     if exclude:
         q = q.filter(Invoice.id.notin_(exclude))
     return q.order_by(Invoice.issued_at.asc(), Invoice.id.asc()).all()
@@ -49,12 +53,16 @@ def allocate(payment, target=None, exclude=()):
     remaining = money(payment.unallocated_amount)
     if target is not None and payment.customer_id is None:
         payment.customer_id = target.customer_id
+    if target is not None and payment.member_id is None:
+        payment.member_id = target.member_id
     queue = []
     if target is not None and target.status != "void":
         queue.append(target)
+    skip = set(exclude) | ({target.id} if target is not None else set())
     if payment.customer_id:
-        skip = set(exclude) | ({target.id} if target is not None else set())
         queue.extend(_payer_invoices(payment.customer_id, exclude=tuple(skip)))
+    elif payment.member_id:
+        queue.extend(_payer_invoices(member_id=payment.member_id, exclude=tuple(skip)))
     for invoice in queue:
         if remaining <= 0:
             break
@@ -98,15 +106,15 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
                       recorded_by=recorded_by, verified=verified)
 
     target = invoice or (intent.invoice if intent is not None else None)
-    matched_customer = None
+    matched_customer = matched_member = None
     if target is None and bill_ref:
         match = match_reference(bill_ref)
-        target, matched_customer = match.invoice, match.customer_id
+        target, matched_customer, matched_member = match.invoice, match.customer_id, match.member_id
 
     payment = Payment(method=method, amount=amount, unallocated_amount=amount,
                       mpesa_receipt=receipt, bill_ref_raw=(bill_ref or None),
                       payer_phone=payer_phone, payer_name=payer_name,
-                      customer_id=customer_id or matched_customer,
+                      customer_id=customer_id or matched_customer, member_id=matched_member,
                       org_account_balance=org_account_balance, raw_payload=raw,
                       recorded_by=recorded_by, verified=verified,
                       received_at=received_at or datetime.utcnow())

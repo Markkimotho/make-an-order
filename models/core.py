@@ -342,6 +342,10 @@ class Order(TenantMixin, db.Model):
     reserved_until     = db.Column(db.DateTime, nullable=True, index=True)
     prescription_id    = db.Column(db.Integer, db.ForeignKey('prescriptions.id', ondelete='SET NULL'),
                                    nullable=True)
+    campaign_id        = db.Column(db.Integer, db.ForeignKey('campaigns.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
+    member_id          = db.Column(db.Integer, db.ForeignKey('members.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
     pickup_code_hash   = db.Column(db.String(64), nullable=True)
     picked_up_at       = db.Column(db.DateTime, nullable=True)
     picked_up_by       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
@@ -363,6 +367,8 @@ class Order(TenantMixin, db.Model):
             'payment_reference': self.payment_reference,
             'time':              self.time.isoformat() if self.time else None,
             'order_number':      self.order_number,
+            'campaign_id':       self.campaign_id,
+            'member_id':         self.member_id,
             'channel':           self.channel,
             'fulfillment_status': self.fulfillment_status,
             'delivery_address':  self.delivery_address,

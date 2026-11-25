@@ -25,6 +25,7 @@ from public import limiter, public_bp
 from api.customers import customers_bp
 from api.daraja import daraja_bp
 from api.distributor import distributor_bp
+from api.institution import institution_bp
 from api.inventory import inventory_bp
 from api.orders import orders_bp
 from api.payments import payments_bp
@@ -40,7 +41,7 @@ from auth.auth_middleware import (admin_required, cashier_required,
 from auth.auth_routes import create_auth_blueprint
 from auth.tenancy import CrossTenantWrite, bind_tenant, reset_tenant, unscoped
 from config import Config
-from models import VERTICALS, Customer, Order, Tenant, User, db
+from models import VERTICALS, Campaign, Customer, Order, Tenant, User, db
 
 load_dotenv()
 
@@ -234,6 +235,7 @@ def create_app(config_override=None):
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
     app.register_blueprint(settings_bp, url_prefix='/settings')
     app.register_blueprint(distributor_bp, url_prefix='/distributor')
+    app.register_blueprint(institution_bp, url_prefix='/institution')
     app.register_blueprint(public_bp, url_prefix='/o')
     limiter.init_app(app)
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
@@ -405,18 +407,24 @@ def _register_cli(app):
         from models import PaymentIntent
         from services.billing.stk import WAITING, sweep_tenant
         from services.orders import release_expired
+        from verticals.institution.service import close_due_campaigns, issue_pickup_codes
         with unscoped():
             tenant_ids = sorted(
                 {tid for (tid,) in db.session.query(PaymentIntent.tenant_id)
                  .filter(PaymentIntent.status.in_(WAITING)).distinct()}
                 | {tid for (tid,) in db.session.query(Order.tenant_id)
-                   .filter(Order.fulfillment_status.in_(("pending", "released"))).distinct()})
+                   .filter(Order.fulfillment_status.in_(("pending", "released"))).distinct()}
+                | {tid for (tid,) in db.session.query(Campaign.tenant_id)
+                   .filter(Campaign.status == "open").distinct()})
         totals = {}
         for tenant_id in tenant_ids:
             try:
                 with tenant_scope(tenant_id):
                     counts = sweep_tenant()
                     counts.update({f"orders_{k}": v for k, v in release_expired().items()})
+                    counts.update({f"campaigns_{k}": v
+                                   for k, v in close_due_campaigns().items()})
+                    counts["pickup_codes"] = issue_pickup_codes()
             except Exception as e:                      # one business never stops the rest
                 db.session.rollback()
                 app.logger.error(f"payments sweep failed for tenant {tenant_id}: {e}")

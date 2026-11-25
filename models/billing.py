@@ -54,6 +54,9 @@ class Invoice(TenantMixin, db.Model):
                                 nullable=True, index=True)
     order_id        = db.Column(db.Integer, db.ForeignKey("orders.id", ondelete="SET NULL"),
                                 nullable=True, index=True)
+    # Institution invoices are for a member (student, house), not a customer.
+    member_id       = db.Column(db.Integer, db.ForeignKey("members.id", ondelete="SET NULL"),
+                                nullable=True, index=True)
     total           = db.Column(db.Numeric(12, 2), nullable=False)
     amount_paid     = db.Column(db.Numeric(12, 2), nullable=False, default=ZERO)
     amount_adjusted = db.Column(db.Numeric(12, 2), nullable=False, default=ZERO)
@@ -86,6 +89,7 @@ class Invoice(TenantMixin, db.Model):
             "customer_id": self.customer_id,
             "transaction_id": self.transaction_id,
             "order_id": self.order_id,
+            "member_id": self.member_id,
             "total": float(self.total),
             "amount_paid": float(self.amount_paid or 0),
             "amount_adjusted": float(self.amount_adjusted or 0),
@@ -164,6 +168,8 @@ class Payment(TenantMixin, db.Model):
     payer_name          = db.Column(db.String(255), nullable=True)
     customer_id         = db.Column(db.Integer, db.ForeignKey("customers.id", ondelete="SET NULL"),
                                     nullable=True, index=True)
+    member_id           = db.Column(db.Integer, db.ForeignKey("members.id", ondelete="SET NULL"),
+                                    nullable=True, index=True)
     org_account_balance = db.Column(db.Numeric(14, 2), nullable=True)
     recorded_by         = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"),
                                     nullable=True)
@@ -191,6 +197,7 @@ class Payment(TenantMixin, db.Model):
             "bill_ref": self.bill_ref_raw,
             "payer_name": self.payer_name,
             "customer_id": self.customer_id,
+            "member_id": self.member_id,
             "recorded_by": self.recorded_by,
             "received_at": self.received_at.isoformat() if self.received_at else None,
         }
