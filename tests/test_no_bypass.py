@@ -37,6 +37,7 @@ UNSCOPED_ALLOWLIST = {
     ("auth/auth_routes.py", "register"),        # create tenant + owner
     ("services/sms_service.py", "_message_tenant"),  # delivery reports: one global URL
     ("public/routes.py", "_business"),          # public link slug -> business
+    ("services/scheduler.py", "_eligible_tenants"),  # daily job: which businesses to run
 }
 
 

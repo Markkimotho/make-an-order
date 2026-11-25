@@ -425,6 +425,27 @@ def _register_cli(app):
 
     app.cli.add_command(tenants_cli)
 
+    @app.cli.command('run-daily-triggers')
+    @click.option('--date', 'day', default=None, help='Run as if today were YYYY-MM-DD (Nairobi).')
+    def run_daily_triggers_command(day):
+        """Refill and overdue-credit reminders for every active business (once a day)."""
+        from datetime import date as date_cls
+        from services.scheduler import SchedulerNotConfigured, run_daily_triggers
+        try:
+            today = date_cls.fromisoformat(day) if day else None
+        except ValueError:
+            raise click.ClickException('--date must be YYYY-MM-DD')
+        try:
+            results = run_daily_triggers(today)
+        except SchedulerNotConfigured as e:
+            raise click.ClickException(str(e))
+        for slug, counts in results.items():
+            click.echo(f'{slug}: {counts}')
+        failed = [slug for slug, counts in results.items() if 'error' in counts]
+        click.echo(f'{len(results)} businesses, {len(failed)} failed')
+        if failed:
+            raise SystemExit(1)
+
     @app.cli.command('payments-sweep')
     def payments_sweep_command():
         """Ask Daraja about every silent STK push and release unpaid stock

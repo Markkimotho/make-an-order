@@ -21,6 +21,7 @@ call into `services/*` and translate domain errors to HTTP responses.
 | [`orders`](orders.py)                         | Orders, invoices, stock holds   | `OrderError`, `StockError` | Yes (database) |
 | [`controlled`](controlled.py)                 | Controlled-drug register        | `RegisterIncomplete` (a `StockError`) | Yes (database) |
 | [`csv_import`](csv_import.py)                 | Bulk onboarding                 | `ImportError_`      | Yes (database; commits) |
+| [`scheduler`](scheduler.py)                   | Daily refill and overdue SMS    | `SchedulerNotConfigured` | Yes (database + SMS outbox; commits) |
 | [`receipt_service`](receipt_service.py)       | DB (read-only)                  | `ValueError`        | Yes |
 | [`loyalty_service`](loyalty_service.py)       | DB (read+write, no commit)      | `LoyaltyError`      | Yes |
 | [`audit_service`](audit_service.py)           | DB (write, no commit)           | never (logs)        | Yes |

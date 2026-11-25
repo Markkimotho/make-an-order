@@ -177,6 +177,17 @@ Every order (staff, duka link, refill link, campaign) is created by `services/or
 - **Pickup:** a 6-digit code goes by SMS to both phones only when the invoice is fully paid (from the pay page's status poll, or the sweep within 10 minutes for Paybill payments). Only its HMAC is stored. Hand-over (`POST /institution/pickup` or the dashboard form) locks the order; a second scan shows who collected it and when.
 - **Dashboard:** per campaign, paid vs billed, order states, sizes to pack, packing list.
 
+## Scheduled jobs
+
+Two commands, run by Heroku Scheduler (or cron). No in-process scheduler: gunicorn workers would each fire it.
+
+| Command | When | What |
+|---|---|---|
+| `flask payments-sweep` | every 10 minutes | asks Daraja about silent STK pushes; releases unpaid stock holds; re-holds orders whose money was reversed; closes campaigns past their date; sends pickup codes |
+| `flask run-daily-triggers` | once a day (e.g. 06:00 EAT = 03:00 UTC) | refill reminders 4 days before the due date (with the refill link; controlled drugs are told to call); overdue credit reminders at 1, 3, 7 and 14 days past due, then every 7 days (with the pay link) |
+
+Daily reminders run for businesses in trial or with an active subscription, each in its own transaction (one failing never stops the rest; the command exits 1 and names it). Every message has a dedupe key with its stage, so rerunning the same day sends nothing and a missed day catches up with the latest stage, once. "Today" is Nairobi's date. `--date YYYY-MM-DD` runs as if on that day. Links need `PUBLIC_BASE_URL`; without it the command stops before sending anything.
+
 ## Onboarding a business from spreadsheets
 
 ```bash
