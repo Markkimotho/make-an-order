@@ -50,3 +50,6 @@ instance/
 logs/
 
 _site/
+
+# Claude Code agent worktrees
+.claude/worktrees/
