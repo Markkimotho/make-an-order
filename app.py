@@ -681,6 +681,8 @@ def _register_core_routes(app):
     def pharmacy_page():
         return _safe_render('pharmacy.html', **get_user_context())
 
+    from pages import patients; patients.register(app)  # noqa: E702
+
     @app.route('/purchase-orders-ui')
     @stock_clerk_required
     @feature_required('purchasing')

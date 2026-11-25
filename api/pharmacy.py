@@ -14,6 +14,8 @@ Endpoints
 * ``GET  /pharmacy/register``                      — controlled-drug register (JSON)
 * ``GET  /pharmacy/register.pdf``                  — the register for a PPB inspection
 * ``POST /pharmacy/orders/<id>/hand-over``         — a paid refill order collected or delivered
+* ``GET  /pharmacy/patients?q=``                   — patients: last visit, chronic count, next refill
+* ``GET  /pharmacy/patients/<id>/medications``     — medication history by Nairobi month
 
 All routes require pharmacist role or higher.
 """
@@ -32,6 +34,8 @@ from models import (
 )
 from auth.tenancy import current_tenant_id
 from services.clock import now_nairobi
+from verticals.features import feature_required
+from verticals.pharmacy import history as patient_history
 from verticals.pharmacy import register_pdf
 from verticals.pharmacy import service as pharmacy
 from services import audit_service
@@ -377,3 +381,35 @@ def hand_over_refill(order_id):
                       order_id, None, {'prescription_id': rx.id})
     db.session.commit()
     return jsonify({'prescription': rx.to_dict()}), 200
+
+
+# ===========================================================================
+# Patients and medication history
+# ===========================================================================
+
+@pharmacy_bp.route('/patients', methods=['GET'])
+@pharmacist_api_required
+@feature_required('patients')
+def patients_list():
+    """Patients by name, phone or code (``q``), else the most recently served."""
+    try:
+        limit = int(request.args.get('limit') or 50)
+    except ValueError:
+        return jsonify({'error': 'limit must be a number'}), 400
+    return jsonify({'patients': patient_history.patient_list(request.args.get('q'),
+                                                             limit)}), 200
+
+
+@pharmacy_bp.route('/patients/<int:customer_id>/medications', methods=['GET'])
+@pharmacist_api_required
+@feature_required('patients')
+def patient_medications(customer_id):
+    """What the patient received, by month, for ``months`` (1 to 36, default 12)."""
+    try:
+        out = patient_history.medication_history(customer_id,
+                                                 request.args.get('months') or 12)
+    except patient_history.HistoryError as e:
+        return jsonify({'error': str(e)}), 400
+    if out is None:
+        return jsonify({'error': 'Patient not found'}), 404
+    return jsonify(out), 200
