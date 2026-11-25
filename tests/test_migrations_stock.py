@@ -101,3 +101,29 @@ def test_0007_keeps_quarantine_flags_from_an_earlier_0005(legacy):
     upgrade()
     assert fetch("SELECT quarantined FROM batches") in ([(1,)], [(True,)])
     assert sa.inspect(db.engine).get_columns("batches")
+
+
+def test_0011_removes_a_cascade_left_by_the_first_0008(legacy):
+    """Databases that ran 0008 before it was changed kept ON DELETE CASCADE
+    on the register's item key; 0011 replaces it."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    fk = "fk_controlled_drug_ledger_inventory_item_id_inventory_items"
+    upgrade(revision="0010_institution")
+    with db.engine.begin() as conn:
+        if conn.dialect.name == "sqlite":
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        ops = Operations(MigrationContext.configure(conn, opts={"render_as_batch": True}))
+        with ops.batch_alter_table("controlled_drug_ledger") as batch:
+            batch.drop_constraint(fk, type_="foreignkey")
+            batch.create_foreign_key(fk, "inventory_items", ["inventory_item_id"], ["id"],
+                                     ondelete="CASCADE")
+
+    def ondelete():
+        keys = db.inspect(db.engine).get_foreign_keys("controlled_drug_ledger")
+        return next(k for k in keys if k["name"] == fk)["options"].get("ondelete")
+
+    assert (ondelete() or "").upper() == "CASCADE"
+    upgrade()
+    assert ondelete() in (None, "NO ACTION", "RESTRICT")
+    assert diff_against_models(legacy) == []

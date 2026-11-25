@@ -348,3 +348,56 @@ def test_downgrade_refuses_before_dropping_member_data(app, school):
     with pytest.raises(SystemExit):              # flask_migrate reports the RuntimeError, exits 1
         downgrade(revision="0009_distributor")
     assert "members" in inspect(db.engine).get_table_names()
+
+
+# --- second review fixes ----------------------------------------------------------------
+
+def test_no_code_for_an_order_whose_stock_was_released(app, school, client, login_as):
+    place(client, school)
+    order_id = Order.query.one().id
+    order_service.release_expired(datetime.utcnow() + timedelta(hours=1))     # unpaid: released
+    pay(Invoice.query.one().id, "1100", "SLX0000020")                         # late payment
+    order_service.release_expired(datetime.utcnow() + timedelta(hours=1))
+    assert db.session.get(Order, order_id).fulfillment_status == "restock_needed"
+    r = login_as("cashier").post(f"/institution/orders/{order_id}/pickup-code")
+    assert r.status_code == 409 and "restock" in r.get_json()["error"]
+    assert institution.issue_pickup_codes() == 0
+
+
+def test_an_old_code_loses_to_a_rotation_that_lands_first(app, school, client, sms_outbox):
+    from sqlalchemy.orm.attributes import set_committed_value
+    code = paid_with_code(school, client, sms_outbox)
+    order = Order.query.one()
+    old_hash = order.pickup_code_hash
+    institution.rotate_pickup_code(order)                      # new code committed
+    stale = Order.query.one()
+    set_committed_value(stale, "pickup_code_hash", old_hash)   # what collect() first read
+    found, problem = institution.collect("F1023", code, None)
+    assert problem == "wrong code"
+    db.session.rollback()
+
+
+def test_resend_after_a_failed_delivery_report(app, school, client, sms_outbox):
+    paid_with_code(school, client, sms_outbox)
+    from services import sms_service
+    for message in SmsMessage.query.filter_by(kind="pickup_code"):
+        sms_service.record_delivery(message.provider_message_id, "Failed", "AbsentSubscriber")
+    before = Order.query.one().pickup_code_hash
+    assert institution.issue_pickup_codes() == 1
+    assert Order.query.one().pickup_code_hash != before
+
+
+def test_sweep_reaches_ready_orders_whose_money_was_reversed(app, school, client, sms_outbox):
+    paid_with_code(school, client, sms_outbox)
+    camp = db.session.get(Campaign, school["camp"])
+    camp.status = "closed"                     # nothing else would bring the business in
+    db.session.commit()
+    for payment in Payment.query.all():
+        billing.reverse_payment(payment)
+    db.session.commit()
+    result = app.test_cli_runner().invoke(args=["payments-sweep"])
+    assert result.exit_code == 0, result.output
+    db.session.expire_all()
+    order = Order.query.one()
+    assert (order.fulfillment_status, order.pickup_code_hash) == ("pending", None)
+    assert order.reserved_until is not None

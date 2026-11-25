@@ -460,7 +460,8 @@ def _register_cli(app):
                 {tid for (tid,) in db.session.query(PaymentIntent.tenant_id)
                  .filter(PaymentIntent.status.in_(WAITING)).distinct()}
                 | {tid for (tid,) in db.session.query(Order.tenant_id)
-                   .filter(Order.fulfillment_status.in_(("pending", "released"))).distinct()}
+                   .filter(Order.fulfillment_status.in_(("pending", "ready", "released")))
+                   .distinct()}
                 | {tid for (tid,) in db.session.query(Campaign.tenant_id)
                    .filter(Campaign.status == "open").distinct()})
         totals = {}

@@ -172,14 +172,22 @@ def dispense_prescription(rx_id):
         return jsonify({'error': 'Transaction not found'}), 404
     if txn.status != TXN_OPEN:
         return jsonify({'error': f'Transaction is {txn.status}, cannot dispense'}), 400
-    if rx.transaction_id and rx.transaction_id != txn.id:
-        if not (rx.is_chronic and pharmacy.cycle_complete(rx)):
-            return jsonify({'error': 'Prescription already linked to another transaction'}), 400
+    # A finished cycle (dispensed at the counter or handed over online) and a
+    # new sale: a refill. Decided on the locked prescription.
+    rx = pharmacy.lock_prescription(rx)
+    if pharmacy.cycle_complete(rx) and rx.transaction_id != txn.id:
+        if not rx.is_chronic:
+            db.session.rollback()
+            return jsonify({'error': 'Prescription already dispensed'}), 400
         try:
             pharmacy.start_new_cycle(rx)            # a refill of a chronic prescription
         except pharmacy.PharmacyError as e:
             db.session.rollback()
             return jsonify({'error': str(e)}), 400
+    elif rx.transaction_id and rx.transaction_id != txn.id:
+        # Part-dispensed against another sale: finish it there.
+        db.session.rollback()
+        return jsonify({'error': 'Prescription already linked to another transaction'}), 400
 
     items_payload = body.get('items') or []
     if not items_payload:

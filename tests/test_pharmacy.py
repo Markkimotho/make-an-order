@@ -404,3 +404,25 @@ def test_one_refill_order_per_cycle_and_hand_over_counts_it(app, chronic, client
     assert (rx.refills_remaining, rx.refill_status) == (0, "ended")
     assert db.session.get(InventoryItem, chronic["item"]).stock == stock_before   # not taken twice
     assert client.post(url, json={"fulfilment": "pickup"}).status_code == 409   # none left
+
+
+def test_counter_refill_after_an_online_hand_over(app, chronic, client):
+    rx = db.session.get(Prescription, chronic["rx"])
+    rx.refills_remaining = 2
+    stock.receive(db.session.get(InventoryItem, chronic["item"]), 200, batch_number="MF2",
+                  expiry_date=date(2027, 12, 1))                      # enough for three fills
+    db.session.commit()
+    assert dispense_cycle(chronic).status_code == 200                 # first fill, counter
+    token = db.session.get(Prescription, chronic["rx"]).refill_token
+    client.post(f"/o/acme/r/{token}/order", json={"fulfilment": "pickup"})
+    invoice = Invoice.query.one()
+    from services import billing
+    billing.record_payment(method="cash", amount=invoice.total, invoice=invoice)
+    db.session.commit()
+    order_id = Order.query.one().id
+    assert chronic["client"].post(f"/pharmacy/orders/{order_id}/hand-over").status_code == 200
+    r = dispense_cycle(chronic)                                        # next refill, counter
+    assert r.status_code == 200, r.get_json()
+    db.session.expire_all()
+    rx = db.session.get(Prescription, chronic["rx"])
+    assert (rx.refills_remaining, rx.refill_status) == (0, "ended")

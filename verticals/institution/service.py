@@ -16,7 +16,7 @@ import hmac
 import logging
 import secrets
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from flask import current_app
@@ -109,7 +109,18 @@ def campaign_lines(campaign, cart):
     return lines
 
 
+def lock_campaign(campaign):
+    return db.session.execute(select(Campaign).where(Campaign.id == campaign.id)
+                              .with_for_update().execution_options(populate_existing=True)
+                              ).scalar_one()
+
+
 def place_campaign_order(campaign, member, cart, now=None):
+    # Billing lock, then the campaign row: a close cannot slip between the
+    # "is it open" check and the order (close takes the same locks).
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    campaign = lock_campaign(campaign)
     if not campaign.is_open(now):
         raise InstitutionError("this campaign is not open")
     return order_service.create_order(
@@ -190,11 +201,23 @@ def issue_pickup_codes(order_id=None):
     the pay page's status poll. Commits per order. Returns how many codes
     went out."""
     issued = 0
-    q = Order.query.filter(Order.campaign_id.isnot(None), Order.picked_up_at.is_(None),
-                           Order.fulfillment_status.in_(("pending", "ready")))
+    # New codes: campaign orders without one whose invoice is paid (in SQL).
+    q = (Order.query.join(Invoice, Invoice.order_id == Order.id)
+         .filter(Order.campaign_id.isnot(None), Order.picked_up_at.is_(None),
+                 Order.pickup_code_hash.is_(None), Invoice.status == "paid",
+                 Order.fulfillment_status.in_(("pending", "ready"))))
+    # Resends: only orders with a recent failed pickup message.
+    retry = _resend_candidates()
     if order_id is not None:
         q = q.filter(Order.id == order_id)
-    for order in q.order_by(Order.id).all():
+        retry &= {order_id}
+    candidates = {o.id: o for o in q.all()}
+    for oid in retry:
+        order = db.session.get(Order, oid)
+        if order is not None and order.pickup_code_hash is not None \
+                and order.picked_up_at is None and order.fulfillment_status == "ready":
+            candidates[oid] = order
+    for _, order in sorted(candidates.items()):
         if order.pickup_code_hash is not None and not _code_undelivered(order):
             continue
         order, paid = _locked_paid(order)
@@ -213,19 +236,50 @@ def issue_pickup_codes(order_id=None):
     return issued
 
 
+DELIVERY_FAILED = ("Failed", "Rejected", "AbsentSubscriber", "Expired")
+
+
+def _undelivered(message):
+    return message.status in ("failed", "skipped") or message.delivery_status in DELIVERY_FAILED
+
+
 def _code_undelivered(order):
-    """Every message carrying the order's current code failed or was skipped."""
+    """Every message carrying the order's current code failed: refused at
+    sending, or reported undelivered by the network."""
     from models import SmsMessage
     rows = SmsMessage.query.filter(
         SmsMessage.dedupe_key.like(f"pickup:{order.id}:{order.pickup_code_hash[:12]}:%")).all()
-    return bool(rows) and all(r.status in ("failed", "skipped") for r in rows)
+    return bool(rows) and all(_undelivered(r) for r in rows)
+
+
+def _resend_candidates(now=None):
+    """Orders with a pickup message that failed in the last 3 days: the only
+    ones that can need a new code (bounded by recent failures, not by how
+    many orders are waiting)."""
+    from models import SmsMessage
+    now = now or datetime.utcnow()
+    rows = (SmsMessage.query.filter(SmsMessage.kind == "pickup_code",
+                                    SmsMessage.created_at >= now - timedelta(days=3))
+            .filter(db.or_(SmsMessage.status.in_(("failed", "skipped")),
+                           SmsMessage.delivery_status.in_(DELIVERY_FAILED))).all())
+    ids = set()
+    for row in rows:
+        try:
+            ids.add(int(row.dedupe_key.split(":")[1]))
+        except (AttributeError, IndexError, ValueError):
+            continue
+    return ids
 
 
 def rotate_pickup_code(order):
-    """Staff resend: a new code replaces the old one (which stops working)."""
+    """Staff resend: a new code replaces the old one (which stops working).
+    Only for orders still holding their stock (pending or ready): a released
+    order's goods may have gone to someone else."""
     order, paid = _locked_paid(order)
     if order.picked_up_at is not None:
         raise InstitutionError("already collected")
+    if order.fulfillment_status not in ("pending", "ready"):
+        raise InstitutionError(f"order is {order.fulfillment_status}; restock it first")
     if not paid:
         raise InstitutionError("not fully paid")
     code = _new_code(order)
@@ -242,6 +296,8 @@ def collect(member_ref, code, user_id):
     if member is None:
         return None, "no member with that number"
     code = (code or "").strip()
+    from services.billing.invoices import lock_tenant
+    lock_tenant()                     # billing, then order, then invoice: as every path does
     for order in (Order.query.filter(Order.member_id == member.id,
                                      Order.pickup_code_hash.isnot(None))
                   .order_by(Order.id.desc()).all()):
@@ -249,6 +305,11 @@ def collect(member_ref, code, user_id):
             continue
         order = db.session.execute(select(Order).where(Order.id == order.id).with_for_update()
                                    .execution_options(populate_existing=True)).scalar_one()
+        # A rotation may have committed since the check above: decide on the
+        # locked row, so an old code never works.
+        if order.pickup_code_hash is None or not hmac.compare_digest(
+                order.pickup_code_hash, _code_hash(order.id, code)):
+            return None, "wrong code"
         if order.picked_up_at is not None:
             by = db.session.get(User, order.picked_up_by) if order.picked_up_by else None
             return order, (f"already collected {order.picked_up_at:%Y-%m-%d %H:%M} UTC"
@@ -269,7 +330,15 @@ def collect(member_ref, code, user_id):
 def close_campaign(campaign):
     """Close a campaign: unpaid and part-paid orders give their stock back;
     money paid stays as the member's credit. Fully paid orders are kept.
-    Used for both a manual close and the scheduled one. Commits."""
+    Used for both a manual close and the scheduled one. Commits.
+
+    The campaign is marked closed first, under the same locks orders are
+    placed with, so no order can be added while it is being settled."""
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    campaign = lock_campaign(campaign)
+    campaign.status = "closed"
+    db.session.commit()
     released = 0
     for order in Order.query.filter_by(campaign_id=campaign.id, fulfillment_status="pending").all():
         order, paid = _locked_paid(order)
@@ -279,8 +348,6 @@ def close_campaign(campaign):
         if order_service.release(order, reason="campaign_closed", force=True):
             released += 1
         db.session.commit()
-    campaign.status = "closed"
-    db.session.commit()
     return released
 
 

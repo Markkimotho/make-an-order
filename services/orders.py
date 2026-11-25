@@ -267,11 +267,17 @@ def release_expired(now=None):
     # order must be held again, or the sweep would never release it; a
     # "ready" order goes back to pending and its pickup code stops working.
     counts["re_held"] = 0
-    for order in Order.query.filter(Order.fulfillment_status.in_(("pending", "ready")),
-                                    Order.reserved_until.is_(None)).order_by(Order.id).all():
+    # Only unheld pay-now orders whose invoice is not paid (filtered in SQL,
+    # so paid and credit orders waiting for collection cost nothing).
+    unheld = (Order.query.join(Invoice, Invoice.order_id == Order.id)
+              .filter(Order.fulfillment_status.in_(("pending", "ready")),
+                      Order.reserved_until.is_(None), Invoice.kind == "sale",
+                      Invoice.status.in_(("open", "partial")))
+              .order_by(Order.id).all())
+    for order in unheld:
         invoice = invoice_for(order)
-        if invoice is None or invoice.kind != "sale" or invoice.status == "paid":
-            continue                  # credit orders are not held; paid ones keep their stock
+        if invoice is None:
+            continue
         lock_tenant()
         order = lock_order(order)
         invoice = billing.recompute(invoice)
