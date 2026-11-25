@@ -43,8 +43,8 @@ from models import (
     Prescription, LoyaltyTransaction,
     SHIFT_OPEN, SHIFT_CLOSED,
     TXN_OPEN, TXN_COMPLETED, TXN_VOIDED, TXN_REFUNDED,
-    PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAYMENT_METHODS,
-    ROLE_ADMIN, ROLE_SUPERUSER, ROLE_PHARMACIST,
+    PAY_BANK, PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAYMENT_METHODS,
+    ROLE_ADMIN, ROLE_SUPERUSER, ROLE_PHARMACIST, POS_ROLES, Tenant,
 )
 from services import audit_service, billing, controlled, loyalty_service, otp_service, stock
 from services.receipt_service import build_receipt
@@ -178,6 +178,68 @@ def _recalc_totals(txn: Transaction, *, discount_override: Decimal | None = None
     tax_rate = Decimal(str(Config.TAX_RATE or 0))
     txn.tax_amount = _q(taxable * tax_rate)
     txn.total      = _q(taxable + txn.tax_amount)
+
+
+def _gross(txn: Transaction, extra: Decimal = Decimal('0')) -> Decimal:
+    """Shelf value of the cart before any discount (plus a line being added)."""
+    db.session.flush()
+    db.session.expire(txn, ['items'])
+    return sum((Decimal(str(li.unit_price)) * Decimal(str(li.quantity)) for li in txn.items),
+               Decimal('0')) + extra
+
+
+def _line_discounts(txn: Transaction) -> Decimal:
+    return sum((Decimal(str(li.discount or 0)) for li in txn.items), Decimal('0'))
+
+
+def _discount_gate(txn: Transaction, gross: Decimal, total_discount: Decimal, body: dict):
+    """None if this much discount on this cart is allowed, else the response.
+
+    Admins and owners give any discount. Others may give up to the
+    business's cap (``tenants.max_discount_pct`` of the cart's shelf value,
+    line and sale discounts together); above it a manager's code is needed:
+    the first call texts one to the admins and answers 202, the cashier
+    sends it back as ``otp``.
+    """
+    if total_discount <= 0 or gross <= 0:
+        return None
+    if session.get('role') in (ROLE_ADMIN, ROLE_SUPERUSER):
+        return None
+    tenant = db.session.get(Tenant, txn.tenant_id)
+    cap = Decimal(str(tenant.max_discount_pct or 0))
+    pct = (total_discount / gross * Decimal('100')).quantize(Decimal('0.01'))
+    if pct <= cap:
+        return None
+    scope = f'discount:txn:{txn.id}'
+    provided = (body.get('otp') or '').strip()
+    if not provided:
+        otp = otp_service.generate_otp(scope)
+        admins = User.query.filter(User.role.in_((ROLE_ADMIN, ROLE_SUPERUSER)),
+                                   User.status == 'approved',
+                                   User.phone_number.isnot(None)).all()
+        for a in admins:
+            SendSMS.send_manager_otp(a.phone_number, otp, 'discount')
+        return jsonify({'otp_required': True, 'discount_pct': float(pct),
+                        'max_discount_pct': float(cap),
+                        'message': f'A {pct}% discount is over the {cap}% you can give. '
+                                   'A manager code was sent to the admins.'}), 202
+    if not otp_service.verify_otp(scope, provided):
+        return jsonify({'error': 'Invalid or expired manager code'}), 403
+    audit_service.log(_user_id(), 'discount.override', 'Transaction', txn.id, None,
+                      {'discount_pct': float(pct), 'cap': float(cap),
+                       'discount': float(total_discount)})
+    return None
+
+
+def _staff_member(user_id):
+    """An approved staff member of this business, or None."""
+    if user_id in (None, ''):
+        return None
+    try:
+        user = db.session.get(User, int(user_id))
+    except (TypeError, ValueError):
+        return None
+    return user if user is not None and user.status == 'approved' else None
 
 
 def _stock_units_for(qty: Decimal) -> int:
@@ -445,10 +507,18 @@ def transaction_new():
         if db.session.get(Customer, customer_id) is None:
             return jsonify({'error': 'Customer not found'}), 404
 
+    served_by = _user_id()
+    if body.get('served_by_id') not in (None, ''):
+        member = _staff_member(body.get('served_by_id'))
+        if member is None:
+            return jsonify({'error': 'Served-by must be a staff member'}), 400
+        served_by = member.id
+
     txn = Transaction(
         transaction_ref=_generate_transaction_ref(),
         customer_id=customer_id,
         cashier_id=_user_id(),
+        served_by_id=served_by,
         shift_id=shift.id,
         status=TXN_OPEN,
         notes=(body.get('notes') or None),
@@ -470,6 +540,105 @@ def transaction_get(txn_id):
     txn, err = _txn_or_404(txn_id)
     if err: return err
     return jsonify(txn.to_dict()), 200
+
+
+@pos_bp.route('/transaction/<int:txn_id>', methods=['PATCH'])
+@cashier_api_required
+def transaction_update(txn_id):
+    """Set who is buying (``customer_id``, null to clear) and who served
+    them (``served_by_id``) on an open sale."""
+    txn, err = _txn_or_404(txn_id)
+    if err: return err
+    if txn.status != TXN_OPEN:
+        return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
+    body = request.get_json(silent=True) or {}
+    if 'customer_id' in body:
+        customer_id = body.get('customer_id')
+        if customer_id not in (None, ''):
+            customer = db.session.get(Customer, customer_id)
+            if customer is None:
+                return jsonify({'error': 'Customer not found'}), 404
+            if billing.open_invoice_for_transaction(txn.id) is not None:
+                return jsonify({'error': 'A payment was started for this sale; '
+                                         'the customer cannot change now'}), 409
+            txn.customer_id = customer.id
+        else:
+            txn.customer_id = None
+    if 'served_by_id' in body:
+        member = _staff_member(body.get('served_by_id'))
+        if member is None:
+            return jsonify({'error': 'Served-by must be a staff member'}), 400
+        txn.served_by_id = member.id
+    db.session.commit()
+    return jsonify({'transaction': txn.to_dict()}), 200
+
+
+@pos_bp.route('/staff', methods=['GET'])
+@cashier_api_required
+def staff_list():
+    """Who can be picked as "served by" at the till."""
+    rows = (User.query.filter(User.status == 'approved', User.role.in_(POS_ROLES))
+            .order_by(User.name, User.email).all())
+    return jsonify([{'id': u.id, 'name': u.name or u.email, 'role': u.role} for u in rows]), 200
+
+
+@pos_bp.route('/customers', methods=['GET'])
+@cashier_api_required
+def customer_search():
+    """Find a patient or customer at the till by name, phone or code."""
+    from services.phone import InvalidPhone, normalize_ke_phone
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 2:
+        return jsonify([]), 200
+    conditions = [Customer.name.ilike(f'%{q}%'), Customer.code.ilike(f'{q}%')]
+    digits = ''.join(ch for ch in q if ch.isdigit())
+    # Phones are stored 2547XXXXXXXX: a typed 07..., +254... or 254... prefix
+    # is dropped so a partial number still matches.
+    for prefix in ('254', '0'):
+        if digits.startswith(prefix):
+            digits = digits[len(prefix):]
+            break
+    if len(digits) >= 3:
+        conditions.append(Customer.phone_number.like(f'%{digits}%'))
+        try:
+            conditions.append(Customer.phone_number == normalize_ke_phone(q))
+        except InvalidPhone:
+            pass
+    rows = Customer.query.filter(db.or_(*conditions)).order_by(Customer.name).limit(10).all()
+    return jsonify([{'id': c.id, 'name': c.name, 'phone_number': c.phone_number,
+                     'code': c.code} for c in rows]), 200
+
+
+@pos_bp.route('/customers', methods=['POST'])
+@cashier_api_required
+def customer_quick_add():
+    """Add a walk-in patient or customer from the till: name and phone."""
+    from services.phone import InvalidPhone, normalize_ke_phone
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    try:
+        phone = normalize_ke_phone((body.get('phone_number') or '').strip())
+    except InvalidPhone:
+        return jsonify({'error': 'Invalid Kenyan phone number'}), 400
+    if not name:
+        return jsonify({'error': 'name and phone_number are required'}), 400
+    existing = Customer.query.filter_by(phone_number=phone).first()
+    if existing is not None:
+        return jsonify({'error': 'That phone number already belongs to a customer',
+                        'customer': {'id': existing.id, 'name': existing.name,
+                                     'phone_number': existing.phone_number,
+                                     'code': existing.code}}), 409
+    n = (db.session.query(func.max(Customer.id)).scalar() or 0) + 1
+    while Customer.query.filter_by(code=f'P{n:05d}').first() is not None:
+        n += 1
+    customer = Customer(name=name[:255], phone_number=phone, code=f'P{n:05d}')
+    db.session.add(customer)
+    db.session.flush()
+    audit_service.log(_user_id(), 'customer.quick_add', 'Customer', customer.id, None,
+                      {'name': customer.name})
+    db.session.commit()
+    return jsonify({'id': customer.id, 'name': customer.name,
+                    'phone_number': customer.phone_number, 'code': customer.code}), 201
 
 
 @pos_bp.route('/transaction/<int:txn_id>/add_item', methods=['POST'])
@@ -512,11 +681,28 @@ def transaction_add_item(txn_id):
     # Prescription gating happens at /complete time so the cashier can build
     # the cart freely first; the dispensary endpoint links a Prescription.
 
-    discount = _q(body.get('discount', 0))
     unit_price = Decimal(str(item.price))
+    try:
+        if body.get('discount_pct') not in (None, ''):
+            pct = Decimal(str(body.get('discount_pct')))
+            if pct < 0 or pct > 100:
+                return jsonify({'error': 'discount_pct must be between 0 and 100'}), 400
+            discount = _q(unit_price * qty * pct / Decimal('100'))
+        else:
+            discount = _q(body.get('discount', 0))
+    except Exception:
+        return jsonify({'error': 'discount must be numeric'}), 400
+    if discount < 0:
+        return jsonify({'error': 'discount cannot be negative'}), 400
     line_total = _q((unit_price * qty) - discount)
     if line_total < 0:
         return jsonify({'error': 'discount cannot exceed line subtotal'}), 400
+    if discount > 0:
+        blocked = _discount_gate(txn, _gross(txn, unit_price * qty),
+                                 _line_discounts(txn) + Decimal(str(txn.discount_amount or 0))
+                                 + discount, body)
+        if blocked is not None:
+            return blocked
 
     line = TransactionItem(
         transaction_id=txn.id,
@@ -531,6 +717,9 @@ def transaction_add_item(txn_id):
     db.session.add(line)
     db.session.flush()
     _recalc_totals(txn)
+    if discount > 0:
+        audit_service.log(_user_id(), 'discount.line', 'Transaction', txn.id, None,
+                          {'item': item.name, 'discount': float(discount)})
     db.session.commit()
     return jsonify({
         'message': 'Item added',
@@ -551,9 +740,57 @@ def transaction_remove_item(txn_id, line_id):
         return jsonify({'error': 'Line item not found on this transaction'}), 404
     db.session.delete(line)
     db.session.flush()
-    _recalc_totals(txn)
+    # A sale discount was approved for the cart as it was; a smaller cart
+    # would make the same shillings a bigger percentage. Apply it again.
+    cleared = Decimal(str(txn.discount_amount or 0)) > 0
+    _recalc_totals(txn, discount_override=Decimal('0') if cleared else None)
     db.session.commit()
-    return jsonify({'message': 'Item removed', 'transaction': txn.to_dict()}), 200
+    return jsonify({'message': 'Item removed' + ('; sale discount cleared, apply it again'
+                                                 if cleared else ''),
+                    'discount_cleared': cleared, 'transaction': txn.to_dict()}), 200
+
+
+@pos_bp.route('/transaction/<int:txn_id>/line/<int:line_id>/discount', methods=['POST'])
+@cashier_api_required
+def transaction_line_discount(txn_id, line_id):
+    """Discount one line: ``{"percent": 10}`` or ``{"amount": 50}`` (0 removes
+    it). Over the business's cap a manager's code is needed (``otp``)."""
+    txn, err = _txn_or_404(txn_id)
+    if err: return err
+    if txn.status != TXN_OPEN:
+        return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
+    line = db.session.get(TransactionItem, line_id)
+    if not line or line.transaction_id != txn.id:
+        return jsonify({'error': 'Line item not found on this transaction'}), 404
+    if billing.open_invoice_for_transaction(txn.id) is not None:
+        return jsonify({'error': 'A payment was started for this sale; prices cannot '
+                                 'change now'}), 409
+    body = request.get_json(silent=True) or {}
+    shelf = Decimal(str(line.unit_price)) * Decimal(str(line.quantity))
+    try:
+        if body.get('percent') not in (None, ''):
+            pct = Decimal(str(body.get('percent')))
+            if pct < 0 or pct > 100:
+                return jsonify({'error': 'percent must be between 0 and 100'}), 400
+            discount = _q(shelf * pct / Decimal('100'))
+        else:
+            discount = _q(body.get('amount', 0))
+    except Exception:
+        return jsonify({'error': 'discount must be numeric'}), 400
+    if discount < 0 or discount > shelf:
+        return jsonify({'error': 'discount must be between 0 and the line total'}), 400
+    others = _line_discounts(txn) - Decimal(str(line.discount or 0))
+    blocked = _discount_gate(txn, _gross(txn),
+                             others + discount + Decimal(str(txn.discount_amount or 0)), body)
+    if blocked is not None:
+        return blocked
+    line.discount = discount
+    line.line_total = _q(shelf - discount)
+    _recalc_totals(txn)
+    audit_service.log(_user_id(), 'discount.line', 'Transaction', txn.id, None,
+                      {'item': line.item_name, 'discount': float(discount)})
+    db.session.commit()
+    return jsonify({'line': line.to_dict(), 'transaction': txn.to_dict()}), 200
 
 
 @pos_bp.route('/transaction/<int:txn_id>/apply_discount', methods=['POST'])
@@ -588,8 +825,13 @@ def transaction_apply_discount(txn_id):
         return jsonify({'error': "type must be 'percent' or 'flat'"}), 400
     if discount > subtotal:
         return jsonify({'error': 'discount cannot exceed subtotal'}), 400
+    blocked = _discount_gate(txn, _gross(txn), _line_discounts(txn) + discount, body)
+    if blocked is not None:
+        return blocked
 
     _recalc_totals(txn, discount_override=discount)
+    audit_service.log(_user_id(), 'discount.sale', 'Transaction', txn.id, None,
+                      {'type': dtype, 'value': float(value), 'discount': float(_q(discount))})
     db.session.commit()
     return jsonify({'message': 'Discount applied', 'transaction': txn.to_dict()}), 200
 
@@ -688,11 +930,15 @@ def transaction_complete(txn_id):
                                  'void and start again'}), 409
     # Money that arrives by itself (M-Pesa; online cards when switched on)
     # must already be recorded on the invoice; the till does not record it.
-    awaits_provider = method == PAY_MPESA or (method == PAY_CARD and _online_cards())
+    # Bank transfers are recorded first too (POST /payments/bank), so the
+    # receipt only prints once the reference is on the invoice.
+    awaits_provider = (method in (PAY_MPESA, PAY_BANK)
+                       or (method == PAY_CARD and _online_cards()))
     if awaits_provider and (invoice is None or paid_so_far < _q(total)):
         db.session.rollback()
-        return jsonify({'error': f'{"M-Pesa" if method == PAY_MPESA else "Card"} payment '
-                                 'not received yet',
+        label = {PAY_MPESA: 'M-Pesa', PAY_BANK: 'Bank'}.get(method, 'Card')
+        return jsonify({'error': f'{label} payment not '
+                                 f'{"recorded" if method == PAY_BANK else "received"} yet',
                         'invoice': invoice.to_dict() if invoice else None}), 409
     if method == PAY_SPLIT and paid_so_far != _q(mpesa_a):
         # The tender must match what M-Pesa actually brought in, or cash

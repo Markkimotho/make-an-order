@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Payments to verify{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-circle-check me-2"></i>Payments to verify</h2>
+    <p class="text-muted mb-0 small">M-Pesa codes and bank references typed at the till. Check each against
+      the M-Pesa or bank statement. Rejecting one reopens the sale's invoice as owed.</p>
+  </div>
+  <div class="text-end"><div class="small text-muted">Unverified</div><div class="fs-4 fw-bold" id="vpTotal">KES 0.00</div></div>
+</div>
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Received</th><th>Method</th><th>Reference</th><th class="text-end">Amount</th>
+      <th>Invoice</th><th>Typed by</th><th></th></tr></thead>
+    <tbody id="vpRows"><tr><td colspan="7" class="text-muted p-3">Loading…</td></tr></tbody>
+  </table>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const label = {mpesa_manual: 'M-Pesa code', bank: 'Bank'};
+  async function load() {
+    const r = await fetch('/payments/unverified');
+    const data = await r.json();
+    document.getElementById('vpTotal').textContent = kes(data.total);
+    const rows = document.getElementById('vpRows');
+    if (!data.payments.length) {
+      rows.innerHTML = '<tr><td colspan="7" class="text-muted p-3">Nothing waiting. Every typed payment has been checked.</td></tr>';
+      return;
+    }
+    rows.innerHTML = data.payments.map(p => `<tr>
+      <td class="small">${esc((p.received_at || '').replace('T', ' ').slice(0, 16))}</td>
+      <td>${esc(label[p.method] || p.method)}${p.bank_name ? ' · ' + esc(p.bank_name) : ''}</td>
+      <td class="font-monospace">${esc(p.bank_reference || p.mpesa_receipt)}</td>
+      <td class="text-end">${kes(p.amount)}</td>
+      <td class="small">${esc(p.invoices.join(', '))}</td>
+      <td class="small">${esc(p.recorded_by_name || '')}</td>
+      <td class="text-nowrap">
+        <button class="btn btn-sm btn-success" data-act="verify" data-id="${p.id}">On statement</button>
+        <button class="btn btn-sm btn-outline-danger" data-act="reject" data-id="${p.id}">Not received</button>
+      </td></tr>`).join('');
+  }
+  document.getElementById('vpRows').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    let body = {};
+    if (b.dataset.act === 'reject') {
+      const reason = prompt('Why? (e.g. not on the statement, wrong amount)');
+      if (reason === null) return;
+      body = {reason};
+    }
+    b.disabled = true;
+    const r = await fetch(`/payments/${b.dataset.id}/${b.dataset.act}`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (!r.ok) { alert((await r.json()).error || 'Failed'); b.disabled = false; return; }
+    load();
+  });
+  load();
+})();
+</script>
+{% endblock %}

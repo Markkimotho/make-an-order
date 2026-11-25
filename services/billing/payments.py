@@ -3,6 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from models import Invoice, Payment, PaymentAllocation, db
+from models.billing import normalise_bank_reference
 from services import audit_service
 from services.billing.invoices import (BillingError, live_allocations, lock_invoice,
                                        lock_payment, lock_tenant, money, recompute)
@@ -85,7 +86,7 @@ def allocate(payment, target=None, exclude=()):
 def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, bill_ref=None,
                    payer_phone=None, payer_name=None, customer_id=None,
                    org_account_balance=None, raw=None, recorded_by=None, verified=True,
-                   received_at=None):
+                   received_at=None, bank_name=None, bank_reference=None):
     """Record money once and allocate it.
 
     The M-Pesa receipt is the key: the same receipt arriving again (STK
@@ -98,6 +99,14 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
         raise BillingError("payment amount must be greater than zero")
     lock_tenant()
     receipt = _normalise_receipt(receipt)
+    if bank_reference is not None:
+        # A bank reference is used once: a second entry is a mistake or a
+        # cashier reusing an old slip, never the same money arriving again.
+        bank_reference = normalise_bank_reference(bank_reference)
+        if not bank_reference:
+            raise BillingError("enter the bank reference from the slip or SMS")
+        if Payment.query.filter_by(bank_reference=bank_reference).first() is not None:
+            raise DuplicateReceipt(f"bank reference {bank_reference} is already recorded")
     existing = Payment.query.filter_by(mpesa_receipt=receipt).first() if receipt else None
     if existing is not None:
         return _merge(existing, method=method, amount=amount, intent=intent, invoice=invoice,
@@ -117,7 +126,8 @@ def record_payment(*, method, amount, receipt=None, intent=None, invoice=None, b
                       customer_id=customer_id or matched_customer, member_id=matched_member,
                       org_account_balance=org_account_balance, raw_payload=raw,
                       recorded_by=recorded_by, verified=verified,
-                      received_at=received_at or datetime.utcnow())
+                      received_at=received_at or datetime.utcnow(),
+                      bank_name=bank_name, bank_reference=bank_reference)
     db.session.add(payment)
     db.session.flush()
 

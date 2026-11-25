@@ -58,38 +58,52 @@
       </div>
       <div id="rxWarning" class="rx-warn mb-2 d-none"></div>
       <div class="cart-list" id="cartList">
-        <div class="text-muted small p-3">No active transaction. Select a customer (optional) and start adding items.</div>
+        <div class="text-muted small p-3">No sale yet. Pick the {{ 'patient' if 'patients' in features else 'customer' }} (optional) and add items.</div>
       </div>
     </div>
   </div>
 
-  <!-- RIGHT: customer + totals + payment -->
+  <!-- RIGHT: who, totals, payment -->
   <div>
     <div class="pos-card mb-3">
-      <h6 class="mb-2"><i class="fas fa-user me-1"></i>Customer</h6>
+      <h6 class="mb-2"><i class="fas {{ 'fa-user-injured' if 'patients' in features else 'fa-user' }} me-1"></i>{{ 'Patient' if 'patients' in features else 'Customer' }}</h6>
       <div class="input-group input-group-sm mb-2">
-        <input type="text" class="form-control" id="custSearch" placeholder="Search by name/phone…">
+        <input type="text" class="form-control" id="custSearch" placeholder="Name or phone…" autocomplete="off">
+        <button class="btn btn-outline-secondary" id="custAdd" type="button" title="New {{ 'patient' if 'patients' in features else 'customer' }}"><i class="fas fa-user-plus"></i></button>
         <button class="btn btn-outline-secondary" id="custClear" type="button">Clear</button>
       </div>
       <div id="custResults" class="small mb-2"></div>
-      <div id="custSelected" class="small text-muted">Walk-in customer (no loyalty / credit)</div>
+      <form id="custNewForm" class="d-none mb-2">
+        <div class="row g-1">
+          <div class="col-6"><input class="form-control form-control-sm" id="custNewName" placeholder="Full name" required></div>
+          <div class="col-6"><input class="form-control form-control-sm" id="custNewPhone" placeholder="07XXXXXXXX" required></div>
+        </div>
+        <button class="btn btn-sm btn-primary mt-1" type="submit">Save and use</button>
+      </form>
+      <div id="custSelected" class="small text-muted">Walk-in (no history, loyalty or credit)</div>
+      <hr class="my-2">
+      <label class="form-label small mb-1" for="servedBy"><i class="fas fa-user-tie me-1"></i>Served by</label>
+      <select class="form-select form-select-sm" id="servedBy"></select>
     </div>
 
     <div class="pos-card mb-3">
       <h6 class="mb-2"><i class="fas fa-calculator me-1"></i>Totals</h6>
       <div class="totals-row"><span>Subtotal</span><span id="ttSubtotal">0.00</span></div>
-      <div class="totals-row"><span>Discount</span><span id="ttDiscount">0.00</span></div>
+      <div class="totals-row"><span>Sale discount</span><span id="ttDiscount">0.00</span></div>
       <div class="totals-row"><span>Tax</span><span id="ttTax">0.00</span></div>
       <div class="totals-row total"><span>Total</span><span id="ttTotal">0.00</span></div>
 
       <div class="d-flex gap-2 mt-3">
         <button class="btn btn-sm btn-outline-secondary flex-grow-1" id="btnDiscount" disabled>
-          <i class="fas fa-tag me-1"></i>Discount
+          <i class="fas fa-tag me-1"></i>Discount on sale
         </button>
         <button class="btn btn-sm btn-outline-danger" id="btnVoid" disabled>
           <i class="fas fa-ban me-1"></i>Void
         </button>
       </div>
+      {% if 'discounts' in features and user_role not in ('admin', 'superuser') %}
+      <div class="small text-muted mt-2">Discounts over {{ '%g'|format(tenant.max_discount_pct|float) }}% need a manager's code.</div>
+      {% endif %}
     </div>
 
     <div class="pos-card">
@@ -99,13 +113,12 @@
           <i class="fas fa-money-bill me-1"></i>Cash</button></div>
         <div class="col-6"><button class="btn btn-success w-100 pay-method-btn" data-method="mpesa" disabled>
           <i class="fas fa-mobile me-1"></i>M-Pesa</button></div>
-        <div class="col-6"><button class="btn btn-primary w-100 pay-method-btn" data-method="card" disabled>
-          <i class="fas fa-credit-card me-1"></i>Card</button></div>
+        <div class="col-6"><button class="btn btn-primary w-100 pay-method-btn" data-method="bank" disabled>
+          <i class="fas fa-building-columns me-1"></i>Bank</button></div>
         <div class="col-6"><button class="btn btn-warning w-100 pay-method-btn" data-method="credit" disabled>
           <i class="fas fa-handshake me-1"></i>Credit</button></div>
-        <div class="col-12"><button class="btn btn-outline-dark w-100" data-method="split" disabled>
-          <i class="fas fa-divide me-1"></i>Split payment</button></div>
       </div>
+      <div class="small text-muted mt-2">The receipt prints once the payment is confirmed.</div>
     </div>
   </div>
 </div>
@@ -121,20 +134,20 @@
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-    <button class="btn btn-success" id="cashConfirm">Confirm</button>
+    <button class="btn btn-success" id="cashConfirm">Confirm and print</button>
   </div>
 </div></div></div>
 
 <!-- M-Pesa modal -->
 <div class="modal fade" id="mpesaModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-  <div class="modal-header"><h5 class="modal-title">M-Pesa STK Push</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-header"><h5 class="modal-title">M-Pesa</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
   <div class="modal-body">
     <div class="mb-2">Amount: <strong id="mpesaAmount">0.00</strong></div>
     <label class="form-label">Customer phone (Safaricom)</label>
     <input type="text" class="form-control" id="mpesaPhone" placeholder="07XXXXXXXX">
     <div id="mpesaStatus" class="small mt-2 text-muted"></div>
     <hr>
-    <label class="form-label small">Already paid? Enter the M-Pesa code from the SMS</label>
+    <label class="form-label small">Already paid to the till or paybill? Enter the M-Pesa code from the SMS</label>
     <div class="input-group input-group-sm">
       <input type="text" class="form-control text-uppercase" id="mpesaCode" placeholder="SJK82910PL" maxlength="20">
       <button class="btn btn-outline-secondary" id="mpesaCodeSave" type="button">Record code</button>
@@ -142,20 +155,44 @@
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-    <button class="btn btn-success" id="mpesaSend">Send STK</button>
-    <button class="btn btn-outline-success d-none" id="mpesaComplete">Complete sale</button>
+    <button class="btn btn-success" id="mpesaSend">Send prompt</button>
   </div>
+</div></div></div>
+
+<!-- Bank modal -->
+<div class="modal fade" id="bankModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title">Bank transfer or deposit</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <form id="bankForm">
+  <div class="modal-body">
+    <div class="mb-2">Amount: <strong id="bankAmount">0.00</strong></div>
+    <label class="form-label small" for="bankName">Bank</label>
+    <select class="form-select mb-2" id="bankName" required>
+      <option value="">Choose…</option>
+      <option>Equity</option><option>KCB</option><option>Co-operative</option><option>NCBA</option>
+      <option>Absa</option><option>Stanbic</option><option>DTB</option><option>I&amp;M</option>
+      <option>Family</option><option>Standard Chartered</option><option>Other</option>
+    </select>
+    <label class="form-label small" for="bankRef">Reference from the bank SMS or slip</label>
+    <input type="text" class="form-control text-uppercase" id="bankRef" maxlength="64" required placeholder="FT24330X9QK2">
+    <div class="small text-muted mt-2">Recorded as unverified until an admin checks the bank statement.</div>
+    <div id="bankStatus" class="small text-danger mt-2"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
+    <button class="btn btn-primary" type="submit">Record and print</button>
+  </div>
+  </form>
 </div></div></div>
 
 <!-- Discount modal -->
 <div class="modal fade" id="discountModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-  <div class="modal-header"><h5 class="modal-title">Apply discount</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-header"><h5 class="modal-title" id="discountTitle">Discount</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
   <div class="modal-body">
     <select class="form-select mb-2" id="discountType">
       <option value="percent">Percent (%)</option>
-      <option value="flat">Flat amount</option>
+      <option value="flat">Amount (KES)</option>
     </select>
-    <input type="number" step="0.01" class="form-control" id="discountValue" placeholder="0">
+    <input type="number" step="0.01" min="0" class="form-control" id="discountValue" placeholder="0">
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -165,13 +202,12 @@
 
 <!-- Receipt modal -->
 <div class="modal fade" id="receiptModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-  <div class="modal-header"><h5 class="modal-title">Receipt</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-  <div class="modal-body">
-    <pre id="receiptBody" style="font-family: ui-monospace, monospace; white-space: pre-wrap;"></pre>
+  <div class="modal-header"><h5 class="modal-title">Sale complete</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body p-0">
+    <iframe id="receiptFrame" title="Receipt" style="width:100%; height:480px; border:0;"></iframe>
   </div>
   <div class="modal-footer">
-    <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-    <button class="btn btn-primary" onclick="window.print()">Print</button>
+    <button class="btn btn-outline-primary" id="printAgainBtn"><i class="fas fa-print me-1"></i>Print again</button>
     <button class="btn btn-success" id="newSaleBtn">New sale</button>
   </div>
 </div></div></div>
@@ -180,9 +216,13 @@
 'use strict';
 const POS = (() => {
   let txnId = null, txn = null, items = [], customer = null, shift = null;
+  const ME = {{ session.get('user_id') | tojson }};
+  let servedBy = ME;
+  let discountTarget = null;          // null = whole sale, else a line id
   const $ = sel => document.querySelector(sel);
-
   const fmt = n => Number(n || 0).toFixed(2);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
   async function api(method, url, body) {
     const opts = { method, headers: {'Content-Type':'application/json'} };
@@ -190,21 +230,42 @@ const POS = (() => {
     const r = await fetch(url, opts);
     let data = null;
     try { data = await r.json(); } catch {}
-    if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+    if (!r.ok) {
+      const err = new Error((data && data.error) || `HTTP ${r.status}`);
+      err.data = data; err.status = r.status;
+      throw err;
+    }
+    if (r.status === 202) data = Object.assign({ _accepted: true }, data);
     return data;
+  }
+
+  // A call that may need a manager's code: on 202 ask for the code and repeat.
+  async function withManagerCode(method, url, body) {
+    let r = await api(method, url, body);
+    if (r && r.otp_required) {
+      const code = prompt((r.message || 'A manager code is needed.') + '\n\nEnter the code:');
+      if (!code) return null;
+      r = await api(method, url, Object.assign({}, body, { otp: code.trim() }));
+    }
+    return r;
   }
 
   async function loadShift() {
     try {
       const r = await api('GET', '/pos/shift/current');
       shift = r.shift;
-      if (shift) {
-        $('#shiftStatus').innerHTML = `<span class="badge bg-success">Shift open · #${shift.id}</span>`;
-        $('#noShiftWarn').classList.add('d-none');
-      } else {
-        $('#shiftStatus').innerHTML = `<span class="badge bg-danger">No shift</span>`;
-        $('#noShiftWarn').classList.remove('d-none');
-      }
+      $('#shiftStatus').innerHTML = shift
+        ? `<span class="badge bg-success">Shift open · #${shift.id}</span>`
+        : `<span class="badge bg-danger">No shift</span>`;
+      $('#noShiftWarn').classList.toggle('d-none', !!shift);
+    } catch (e) { console.error(e); }
+  }
+
+  async function loadStaff() {
+    try {
+      const staff = await api('GET', '/pos/staff');
+      $('#servedBy').innerHTML = staff.map(u =>
+        `<option value="${u.id}" ${u.id === servedBy ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
     } catch (e) { console.error(e); }
   }
 
@@ -214,11 +275,17 @@ const POS = (() => {
       const list = await api('GET', '/inventory/items');
       items = Array.isArray(list) ? list : (list.items || []);
       const cats = [...new Set(items.map(i => i.category).filter(Boolean))].sort();
-      const sel = $('#posCategory');
-      sel.innerHTML = '<option value="">All categories</option>' +
-        cats.map(c => `<option>${c}</option>`).join('');
+      $('#posCategory').innerHTML = '<option value="">All categories</option>' +
+        cats.map(c => `<option>${esc(c)}</option>`).join('');
       renderItems();
-    } catch (e) { grid.innerHTML = `<div class="text-danger small p-3">${e.message}</div>`; }
+    } catch (e) { grid.innerHTML = `<div class="text-danger small p-3">${esc(e.message)}</div>`; }
+  }
+
+  function expiryBadge(i) {
+    if (!i.expiry_date) return '';
+    const days = Math.round((new Date(i.expiry_date) - new Date()) / 86400000);
+    const cls = days < 0 ? 'bg-danger' : days <= 90 ? 'bg-warning text-dark' : 'bg-light text-dark';
+    return `<div class="badge ${cls} mt-1" title="Next batch ${esc(i.batch_number || '')}">exp ${esc(i.expiry_date)}</div>`;
   }
 
   function renderItems() {
@@ -228,14 +295,15 @@ const POS = (() => {
       (!cat || i.category === cat) &&
       (!term || (i.name||'').toLowerCase().includes(term) ||
                 (i.sku||'').toLowerCase().includes(term) ||
-                (i.barcode||'').toLowerCase().includes(term))
-    );
+                (i.barcode||'').toLowerCase().includes(term)));
     $('#posItems').innerHTML = filtered.length ? filtered.map(i => `
       <div class="item-tile ${i.stock<=0?'disabled':''}" data-id="${i.id}">
-        <div class="fw-semibold small text-truncate">${i.name}</div>
-        <div class="small text-muted">${i.category||''} · stock ${i.stock}</div>
+        <div class="fw-semibold small text-truncate">${esc(i.name)}</div>
+        <div class="small ${i.stock <= i.reorder_level ? 'text-danger' : 'text-muted'}">${esc(i.category||'')} · stock ${i.stock}</div>
         <div class="fw-bold">KES ${fmt(i.price)}</div>
-        ${i.requires_prescription?'<div class="badge bg-warning text-dark mt-1"><i class="fas fa-prescription"></i> Rx</div>':''}
+        ${i.requires_prescription?'<span class="badge bg-warning text-dark mt-1"><i class="fas fa-prescription"></i> Rx</span>':''}
+        ${i.is_controlled?'<span class="badge bg-danger mt-1">Controlled</span>':''}
+        ${expiryBadge(i)}
       </div>`).join('') : '<div class="text-muted small p-3">No items match.</div>';
     $('#posItems').querySelectorAll('.item-tile').forEach(el => {
       el.addEventListener('click', () => addItem(parseInt(el.dataset.id, 10)));
@@ -245,7 +313,7 @@ const POS = (() => {
   async function ensureTxn() {
     if (txnId) return txnId;
     const r = await api('POST', '/pos/transaction/new', {
-      customer_id: customer ? customer.id : null
+      customer_id: customer ? customer.id : null, served_by_id: servedBy
     });
     txnId = r.transaction_id; txn = r.transaction;
     return txnId;
@@ -266,9 +334,18 @@ const POS = (() => {
     try {
       const r = await api('DELETE', `/pos/transaction/${txnId}/remove_item/${lineId}`);
       txn = r.transaction;
-      if (!txn.items || !txn.items.length) { resetCart(false); return; }
+      if (r.discount_cleared) alert('The sale discount was cleared because the cart changed. Apply it again if needed.');
+      if (!txn.items || !txn.items.length) { renderCart(); return; }
       renderCart();
     } catch (e) { alert(e.message); }
+  }
+
+  function openDiscount(lineId) {
+    discountTarget = lineId;
+    const line = lineId ? (txn.items || []).find(li => li.id === lineId) : null;
+    $('#discountTitle').textContent = line ? `Discount on ${line.item_name}` : 'Discount on the whole sale';
+    $('#discountValue').value = '';
+    new bootstrap.Modal($('#discountModal')).show();
   }
 
   function renderCart() {
@@ -281,12 +358,14 @@ const POS = (() => {
           <span>Item</span><span>Qty</span><span>Price</span><span>Total</span><span></span>
         </div>` + txn.items.map(li => `
         <div class="cart-row">
-          <span class="text-truncate">${li.item_name}</span>
+          <span class="text-truncate">${esc(li.item_name)}${Number(li.discount) ? `<br><small class="text-success">-${fmt(li.discount)} discount</small>` : ''}</span>
           <span>${li.quantity}</span>
           <span>${fmt(li.unit_price)}</span>
           <span><strong>${fmt(li.line_total)}</strong></span>
-          <span><button class="btn btn-sm btn-link text-danger p-0"
-                       onclick="POS.remove(${li.id})"><i class="fas fa-times"></i></button></span>
+          <span class="text-nowrap">
+            <button class="btn btn-sm btn-link p-0 me-1" title="Discount this line" onclick="POS.lineDiscount(${li.id})"><i class="fas fa-tag"></i></button>
+            <button class="btn btn-sm btn-link text-danger p-0" title="Remove" onclick="POS.remove(${li.id})"><i class="fas fa-times"></i></button>
+          </span>
         </div>`).join('');
     }
     $('#cartCount').textContent = `${(txn?.items||[]).length} lines`;
@@ -296,107 +375,104 @@ const POS = (() => {
     $('#ttTotal').textContent    = fmt(txn?.total);
 
     const hasItems = !!(txn?.items||[]).length;
-    document.querySelectorAll('.pay-method-btn,[data-method]').forEach(b => b.disabled = !hasItems);
+    document.querySelectorAll('.pay-method-btn').forEach(b => b.disabled = !hasItems);
     $('#btnDiscount').disabled = !hasItems;
-    $('#btnVoid').disabled = !hasItems;
+    $('#btnVoid').disabled = !txnId;
 
-    // Rx warning
     const rxItems = items.filter(i => i.requires_prescription)
                          .filter(i => (txn?.items||[]).some(li => li.inventory_item_id === i.id));
     const w = $('#rxWarning');
     if (rxItems.length) {
       w.classList.remove('d-none');
       w.innerHTML = `<i class="fas fa-prescription me-1"></i>Prescription required for: ` +
-                    rxItems.map(i => i.name).join(', ') +
-                    `. Dispense via the Pharmacy page before completing.`;
+                    rxItems.map(i => esc(i.name)).join(', ') +
+                    `. Dispense via Prescriptions before taking payment.`;
     } else { w.classList.add('d-none'); }
   }
 
-  async function searchCustomers(term) {
-    if (!term) { $('#custResults').innerHTML = ''; return; }
-    try {
-      const list = await api('GET', '/customers/view_customers');
-      const t = term.toLowerCase();
-      const matches = list.filter(c =>
-        (c.name||'').toLowerCase().includes(t) ||
-        (c.phone_number||'').includes(term) ||
-        (c.code||'').toLowerCase().includes(t)
-      ).slice(0, 5);
-      $('#custResults').innerHTML = matches.map(c =>
-        `<div><a href="#" data-cid="${c.id}" data-cname="${c.name}">
-           ${c.name} · ${c.phone_number}</a></div>`).join('') ||
-        '<span class="text-muted">No matches</span>';
-      $('#custResults').querySelectorAll('a').forEach(a => {
-        a.addEventListener('click', e => {
-          e.preventDefault();
-          customer = { id: parseInt(a.dataset.cid,10), name: a.dataset.cname };
-          $('#custSelected').innerHTML = `<i class="fas fa-user-check me-1"></i><strong>${customer.name}</strong>`;
-          $('#custResults').innerHTML = '';
-          $('#custSearch').value = '';
-        });
-      });
-    } catch (e) { console.error(e); }
+  function showCustomer() {
+    $('#custSelected').innerHTML = customer
+      ? `<i class="fas fa-user-check me-1"></i><strong>${esc(customer.name)}</strong> <span class="text-muted">${esc(customer.phone_number || '')}</span>`
+      : 'Walk-in (no history, loyalty or credit)';
   }
 
-  function resetCart(notify=true) {
-    txnId = null; txn = null;
-    customer = null;
-    $('#custSelected').innerHTML = 'Walk-in customer (no loyalty / credit)';
+  async function setCustomer(c) {
+    if (txnId) {
+      try { const r = await api('PATCH', `/pos/transaction/${txnId}`, { customer_id: c ? c.id : null }); txn = r.transaction; }
+      catch (e) { return alert(e.message); }
+    }
+    customer = c;
+    showCustomer();
+    $('#custResults').innerHTML = ''; $('#custSearch').value = '';
+    $('#custNewForm').classList.add('d-none');
+  }
+
+  let searchTimer = null;
+  function searchCustomers(term) {
+    clearTimeout(searchTimer);
+    if (term.length < 2) { $('#custResults').innerHTML = ''; return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        const matches = await api('GET', '/pos/customers?q=' + encodeURIComponent(term));
+        $('#custResults').innerHTML = matches.map((c, n) =>
+          `<div><a href="#" data-n="${n}">${esc(c.name)} · ${esc(c.phone_number || '')}</a></div>`).join('') ||
+          '<span class="text-muted">No matches. Use <i class="fas fa-user-plus"></i> to add.</span>';
+        $('#custResults').querySelectorAll('a').forEach(a => a.addEventListener('click', e => {
+          e.preventDefault(); setCustomer(matches[parseInt(a.dataset.n, 10)]);
+        }));
+      } catch (e) { console.error(e); }
+    }, 250);
+  }
+
+  function resetCart() {
+    txnId = null; txn = null; customer = null; servedBy = ME;
+    $('#servedBy').value = String(ME);
+    showCustomer();
     renderCart();
-    if (notify) loadItems(); // refresh stock counts
+    loadItems();                     // refresh stock counts
   }
 
   async function applyDiscount() {
     const type = $('#discountType').value;
     const value = parseFloat($('#discountValue').value || 0);
     try {
-      const r = await api('POST', `/pos/transaction/${txnId}/apply_discount`, { type, value });
+      const r = discountTarget
+        ? await withManagerCode('POST', `/pos/transaction/${txnId}/line/${discountTarget}/discount`,
+                                type === 'percent' ? { percent: value } : { amount: value })
+        : await withManagerCode('POST', `/pos/transaction/${txnId}/apply_discount`, { type, value });
+      if (!r) return;
       txn = r.transaction; renderCart();
       bootstrap.Modal.getInstance($('#discountModal')).hide();
     } catch (e) { alert(e.message); }
+  }
+
+  function showReceipt(id) {
+    const frame = $('#receiptFrame');
+    frame.onload = () => { try { frame.contentWindow.print(); } catch (e) { console.error(e); } };
+    frame.src = `/pos-ui/receipt/${id}`;
+    new bootstrap.Modal($('#receiptModal')).show();
   }
 
   async function complete(method, extra) {
     try {
       const body = Object.assign({ payment_method: method }, extra || {});
       const r = await api('POST', `/pos/transaction/${txnId}/complete`, body);
-      const rec = r.receipt || {};
-      const lines = [];
-      lines.push((rec.business?.name||'Sale').toUpperCase());
-      lines.push('Receipt: ' + (rec.transaction?.ref||''));
-      lines.push('Date: ' + (rec.transaction?.created_at||''));
-      lines.push('--------------------------------');
-      (rec.items||[]).forEach(it => {
-        lines.push(`${it.name} x${it.quantity}  ${fmt(it.line_total)}`);
-      });
-      lines.push('--------------------------------');
-      lines.push('Subtotal: ' + fmt(rec.totals?.subtotal));
-      lines.push('Discount: ' + fmt(rec.totals?.discount));
-      lines.push('Tax:      ' + fmt(rec.totals?.tax));
-      lines.push('TOTAL:    ' + fmt(rec.totals?.total));
-      lines.push('Paid via: ' + (rec.transaction?.payment_method||''));
-      $('#receiptBody').textContent = lines.join('\n');
-      new bootstrap.Modal($('#receiptModal')).show();
-    } catch (e) { alert(e.message); }
+      txn = r.transaction;
+      showReceipt(r.transaction.id);
+      return true;
+    } catch (e) { alert(e.message); return false; }
   }
 
-  async function voidTxn(otp) {
+  async function voidTxn() {
     try {
-      const body = otp ? { reason: 'cashier void', otp } : { reason: 'cashier void' };
-      const r = await api('POST', `/pos/transaction/${txnId}/void`, body);
-      if (r.otp_required) {
-        const code = prompt('Manager OTP sent. Enter code:');
-        if (code) return voidTxn(code);
-        return;
-      }
+      const r = await withManagerCode('POST', `/pos/transaction/${txnId}/void`, { reason: 'cashier void' });
+      if (!r) return;
       alert('Voided.'); resetCart();
     } catch (e) { alert(e.message); }
   }
 
-  // ----- bind -----
   document.addEventListener('DOMContentLoaded', () => {
-    loadShift();
-    loadItems();
+    loadShift(); loadItems(); loadStaff(); showCustomer();
 
     $('#posSearch').addEventListener('input', renderItems);
     $('#posCategory').addEventListener('change', renderItems);
@@ -408,17 +484,35 @@ const POS = (() => {
       else alert('No item matches that code.');
     });
     $('#custSearch').addEventListener('input', e => searchCustomers(e.target.value.trim()));
-    $('#custClear').addEventListener('click', () => {
-      customer = null;
-      $('#custSelected').innerHTML = 'Walk-in customer (no loyalty / credit)';
-      $('#custSearch').value = ''; $('#custResults').innerHTML = '';
+    $('#custClear').addEventListener('click', () => setCustomer(null));
+    $('#custAdd').addEventListener('click', () => {
+      $('#custNewForm').classList.toggle('d-none');
+      $('#custNewName').value = $('#custSearch').value; $('#custNewName').focus();
     });
-    $('#btnDiscount').addEventListener('click', () => new bootstrap.Modal($('#discountModal')).show());
+    $('#custNewForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      try {
+        const c = await api('POST', '/pos/customers', { name: $('#custNewName').value.trim(),
+                                                        phone_number: $('#custNewPhone').value.trim() });
+        setCustomer(c);
+      } catch (err) {
+        if (err.status === 409 && err.data && err.data.customer &&
+            confirm(err.message + ': ' + err.data.customer.name + '. Use them?')) setCustomer(err.data.customer);
+        else alert(err.message);
+      }
+    });
+    $('#servedBy').addEventListener('change', async e => {
+      servedBy = parseInt(e.target.value, 10);
+      if (txnId) {
+        try { const r = await api('PATCH', `/pos/transaction/${txnId}`, { served_by_id: servedBy }); txn = r.transaction; }
+        catch (err) { alert(err.message); }
+      }
+    });
+    $('#btnDiscount').addEventListener('click', () => openDiscount(null));
     $('#discountConfirm').addEventListener('click', applyDiscount);
-    $('#btnVoid').addEventListener('click', () => { if (confirm('Void this transaction?')) voidTxn(); });
+    $('#btnVoid').addEventListener('click', () => { if (confirm('Void this sale?')) voidTxn(); });
 
-    // payment buttons
-    document.querySelectorAll('.pay-method-btn,[data-method]').forEach(btn => {
+    document.querySelectorAll('.pay-method-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const m = btn.dataset.method;
         if (!txnId) return;
@@ -429,21 +523,17 @@ const POS = (() => {
           new bootstrap.Modal($('#cashModal')).show();
         } else if (m === 'mpesa') {
           $('#mpesaAmount').textContent = fmt(txn.total);
-          $('#mpesaPhone').value = '';
+          $('#mpesaPhone').value = (customer && customer.phone_number) ? '0' + customer.phone_number.slice(3) : '';
           $('#mpesaStatus').textContent = '';
-          $('#mpesaComplete').classList.add('d-none');
           new bootstrap.Modal($('#mpesaModal')).show();
-        } else if (m === 'card') {
-          if (!confirm('Initiate card payment? A link will be generated.')) return;
-          api('POST', '/payments/card/initiate', { transaction_id: txnId })
-            .then(r => { window.open(r.payment_link, '_blank'); alert('Confirm completion via webhook or verify endpoint.'); })
-            .catch(e => alert(e.message));
+        } else if (m === 'bank') {
+          $('#bankAmount').textContent = fmt(txn.total);
+          $('#bankRef').value = ''; $('#bankStatus').textContent = '';
+          new bootstrap.Modal($('#bankModal')).show();
         } else if (m === 'credit') {
-          if (!customer) return alert('Credit requires a registered customer.');
-          if (!confirm('Charge to customer credit?')) return;
+          if (!customer) return alert('Credit needs a registered customer.');
+          if (!confirm('Charge to ' + customer.name + "'s account?")) return;
           complete('credit');
-        } else if (m === 'split') {
-          alert('Use the API directly for split payments — UI form coming soon.');
         }
       });
     });
@@ -454,27 +544,39 @@ const POS = (() => {
       $('#cashChange').textContent = fmt(Math.max(got - due, 0));
     });
     $('#cashConfirm').addEventListener('click', () => {
+      if (parseFloat($('#cashTendered').value || 0) < parseFloat(txn?.total || 0))
+        return alert('Cash tendered is less than the total.');
       bootstrap.Modal.getInstance($('#cashModal')).hide();
       complete('cash');
     });
 
-    // The sale completes as M-Pesa only once the money is recorded: from the
-    // STK result, a Paybill confirmation, or a typed code. Poll the push.
+    $('#bankForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      $('#bankStatus').textContent = '';
+      try {
+        await api('POST', '/payments/bank', { transaction_id: txnId, bank_name: $('#bankName').value,
+                                              reference: $('#bankRef').value.trim(), amount: txn.total });
+        bootstrap.Modal.getInstance($('#bankModal')).hide();
+        complete('bank');
+      } catch (err) { $('#bankStatus').textContent = err.message; }
+    });
+
+    // M-Pesa: the sale completes, and the receipt prints, only once the money
+    // is recorded (STK result, Paybill confirmation or a typed code).
     let mpesaPoll = null;
     function stopPoll() { if (mpesaPoll) { clearTimeout(mpesaPoll); mpesaPoll = null; } }
-    function markPaid() {
+    async function paid() {
       stopPoll();
-      $('#mpesaStatus').textContent = 'Payment received.';
-      $('#mpesaComplete').classList.remove('d-none');
+      $('#mpesaStatus').textContent = 'Payment received. Printing receipt…';
+      const ok = await complete('mpesa');
+      if (ok) bootstrap.Modal.getInstance($('#mpesaModal')).hide();
     }
     async function pollIntent(intentId, started) {
       try {
         const r = await api('GET', `/payments/intents/${intentId}`);
         const st = r.intent.status;
-        if (r.invoice.status === 'paid') return markPaid();
+        if (r.invoice.status === 'paid') return paid();
         if (st === 'paid_unconfirmed') {
-          // M-Pesa confirmed the payment but its receipt has not come through:
-          // ask for the code from the customer's SMS (the field below).
           $('#mpesaStatus').textContent = r.intent.result_desc;
           $('#mpesaCode').focus();
           mpesaPoll = setTimeout(() => pollIntent(intentId, started), 5000);
@@ -495,7 +597,7 @@ const POS = (() => {
       const phone = $('#mpesaPhone').value.trim();
       if (!phone) return alert('Phone is required.');
       stopPoll();
-      $('#mpesaStatus').textContent = 'Sending STK push…';
+      $('#mpesaStatus').textContent = 'Sending the M-Pesa prompt…';
       try {
         const r = await api('POST', '/payments/mpesa/stk_push',
                             { transaction_id: txnId, phone_number: phone });
@@ -510,23 +612,22 @@ const POS = (() => {
       try {
         const r = await api('POST', '/payments/manual',
                             { transaction_id: txnId, receipt: code, amount: txn.total });
-        if (r.invoice.status === 'paid') markPaid();
+        if (r.invoice.status === 'paid') paid();
         else $('#mpesaStatus').textContent = 'Code recorded. Balance still due: KES ' + fmt(r.invoice.balance);
       } catch (e) { $('#mpesaStatus').textContent = 'Failed: ' + e.message; }
     });
     $('#mpesaModal').addEventListener('hidden.bs.modal', stopPoll);
-    $('#mpesaComplete').addEventListener('click', () => {
-      bootstrap.Modal.getInstance($('#mpesaModal')).hide();
-      complete('mpesa');
-    });
 
-    $('#newSaleBtn').addEventListener('click', () => {
-      bootstrap.Modal.getInstance($('#receiptModal')).hide();
-      resetCart();
+    $('#printAgainBtn').addEventListener('click', () => {
+      try { $('#receiptFrame').contentWindow.print(); } catch (e) { console.error(e); }
     });
+    $('#newSaleBtn').addEventListener('click', () => {
+      bootstrap.Modal.getInstance($('#receiptModal')).hide();     // hidden handler resets
+    });
+    $('#receiptModal').addEventListener('hidden.bs.modal', () => { if (txn && txn.status !== 'open') resetCart(); });
   });
 
-  return { remove: removeLine };
+  return { remove: removeLine, lineDiscount: openDiscount };
 })();
 </script>
 {% endblock %}

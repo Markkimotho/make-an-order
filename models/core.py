@@ -457,7 +457,8 @@ PAY_MPESA  = 'mpesa'
 PAY_CARD   = 'card'
 PAY_CREDIT = 'credit'
 PAY_SPLIT  = 'split'
-PAYMENT_METHODS = (PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT)
+PAY_BANK   = 'bank'        # transfer or deposit; the reference is recorded first
+PAYMENT_METHODS = (PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAY_BANK)
 
 SHIFT_OPEN   = 'open'
 SHIFT_CLOSED = 'closed'
@@ -565,6 +566,7 @@ class Transaction(TenantMixin, db.Model):
             'transaction_ref': self.transaction_ref,
             'customer_id':     self.customer_id,
             'cashier_id':      self.cashier_id,
+            'served_by_id':    self.served_by_id,
             'shift_id':        self.shift_id,
             'status':          self.status,
             'subtotal':        float(self.subtotal or 0),

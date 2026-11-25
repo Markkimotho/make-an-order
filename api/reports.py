@@ -4,7 +4,7 @@ from models import (
     Transaction, TransactionItem, Shift,
     TXN_COMPLETED, TXN_REFUNDED, PAYMENT_METHODS,
 )
-from auth.auth_middleware import admin_api_required
+from auth.auth_middleware import finance_api_required
 from services.clock import today_nairobi
 from sqlalchemy import func
 from datetime import datetime, timedelta, date
@@ -35,7 +35,7 @@ def _since(period: str):
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/summary', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def summary():
     """Return order count, total revenue, avg order value for a given period."""
     period = request.args.get('period', 'month')
@@ -65,7 +65,7 @@ def summary():
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/by_day', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def by_day():
     """Daily revenue + order count for the last N days (max 90)."""
     days  = min(int(request.args.get('days', 30)), 90)
@@ -94,7 +94,7 @@ def by_day():
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/top_items', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def top_items():
     """Top N items by revenue, excluding cancelled/refunded orders."""
     limit = min(int(request.args.get('limit', 10)), 50)
@@ -123,7 +123,7 @@ def top_items():
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/status_breakdown', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def status_breakdown():
     """Count of orders in each status."""
     rows = (db.session.query(Order.status, func.count(Order.id).label('n'))
@@ -137,7 +137,7 @@ def status_breakdown():
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/payment_breakdown', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def payment_breakdown():
     """Revenue and count broken down by payment method."""
     rows = (db.session.query(
@@ -161,7 +161,7 @@ def payment_breakdown():
 # ---------------------------------------------------------------------------
 
 @reports_bp.route('/export', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def export_report():
     """Download a revenue-by-day summary as a CSV file."""
     days  = min(int(request.args.get('days', 30)), 365)
@@ -227,7 +227,7 @@ def _csv_response(rows, fieldnames, filename):
 
 
 @reports_bp.route('/sales_summary', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def sales_summary():
     """POS sales summary over a date window with optional cashier / method filter.
 
@@ -286,7 +286,7 @@ def sales_summary():
 
 
 @reports_bp.route('/shift/<int:shift_id>', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def shift_report(shift_id):
     """Z-report for a single shift (open or closed)."""
     shift = db.session.get(Shift, shift_id)
@@ -299,7 +299,7 @@ def shift_report(shift_id):
 
 
 @reports_bp.route('/inventory_valuation', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def inventory_valuation():
     """Sum of ``stock * cost_price`` (and ``stock * price`` for retail value)."""
     rows = InventoryItem.query.all()
@@ -335,7 +335,7 @@ def inventory_valuation():
 
 
 @reports_bp.route('/stock_movement', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def stock_movement_report():
     """Stock movement history with date / item / reason filters."""
     start, end = _date_window()
@@ -353,7 +353,7 @@ def stock_movement_report():
 
 
 @reports_bp.route('/low_stock', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def low_stock_report():
     """Items where ``stock <= reorder_level`` (formatted report)."""
     rows = (InventoryItem.query
@@ -367,7 +367,7 @@ def low_stock_report():
 
 
 @reports_bp.route('/expiry', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def expiry_report():
     """Items expiring within ``?days=`` (default 30) plus cost-at-risk."""
     try:
@@ -402,7 +402,7 @@ def expiry_report():
 
 
 @reports_bp.route('/top_products', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def top_products_pos():
     """Top selling products from completed transactions."""
     start, end = _date_window()
@@ -427,7 +427,7 @@ def top_products_pos():
 
 
 @reports_bp.route('/cashier_performance', methods=['GET'])
-@admin_api_required
+@finance_api_required
 def cashier_performance():
     """Per-cashier transaction count, total sales, and refund total."""
     start, end = _date_window()

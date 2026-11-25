@@ -14,6 +14,8 @@ ADMIN_ROLES     = ('admin', 'superuser')
 POS_ROLES       = ('cashier', 'pharmacist', 'admin', 'superuser')
 PHARMACY_ROLES  = ('pharmacist', 'admin', 'superuser')
 STOCK_ROLES     = ('stock_clerk', 'pharmacist', 'admin', 'superuser')
+# Money screens: reports, reconciliation, expenses, payment checks.
+FINANCE_ROLES   = ('accountant', 'admin', 'superuser')
 
 
 def _role() -> str:
@@ -85,6 +87,7 @@ cashier_required,     cashier_api_required     = _ui(POS_ROLES),      _api(POS_R
 pos_required,         pos_api_required         = cashier_required,   cashier_api_required
 pharmacist_required,  pharmacist_api_required  = _ui(PHARMACY_ROLES), _api(PHARMACY_ROLES)
 stock_clerk_required, stock_clerk_api_required = _ui(STOCK_ROLES),    _api(STOCK_ROLES)
+finance_required,     finance_api_required     = _ui(FINANCE_ROLES),  _api(FINANCE_ROLES)
 
 
 def roles_required(*allowed_roles):

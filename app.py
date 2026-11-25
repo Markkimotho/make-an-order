@@ -35,7 +35,7 @@ from api.pos import pos_bp
 from api.reports import reports_bp
 from api.settings import settings_bp
 from api.users import users_bp
-from auth.auth_middleware import (admin_required, cashier_required,
+from auth.auth_middleware import (admin_required, cashier_required, finance_required,
                                   login_required, pharmacist_required,
                                   stock_clerk_required, superuser_required)
 from auth.auth_routes import create_auth_blueprint
@@ -639,7 +639,7 @@ def _register_core_routes(app):
         return render_template('users.html', **get_user_context())
 
     @app.route('/reports-ui')
-    @admin_required
+    @finance_required
     @feature_required('finance')
     def reports_page():
         return render_template('reports.html', **get_user_context())
@@ -649,6 +649,25 @@ def _register_core_routes(app):
     @feature_required('pos')
     def pos_page():
         return _safe_render('pos.html', **get_user_context())
+
+    @app.route('/pos-ui/receipt/<int:txn_id>')
+    @cashier_required
+    @feature_required('pos')
+    def pos_receipt_page(txn_id):
+        """Printable 80 mm receipt; ?print=1 opens the print dialog."""
+        from models import TXN_COMPLETED, TXN_REFUNDED, Transaction
+        from services.receipt_service import build_receipt
+        txn = db.session.get(Transaction, txn_id)
+        if txn is None or txn.status not in (TXN_COMPLETED, TXN_REFUNDED):
+            return render_template('404.html', message="Receipt not found"), 404
+        return render_template('receipt_pos.html', r=build_receipt(txn.id),
+                               autoprint=request.args.get('print') == '1')
+
+    @app.route('/payments-ui/verify')
+    @finance_required
+    @feature_required('finance')
+    def verify_payments_page():
+        return render_template('verify_payments.html', **get_user_context())
 
     @app.route('/shift-ui')
     @cashier_required
@@ -669,7 +688,7 @@ def _register_core_routes(app):
         return _safe_render('purchase_orders.html', **get_user_context())
 
     @app.route('/reports-dashboard')
-    @admin_required
+    @finance_required
     @feature_required('finance')
     def reports_dashboard_page():
         return _safe_render('reports_dashboard.html', **get_user_context())

@@ -36,6 +36,12 @@ ADJUSTMENT_REASONS = ("return", "rejected_delivery", "void", "correction")
 ZERO = Decimal("0.00")
 
 
+def normalise_bank_reference(value):
+    """Spaces dropped, upper case, empty is None: 'ft24 330x9' == 'FT24330X9'."""
+    value = "".join((value or "").split()).upper()
+    return value or None
+
+
 def _token():
     return secrets.token_urlsafe(18)
 
@@ -194,8 +200,7 @@ class Payment(TenantMixin, db.Model):
 
     @validates("bank_reference")
     def _normalize_bank_reference(self, key, value):
-        value = "".join((value or "").split()).upper()
-        return value or None
+        return normalise_bank_reference(value)
 
     def to_dict(self):
         return {

@@ -8,9 +8,10 @@ from decimal import Decimal
 
 from models import Invoice, Payment
 from services.billing.invoices import (BillingError, adjust, create_invoice,  # noqa: F401
-                                       lock_invoice, money, recompute, void_invoice)
+                                       lock_invoice, lock_payment, lock_tenant, money,
+                                       recompute, void_invoice)
 from services.billing.matching import C2B_MATCHERS, Match, match_reference  # noqa: F401
-from services.billing.payments import (DuplicateReceipt, allocate,  # noqa: F401
+from services.billing.payments import (DuplicateReceipt, allocate, live_allocations_of,  # noqa: F401
                                        record_payment, reallocate, refund_unallocated,
                                        reverse_payment, settle_released)
 

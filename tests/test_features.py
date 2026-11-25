@@ -82,7 +82,8 @@ def _flatten(entries):
 
 
 @pytest.mark.parametrize("vertical", ["pharmacy", "distributor", "institution"])
-@pytest.mark.parametrize("role", ["superuser", "admin", "pharmacist", "cashier", "stock_clerk"])
+@pytest.mark.parametrize("role", ["superuser", "admin", "pharmacist", "cashier", "stock_clerk",
+                                  "accountant"])
 def test_every_nav_link_opens(app, login_as, vertical, role):
     """No vertical or role is shown a link that 404s or bounces to the dashboard."""
     set_vertical(app.acme_id, vertical)

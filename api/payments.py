@@ -23,7 +23,7 @@ from decimal import Decimal
 from flask import Blueprint, current_app, g, jsonify, request, session
 
 from auth.auth_middleware import (admin_api_required, cashier_api_required,
-                                  superuser_api_required)
+                                  finance_api_required, superuser_api_required)
 from auth.tenancy import tenant_scope, unscoped
 from models import (
     db, Customer, Invoice, Payment, PaymentIntent, Tenant, Transaction,
@@ -173,6 +173,124 @@ def manual_payment():
     db.session.commit()
     return jsonify({'payment': payment.to_dict(),
                     'invoice': db.session.get(Invoice, invoice.id).to_dict()}), 201
+
+
+@payments_bp.route('/bank', methods=['POST'])
+@cashier_api_required
+def bank_payment():
+    """Record a bank transfer or deposit against a sale or invoice.
+
+    Body: ``{"transaction_id"|"invoice_id", "bank_name": "Equity",
+    "reference": "FT24330X9", "amount": 1500}``. The cashier copies the
+    reference from the customer's bank SMS or slip; it is unverified until
+    an admin or accountant checks the bank statement (Payments to verify).
+    """
+    body = request.get_json(silent=True) or {}
+    bank_name = (body.get('bank_name') or '').strip()[:64]
+    if not bank_name:
+        return jsonify({'error': 'Which bank? (e.g. Equity, KCB)'}), 400
+    try:
+        amount = billing.money(body.get('amount'))
+    except Exception:
+        return jsonify({'error': 'amount must be numeric'}), 400
+    if amount <= 0:
+        return jsonify({'error': 'amount must be > 0'}), 400
+    reference = (body.get('reference') or '').strip()
+    if len(''.join(reference.split())) < 4:
+        return jsonify({'error': 'Enter the bank reference from the slip or SMS'}), 400
+    invoice, err = _invoice_for_request(body)
+    if err:
+        db.session.rollback()
+        return err
+    try:
+        payment = billing.record_payment(method='bank', amount=amount, invoice=invoice,
+                                         bank_name=bank_name, bank_reference=reference,
+                                         recorded_by=_user_id(), verified=False)
+    except billing.DuplicateReceipt as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    except billing.BillingError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+    audit_service.log(_user_id(), 'payment.bank', 'Payment', payment.id, None,
+                      {'bank': bank_name, 'reference': payment.bank_reference,
+                       'amount': str(amount), 'invoice': invoice.id})
+    db.session.commit()
+    return jsonify({'payment': payment.to_dict(),
+                    'invoice': db.session.get(Invoice, invoice.id).to_dict()}), 201
+
+
+@payments_bp.route('/unverified', methods=['GET'])
+@finance_api_required
+def unverified():
+    """Typed M-Pesa codes and bank references nobody has checked yet,
+    oldest first, with who typed them."""
+    from models import UNVERIFIED_METHODS, User
+    rows = (Payment.query.filter(Payment.verified.is_(False),
+                                 Payment.status == 'confirmed',
+                                 Payment.method.in_(UNVERIFIED_METHODS))
+            .order_by(Payment.received_at, Payment.id).all())
+    users = {u.id: (u.name or u.email) for u in
+             User.query.filter(User.id.in_({p.recorded_by for p in rows if p.recorded_by}))}
+    out = []
+    for p in rows:
+        allocations = billing.live_allocations_of(p)
+        invoices = [db.session.get(Invoice, a.invoice_id) for a in allocations]
+        out.append({**p.to_dict(), 'recorded_by_name': users.get(p.recorded_by),
+                    'invoices': [i.invoice_number for i in invoices if i is not None]})
+    total = sum((billing.money(p.amount) for p in rows), Decimal('0'))
+    return jsonify({'payments': out, 'count': len(out), 'total': float(total)}), 200
+
+
+def _unverified_or_404(payment_id):
+    from models import UNVERIFIED_METHODS
+    payment = db.session.get(Payment, payment_id)
+    if payment is None or payment.method not in UNVERIFIED_METHODS:
+        return None, (jsonify({'error': 'Not found'}), 404)
+    billing.lock_tenant()                       # lock order: billing, then the payment
+    payment = billing.lock_payment(payment)
+    if payment.verified or payment.status != 'confirmed':
+        db.session.rollback()
+        return None, (jsonify({'error': 'Already checked'}), 409)
+    return payment, None
+
+
+@payments_bp.route('/<int:payment_id>/verify', methods=['POST'])
+@finance_api_required
+def verify_payment(payment_id):
+    """The money is on the statement: mark the typed payment verified."""
+    payment, err = _unverified_or_404(payment_id)
+    if err:
+        return err
+    payment.verified = True
+    payment.verified_by = _user_id()
+    payment.verified_at = datetime.utcnow()
+    audit_service.log(_user_id(), 'payment.verify', 'Payment', payment.id, None,
+                      {'method': payment.method,
+                       'reference': payment.bank_reference or payment.mpesa_receipt,
+                       'amount': str(payment.amount)})
+    db.session.commit()
+    return jsonify({'payment': payment.to_dict()}), 200
+
+
+@payments_bp.route('/<int:payment_id>/reject', methods=['POST'])
+@finance_api_required
+def reject_payment(payment_id):
+    """The money never arrived: reverse the payment, so the invoices it
+    paid open again and show as owed."""
+    body = request.get_json(silent=True) or {}
+    reason = (body.get('reason') or '').strip() or 'not on the statement'
+    payment, err = _unverified_or_404(payment_id)
+    if err:
+        return err
+    billing.reverse_payment(payment, user_id=_user_id(), reason=reason)
+    audit_service.log(_user_id(), 'payment.reject', 'Payment', payment.id, None,
+                      {'method': payment.method,
+                       'reference': payment.bank_reference or payment.mpesa_receipt,
+                       'amount': str(payment.amount), 'reason': reason,
+                       'recorded_by': payment.recorded_by})
+    db.session.commit()
+    return jsonify({'payment': payment.to_dict()}), 200
 
 
 @payments_bp.route('/review', methods=['GET'])
