@@ -18,6 +18,9 @@ call into `services/*` and translate domain errors to HTTP responses.
 | [`sms_service`](sms_service.py)               | Africa's Talking, `sms_messages` | never for provider problems | Yes — records `failed`, returns the row |
 | [`stock`](stock.py)                           | Batches, variants, line batches | `StockError`, `InsufficientStock` | Yes (database) |
 | [`clock`](clock.py)                           | Nothing                         | never               | Yes |
+| [`orders`](orders.py)                         | Orders, invoices, stock holds   | `OrderError`, `StockError` | Yes (database) |
+| [`controlled`](controlled.py)                 | Controlled-drug register        | `RegisterIncomplete` (a `StockError`) | Yes (database) |
+| [`csv_import`](csv_import.py)                 | Bulk onboarding                 | `ImportError_`      | Yes (database; commits) |
 | [`receipt_service`](receipt_service.py)       | DB (read-only)                  | `ValueError`        | Yes |
 | [`loyalty_service`](loyalty_service.py)       | DB (read+write, no commit)      | `LoyaltyError`      | Yes |
 | [`audit_service`](audit_service.py)           | DB (write, no commit)           | never (logs)        | Yes |
@@ -100,6 +103,27 @@ before changing anything. Flushes; callers commit. Items with
 your own commit (it raises `UnsavedChanges` otherwise). `record_delivery()`
 applies delivery reports, forwards only. `SendSMS.*` wraps the app's
 messages and returns True when accepted.
+
+## `orders.py` — remote orders
+
+`create_order(lines, customer_id=, member_id=, pay_now=, due_date=)` writes
+the order, its lines and its invoice and takes the stock. Pay-now orders
+hold stock until `reserved_until`; `release_expired()` (the sweep) gives
+unpaid holds back and expires their invoices; `cancel()` voids and returns
+stock and containers. Paid orders are never released. Lock order: billing,
+order, invoice, stock.
+
+## `controlled.py` — the controlled-drug register
+
+Only called from `stock.py`, after the item row is locked. `Register` holds
+the details an entry needs; `check()` raises `RegisterIncomplete` listing
+what is missing (per entry type: dispense, receipt, return, adjustment,
+destruction). Rows are append-only.
+
+## `csv_import.py`
+
+`import_csv(kind, text, strict=False) -> Report`. Checks every row first;
+idempotent reruns. Used by `flask tenants import-csv`.
 
 ## `clock.py`
 

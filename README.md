@@ -139,9 +139,51 @@ Every text is a row in `sms_messages` written by `services/sms_service.send(to, 
 `/o/<slug>/pay/<pay_token>` lets a customer pay an invoice from their phone with no login. The slug picks the business and the invoice's random `pay_token` picks the invoice; an unknown slug, a lapsed business, a wrong token or another business's token is `404`. The page shows the lines, credit notes, payments and balance, pushes an M-Pesa prompt for the balance (rounded up to the shilling) and polls until paid.
 
 - `billing.pay_url(invoice)` builds the absolute link for SMS reminders from `PUBLIC_BASE_URL`.
-- Rate limits (Flask-Limiter): 5 pushes a minute per IP; 3 prompts per invoice per 10 minutes from any IP. Stored in Redis when `REDIS_URL`/`RATELIMIT_STORAGE_URI` is set, else memory; a Redis outage falls back to memory and never breaks the page.
+- Rate-limit store: Redis when `REDIS_URL`/`RATELIMIT_STORAGE_URI` is set, else memory; a Redis outage falls back to memory and never breaks the page.
 - Responses are `no-store`, `no-referrer` and `noindex`; pay tokens are redacted from request logs.
+- Rate limits (Flask-Limiter): 5 pushes a minute per IP. The cap of 3 prompts per invoice per 10 minutes is counted from `payment_intents` under the invoice row lock, so parallel requests cannot pass it.
 - The status poll asks Daraja at most every 15 seconds per prompt, however often the page polls.
+
+## Remote orders
+
+Every order (staff, duka link, refill link, campaign) is created by `services/orders.create_order` together with its invoice, and its stock is taken at once, soonest expiry first.
+
+- **Pay-now** orders get a `sale` invoice with no due date and hold their stock for 15 minutes. `flask payments-sweep` (every 10 minutes) releases unpaid holds: stock back to its batches, invoice `expired`. An abandoned checkout is never debt. An order with money on it is never released; money that arrives after a release reopens the invoice and the order is marked `restock_needed` on the distributor dashboard.
+- **Credit** orders get a `credit` invoice due on the customer's terms and keep their stock.
+- Cancelling an order (`PUT /orders/<id>/status` to `cancelled`) gives stock back to its batches, voids the invoice (money paid becomes the customer's credit) and takes back containers issued with it.
+
+## Pharmacy
+
+- **Controlled-drug register** (`/pharmacy/register`, `/pharmacy/register.pdf` for a PPB inspection): one row per movement per batch, numbered per drug with no gaps, each opening balance the previous closing balance, with patient, prescriber, pharmacist (PPB number), supplier/document or witness. Rows cannot be changed or deleted. `services/stock.py` writes it for every change to a controlled item and refuses the change without the details: a controlled sale without a complete register entry cannot exist. Marking an item controlled opens its register at the stock on hand.
+- **At the counter:** only a pharmacist (or an admin with a PPB number) sells a controlled drug. Checkout lists every missing register field (prescriber and registration, patient name, National ID and address, pharmacist's PPB number) and writes nothing until they are all given, in the request's `register` object or from the linked prescription. Voids and refunds of controlled drugs need a witness; restock and PO receipt need the supplier and delivery note; adjustments and write-offs need a witness.
+- **Chronic refills:** a prescription created with `is_chronic`, `duration_days` (14/30/90) and optionally `refills_remaining`. Each fully dispensed cycle sets the next due date; when refills run out it ends. `/pharmacy/dashboard` lists refills overdue, due today and in the next 7 days, the expiry radar (expired, 30/60/90 days, cost at risk) and call-back requests.
+- **Refill link** `/o/<slug>/r/<refill_token>`: the patient (shown as "Wanjiku K.") confirms, picks pickup or delivery and pays on the invoice's pay page. A prescription with a controlled drug only offers "Ask the pharmacist to call me".
+
+## Distributor
+
+- **Credit ceiling:** a credit order takes the billing lock, then the duka's row, then checks what it owes (less unapplied money) plus the order against `credit_limit`. Over it, the same order can be paid now by M-Pesa: only more deni is refused, never the sale.
+- **Prices:** price tiers (`/distributor/tiers`) with per-item prices; a duka orders at its tier's price.
+- **Paybill:** each duka has an account code (`account_ref`, from its customer code). A Paybill payment quoting it pays the duka's oldest invoices first. Alternate payer numbers: `/distributor/customers/<id>/phones`.
+- **Containers:** items marked `is_returnable_container` (cylinders, crates) are issued with orders and returned at the till (`/distributor/containers`); a duka cannot return more than it holds.
+- **Dashboard:** deni by days past due (not yet due, 0-7, 8-14, 15+; pay-now and expired invoices are not debt), a reminder button (SMS with the pay link, once per invoice per day), eTIMS badge ("Not fiscalised" unless a CUIN from KRA's portal is recorded with `PUT /distributor/invoices/<id>/etims`).
+- **Duka link** `/o/<slug>/d/<token>` (shown in the duka's profile): catalogue at its tier price, what it owes, credit left, unpaid invoices with pay links; order on credit or pay now.
+
+## Institution (schools, estates, chamas)
+
+- **Members** (`/institution/members`): admission or house number, name, group (Form 1 East), guardian and second phone. One guardian phone can pay for several children.
+- **Campaigns** (`/institution/campaigns`): items at campaign prices, opens/closes, optional instalments with a minimum. Link: `/o/<slug>/c/<campaign-slug>`, shareable to a parents' group.
+- **Lookup:** the parent enters the number and the child's first name. A wrong pair answers exactly like an unknown number, only "Brian O., Form 1 East" is shown, lookups are rate-limited (numbers are often sequential). A signed, campaign-bound token carries the member to the order.
+- **Paying:** full or in instalments on the pay page; a Paybill payment quoting the admission number pays that member's oldest invoice. An order with money on it keeps its stock until the campaign closes; then part-paid orders give stock back and the money stays as the member's credit.
+- **Pickup:** a 6-digit code goes by SMS to both phones only when the invoice is fully paid (from the pay page's status poll, or the sweep within 10 minutes for Paybill payments). Only its HMAC is stored. Hand-over (`POST /institution/pickup` or the dashboard form) locks the order; a second scan shows who collected it and when.
+- **Dashboard:** per campaign, paid vs billed, order states, sizes to pack, packing list.
+
+## Onboarding a business from spreadsheets
+
+```bash
+flask tenants import-csv <slug> items|customers|members|tier_prices file.csv [--strict]
+```
+
+Every row is checked first and rejects are listed by line. `--strict` writes nothing if any row is rejected. Re-running updates by SKU (else name), phone, member number, or tier and SKU, so a corrected file can be imported again. Columns: items `name,price[,sku,cost_price,category,unit,reorder_level,stock,batch_number,expiry_date,is_returnable_container]`; customers `name,phone[,code,credit_limit,credit_term_days,price_tier,account_ref,route_zone,national_id,physical_address,kra_pin]`; members `member_ref,name[,group_label,guardian_phone,secondary_phone]`; tier_prices `tier,sku,price`. A new item's `stock` becomes its first batch; an existing item's stock is never changed by an import.
 
 ---
 
@@ -725,7 +767,8 @@ make-an-order/
 ├── requirements.txt
 ├── Procfile                  # Gunicorn entry point (production)
 │
-├── public/                   # /o/<slug>/... no-login pages (pay link) + rate limits
+├── public/                   # /o/<slug>/... no-login pages: pay, refill, duka, campaign
+├── verticals/                # pharmacy/, distributor/, institution/: rules, queries, reports
 │
 ├── api/
 │   ├── customers.py          # /customers/* + loyalty / credit endpoints
