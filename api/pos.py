@@ -208,7 +208,7 @@ def _discount_gate(txn: Transaction, gross: Decimal, total_discount: Decimal, bo
     tenant = db.session.get(Tenant, txn.tenant_id)
     cap = Decimal(str(tenant.max_discount_pct or 0))
     pct = (total_discount / gross * Decimal('100')).quantize(Decimal('0.01'))
-    if pct <= cap:
+    if pct <= max(cap, _approved_pct(txn)):
         return None
     scope = f'discount:txn:{txn.id}'
     provided = (body.get('otp') or '').strip()
@@ -229,6 +229,19 @@ def _discount_gate(txn: Transaction, gross: Decimal, total_discount: Decimal, bo
                       {'discount_pct': float(pct), 'cap': float(cap),
                        'discount': float(total_discount)})
     return None
+
+
+def _approved_pct(txn: Transaction) -> Decimal:
+    """The highest discount a manager approved for this sale (0 if none)."""
+    from models import AuditLog
+    best = Decimal('0')
+    for row in AuditLog.query.filter_by(action='discount.override', entity_type='Transaction',
+                                        entity_id=txn.id):
+        try:
+            best = max(best, Decimal(str((row.new_value or {}).get('discount_pct', 0))))
+        except Exception:
+            continue
+    return best
 
 
 def _staff_member(user_id):
@@ -554,13 +567,14 @@ def transaction_update(txn_id):
     body = request.get_json(silent=True) or {}
     if 'customer_id' in body:
         customer_id = body.get('customer_id')
+        if (customer_id or None) != txn.customer_id and \
+                billing.open_invoice_for_transaction(txn.id) is not None:
+            return jsonify({'error': 'A payment was started for this sale; '
+                                     'the customer cannot change now'}), 409
         if customer_id not in (None, ''):
             customer = db.session.get(Customer, customer_id)
             if customer is None:
                 return jsonify({'error': 'Customer not found'}), 404
-            if billing.open_invoice_for_transaction(txn.id) is not None:
-                return jsonify({'error': 'A payment was started for this sale; '
-                                         'the customer cannot change now'}), 409
             txn.customer_id = customer.id
         else:
             txn.customer_id = None
@@ -698,10 +712,12 @@ def transaction_add_item(txn_id):
     if line_total < 0:
         return jsonify({'error': 'discount cannot exceed line subtotal'}), 400
     if discount > 0:
+        txn = _lock_txn(txn)
         blocked = _discount_gate(txn, _gross(txn, unit_price * qty),
                                  _line_discounts(txn) + Decimal(str(txn.discount_amount or 0))
                                  + discount, body)
         if blocked is not None:
+            db.session.rollback()
             return blocked
 
     line = TransactionItem(
@@ -759,8 +775,13 @@ def transaction_line_discount(txn_id, line_id):
     if err: return err
     if txn.status != TXN_OPEN:
         return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
+    txn = _lock_txn(txn)                 # two discount requests cannot both pass the cap
+    if txn.status != TXN_OPEN:
+        db.session.rollback()
+        return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
     line = db.session.get(TransactionItem, line_id)
     if not line or line.transaction_id != txn.id:
+        db.session.rollback()
         return jsonify({'error': 'Line item not found on this transaction'}), 404
     if billing.open_invoice_for_transaction(txn.id) is not None:
         return jsonify({'error': 'A payment was started for this sale; prices cannot '
@@ -783,6 +804,7 @@ def transaction_line_discount(txn_id, line_id):
     blocked = _discount_gate(txn, _gross(txn),
                              others + discount + Decimal(str(txn.discount_amount or 0)), body)
     if blocked is not None:
+        db.session.rollback()
         return blocked
     line.discount = discount
     line.line_total = _q(shelf - discount)
@@ -805,6 +827,10 @@ def transaction_apply_discount(txn_id):
     if txn.status != TXN_OPEN:
         return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
 
+    txn = _lock_txn(txn)
+    if txn.status != TXN_OPEN:
+        db.session.rollback()
+        return jsonify({'error': f'Transaction is {txn.status}, cannot modify'}), 400
     body = request.get_json(silent=True) or {}
     dtype = (body.get('type') or '').lower()
     try:
@@ -827,6 +853,7 @@ def transaction_apply_discount(txn_id):
         return jsonify({'error': 'discount cannot exceed subtotal'}), 400
     blocked = _discount_gate(txn, _gross(txn), _line_discounts(txn) + discount, body)
     if blocked is not None:
+        db.session.rollback()
         return blocked
 
     _recalc_totals(txn, discount_override=discount)
@@ -868,6 +895,14 @@ def transaction_complete(txn_id):
     if method not in PAYMENT_METHODS:
         return jsonify({'error': f'payment_method must be one of {list(PAYMENT_METHODS)}'}), 400
 
+    # The cap is checked again on the cart as it is now: lines removed after
+    # a discount, or discounts given in parallel, cannot slip past it. Before
+    # anything is changed: asking for a manager code sends (and commits) an SMS.
+    blocked = _discount_gate(txn, _gross(txn),
+                             _line_discounts(txn) + Decimal(str(txn.discount_amount or 0)), body)
+    if blocked is not None:
+        db.session.rollback()
+        return blocked
     _recalc_totals(txn)
     total = Decimal(str(txn.total))
     cash_a = mpesa_a = card_a = Decimal('0')

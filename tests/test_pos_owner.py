@@ -269,3 +269,101 @@ def test_receipt_page_is_per_business(app, till, other_tenant):
         sess.update(profile={"email": "o@globex.test"}, role="cashier", user_id=oid,
                     tenant_id=other_tenant)
     assert o.get(f"/pos-ui/receipt/{txn}").status_code == 404
+
+
+# --- review fixes -----------------------------------------------------------------
+
+def test_removing_padding_lines_cannot_keep_a_big_discount(till):
+    """Discount 9% of a padded cart onto one line, remove the padding: the
+    cap is checked again at checkout."""
+    c = till["cashier"]
+    txn = new_sale(c)
+    for _ in range(4):
+        add(c, txn, till["item"])                       # 800 of padding
+    line = add(c, txn, till["other"]).get_json()["line"]["id"]
+    assert c.post(f"/pos/transaction/{txn}/line/{line}/discount",
+                  json={"amount": 80}).status_code == 200   # 80 of 900 = 8.9%
+    for li in db.session.get(Transaction, txn).items:
+        if li.id != line:
+            c.delete(f"/pos/transaction/{txn}/remove_item/{li.id}")
+    r = c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash"})
+    assert r.status_code == 202 and r.get_json()["otp_required"]   # 80% now
+    assert db.session.get(Transaction, txn).status == "open"
+    code = otp_service.peek_otp(f"discount:txn:{txn}")
+    r = c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash", "otp": code})
+    assert r.status_code == 200, r.get_json()
+
+
+def test_manager_approval_covers_the_sale_up_to_the_approved_percent(till):
+    c = till["cashier"]
+    txn = new_sale(c)
+    add(c, txn, till["item"], discount_pct=15)                       # 202, needs a code
+    code = otp_service.peek_otp(f"discount:txn:{txn}")
+    assert add(c, txn, till["item"], discount_pct=15, otp=code).status_code == 201
+    # Checkout at the approved 15% needs no second code.
+    r = c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash"})
+    assert r.status_code == 200, r.get_json()
+
+
+def test_customer_cannot_be_cleared_once_payment_started(till):
+    from services import billing
+    c = till["cashier"]
+    patient = c.post("/pos/customers", json={"name": "Juma", "phone_number": "0733000111"}
+                     ).get_json()
+    txn = new_sale(c, customer_id=patient["id"])
+    add(c, txn, till["item"])
+    billing.create_invoice(total=200, transaction_id=txn, customer_id=patient["id"])
+    db.session.commit()
+    assert c.patch(f"/pos/transaction/{txn}", json={"customer_id": None}).status_code == 409
+    assert c.patch(f"/pos/transaction/{txn}",
+                   json={"customer_id": patient["id"]}).status_code == 200   # unchanged is fine
+
+
+def test_receipt_shows_only_this_sales_share_of_a_payment(till):
+    from services import billing
+    from services.receipt_service import build_receipt
+    c = till["cashier"]
+    first, second = new_sale(c), new_sale(c)
+    add(c, first, till["item"])
+    add(c, second, till["item"])
+    inv1 = billing.create_invoice(total=200, transaction_id=first)
+    inv2 = billing.create_invoice(total=200, transaction_id=second)
+    db.session.flush()
+    p = billing.record_payment(method="mpesa_stk", amount=400, receipt="SPLIT00001", invoice=inv1)
+    billing.allocate(p, inv2)
+    db.session.commit()
+    assert c.post(f"/pos/transaction/{first}/complete",
+                  json={"payment_method": "mpesa"}).status_code == 200
+    assert [x["amount"] for x in build_receipt(first)["payments"]] == [200.0]
+
+
+@pytest.mark.skipif(not __import__("tests.conftest", fromlist=["on_mysql"]).on_mysql(),
+                    reason="row locks need MySQL")
+def test_parallel_line_discounts_cannot_both_pass_the_cap(till):
+    """Three KES 25 discounts on three KES 200 lines at once: all three would
+    be 75 of 600 (12.5%, over the 10% cap). Locked, two pass and the third
+    is asked for a manager code."""
+    import threading
+    app, c = till["app"], till["cashier"]
+    txn = new_sale(c)
+    lines = [add(c, txn, till["item"]).get_json()["line"]["id"] for _ in range(3)]  # 600
+    cookie = c.get_cookie(app.config["SESSION_COOKIE_NAME"]).value
+    results, barrier = [], threading.Barrier(3)
+
+    def worker(line):
+        with app.app_context():
+            client = app.test_client()
+            client.set_cookie(app.config["SESSION_COOKIE_NAME"], cookie)
+            barrier.wait()
+            results.append(client.post(f"/pos/transaction/{txn}/line/{line}/discount",
+                                       json={"amount": 25}).status_code)   # 75 of 600 = 12.5%
+
+    threads = [threading.Thread(target=worker, args=(line,)) for line in lines]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [200, 200, 202]
+    with tenant_scope(app.acme_id):
+        t = db.session.get(Transaction, txn)
+        assert sum(li.discount for li in t.items) == D("50.00")

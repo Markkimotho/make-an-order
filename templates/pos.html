@@ -456,7 +456,8 @@ const POS = (() => {
   async function complete(method, extra) {
     try {
       const body = Object.assign({ payment_method: method }, extra || {});
-      const r = await api('POST', `/pos/transaction/${txnId}/complete`, body);
+      const r = await withManagerCode('POST', `/pos/transaction/${txnId}/complete`, body);
+      if (!r) return false;
       txn = r.transaction;
       showReceipt(r.transaction.id);
       return true;

@@ -50,11 +50,15 @@ def _payments(txn):
                .order_by(Invoice.id.desc()).first())
     if invoice is None:
         return None, []
-    ids = [a.payment_id for a in PaymentAllocation.query.filter(
-        PaymentAllocation.invoice_id == invoice.id, PaymentAllocation.voided_at.is_(None))]
-    payments = (Payment.query.filter(Payment.id.in_(ids)).order_by(Payment.id).all()
-                if ids else [])
-    return invoice, [{"method": p.method, "amount": float(p.amount),
+    # What each payment put on this invoice: one M-Pesa payment can pay
+    # several invoices, and the receipt shows only this sale's share.
+    shares = {}
+    for a in PaymentAllocation.query.filter(PaymentAllocation.invoice_id == invoice.id,
+                                            PaymentAllocation.voided_at.is_(None)):
+        shares[a.payment_id] = shares.get(a.payment_id, 0) + a.amount
+    payments = (Payment.query.filter(Payment.id.in_(shares)).order_by(Payment.id).all()
+                if shares else [])
+    return invoice, [{"method": p.method, "amount": float(shares[p.id]),
                       "reference": p.mpesa_receipt or p.bank_reference,
                       "bank_name": p.bank_name, "verified": bool(p.verified)}
                      for p in payments]
