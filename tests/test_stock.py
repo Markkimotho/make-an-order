@@ -588,3 +588,53 @@ def test_sms_send_refuses_after_a_flush(app):
         sms_service.send("0712345678", "hi", "test")
     db.session.rollback()
     sms_service.send("0712345678", "hi", "test")      # clean again after rollback
+
+
+def test_a_batch_named_quarantine_does_not_block_returns(app):
+    item = make_item()
+    with pytest.raises(stock.StockError, match="reserved"):
+        stock.receive(item, 2, batch_number="quarantine")
+    # A batch that already has the name (made before the rule) is left alone.
+    db.session.add(Batch(inventory_item_id=item.id, batch_number="QUARANTINE",
+                         quantity_on_hand=0))
+    db.session.flush()
+    stock.give_back(item, 1)
+    held = Batch.query.filter_by(quarantined=True).one()
+    assert (held.batch_number, held.quantity_on_hand) == ("QUARANTINE-2", 1)
+
+
+def test_sms_guard_survives_a_savepoint(app):
+    from services import sms_service
+    item = make_item()
+    db.session.flush()                                # outer write
+    with db.session.begin_nested():
+        pass                                          # savepoint commits
+    with pytest.raises(sms_service.UnsavedChanges):
+        sms_service.send("0712345678", "hi", "test")
+    assert item.id
+
+
+def test_void_decides_on_the_locked_sale_not_a_stale_read(app, till, monkeypatch):
+    """A checkout finishing between void's first read and its lock: the void
+    must not go through as an open-sale void (no OTP, no stock back)."""
+    import api.pos as pos
+    from models import Transaction
+    client, item = till
+    txn = sell(client, item, 2)
+    client.post(f"/pos/transaction/{txn}/complete",
+                json={"payment_method": "cash", "amount_tendered": 200})
+    real = pos._txn_or_404
+
+    def stale(txn_id):
+        found, err = real(txn_id)
+        if found is not None:                         # what void saw before checkout committed
+            from sqlalchemy.orm.attributes import set_committed_value
+            set_committed_value(found, "status", "open")   # a clean stale read, not an edit
+        return found, err
+
+    monkeypatch.setattr(pos, "_txn_or_404", stale)
+    r = client.post(f"/pos/transaction/{txn}/void", json={"reason": "x"})
+    assert r.status_code == 409 and "manager OTP" in r.get_json()["error"]
+    db.session.expire_all()
+    assert db.session.get(Transaction, txn).status == "completed"
+    assert batches_of(item) == {"A": 2, "B": 10}

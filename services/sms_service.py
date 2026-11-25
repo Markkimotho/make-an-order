@@ -86,10 +86,12 @@ def _note_flush(session, flush_context):
     session.info[_WROTE] = True
 
 
-@event.listens_for(Session, "after_commit")
-@event.listens_for(Session, "after_rollback")
-def _forget_flush(session):
-    session.info.pop(_WROTE, None)
+@event.listens_for(Session, "after_transaction_end")
+def _forget_flush(session, transaction):
+    # Only the outermost transaction ending settles the writes; a savepoint
+    # committing or rolling back leaves the outer transaction's writes pending.
+    if transaction.parent is None:
+        session.info.pop(_WROTE, None)
 
 
 def _require_clean_session():

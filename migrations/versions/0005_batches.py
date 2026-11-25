@@ -43,7 +43,6 @@ def upgrade():
         sa.Column("quantity_on_hand", sa.Integer(), nullable=False),
         sa.Column("unit_cost", sa.Numeric(precision=12, scale=2), nullable=True),
         sa.Column("received_at", sa.DateTime(), nullable=False),
-        sa.Column("quarantined", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.ForeignKeyConstraint(["inventory_item_id"], ["inventory_items.id"],
                                 name="fk_batches_inventory_item_id_inventory_items",
                                 ondelete="CASCADE"),

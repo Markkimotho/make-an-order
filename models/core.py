@@ -256,8 +256,18 @@ class Customer(TenantMixin, db.Model):
         }
 
 
+ORDER_CHANNELS = ('staff', 'public_link')
+FULFILLMENT_STATUSES = ('pending', 'ready', 'dispatched', 'collected', 'released',
+                        'restock_needed', 'cancelled')
+
+
 class Order(TenantMixin, db.Model):
+    """A remote order (public link or staff). Created with its invoice by
+    services/orders.py; walk-in counter sales are Transactions."""
     __tablename__ = 'orders'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'order_number', name='uq_orders_tenant_order_number'),
+    )
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
     customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
     # item/amount kept for backward compat and as a human-readable summary
@@ -268,6 +278,23 @@ class Order(TenantMixin, db.Model):
     payment_method    = db.Column(db.String(20), nullable=True)   # 'cash' | 'mpesa' | 'card'
     payment_reference = db.Column(db.String(100), nullable=True)  # e.g. M-Pesa transaction code
     time              = db.Column(db.DateTime, server_default=db.func.now())
+    # Assigned by services/orders.py (ORD000123, per business). NULL only on
+    # rows written by the old order screens before they move onto it.
+    order_number       = db.Column(db.String(16), nullable=True)
+    channel            = db.Column(db.String(16), nullable=False, default='staff',
+                                   server_default='staff')
+    fulfillment_status = db.Column(db.String(16), nullable=False, default='pending',
+                                   server_default='pending')
+    delivery_address   = db.Column(db.String(255), nullable=True)
+    # Pay-now orders hold their stock until this time; the sweep releases
+    # unpaid holds. NULL: not held (paid, credit, or released).
+    reserved_until     = db.Column(db.DateTime, nullable=True, index=True)
+    prescription_id    = db.Column(db.Integer, db.ForeignKey('prescriptions.id', ondelete='SET NULL'),
+                                   nullable=True)
+    pickup_code_hash   = db.Column(db.String(64), nullable=True)
+    picked_up_at       = db.Column(db.DateTime, nullable=True)
+    picked_up_by       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                   nullable=True)
 
     order_items = db.relationship('OrderItem', backref='order', lazy=True, cascade='all, delete-orphan')
 
@@ -284,6 +311,12 @@ class Order(TenantMixin, db.Model):
             'payment_method':    self.payment_method,
             'payment_reference': self.payment_reference,
             'time':              self.time.isoformat() if self.time else None,
+            'order_number':      self.order_number,
+            'channel':           self.channel,
+            'fulfillment_status': self.fulfillment_status,
+            'delivery_address':  self.delivery_address,
+            'reserved_until':    self.reserved_until.isoformat() if self.reserved_until else None,
+            'picked_up_at':      self.picked_up_at.isoformat() if self.picked_up_at else None,
             'items':             [oi.to_dict() for oi in self.order_items],
         }
 
@@ -323,11 +356,14 @@ class OrderItem(TenantMixin, db.Model):
     quantity          = db.Column(db.Integer, nullable=False, default=1)
     unit_price        = db.Column(db.Numeric(10, 2), nullable=False)
     subtotal          = db.Column(db.Numeric(10, 2), nullable=False)
+    variant_id        = db.Column(db.Integer, db.ForeignKey('item_variants.id', ondelete='SET NULL'),
+                                  nullable=True)
 
     def to_dict(self):
         return {
             'id':                self.id,
             'inventory_item_id': self.inventory_item_id,
+            'variant_id':        self.variant_id,
             'item_name':         self.item_name,
             'quantity':          self.quantity,
             'unit_price':        float(self.unit_price),

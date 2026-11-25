@@ -772,24 +772,32 @@ def transaction_void(txn_id):
     reason = (body.get('reason') or '').strip() or 'unspecified'
     uid = _user_id()
 
+    scope = f'void:txn:{txn.id}'
+    provided_otp = (body.get('otp') or '').strip()
+    if txn.status == TXN_COMPLETED and not provided_otp:
+        otp = otp_service.generate_otp(scope)
+        admins = User.query.filter(User.role.in_((ROLE_ADMIN, ROLE_SUPERUSER)),
+                                   User.phone_number.isnot(None)).all()
+        for a in admins:
+            SendSMS.send_manager_otp(a.phone_number, otp, 'void')
+        return jsonify({'otp_required': True,
+                        'message': 'Manager OTP sent. Re-submit with "otp".'}), 202
+
+    # Decide on the locked row: a checkout finishing between the read above
+    # and here must not turn this into a completed-sale void without the OTP
+    # or without its stock coming back. Lock order: billing, sale, stock.
+    txn = _lock_txn(txn)
+    if txn.status in (TXN_VOIDED, TXN_REFUNDED):
+        db.session.rollback()
+        return jsonify({'error': f'Transaction already {txn.status}'}), 400
     if txn.status == TXN_COMPLETED:
-        scope = f'void:txn:{txn.id}'
-        provided_otp = (body.get('otp') or '').strip()
         if not provided_otp:
-            otp = otp_service.generate_otp(scope)
-            admins = User.query.filter(User.role.in_((ROLE_ADMIN, ROLE_SUPERUSER)),
-                                       User.phone_number.isnot(None)).all()
-            for a in admins:
-                SendSMS.send_manager_otp(a.phone_number, otp, 'void')
-            return jsonify({'otp_required': True,
-                            'message': 'Manager OTP sent. Re-submit with "otp".'}), 202
-        if not otp_service.verify_otp(scope, provided_otp):
-            return jsonify({'error': 'Invalid or expired OTP'}), 403
-        # Lock order everywhere: billing lock, then the sale, then stock.
-        txn = _lock_txn(txn)
-        if txn.status != TXN_COMPLETED:
             db.session.rollback()
-            return jsonify({'error': f'Transaction already {txn.status}'}), 400
+            return jsonify({'error': 'This sale was completed meanwhile; voiding it needs '
+                                     'a manager OTP. Void it again.'}), 409
+        if not otp_service.verify_otp(scope, provided_otp):
+            db.session.rollback()
+            return jsonify({'error': 'Invalid or expired OTP'}), 403
         # Restore what is still out (a partial refund already put some back).
         for li in txn.items:
             if not li.inventory_item_id:
@@ -818,10 +826,6 @@ def transaction_void(txn_id):
 
     # The invoice goes too. Cash/card already taken is handed back; M-Pesa
     # money (including an STK paid on a sale still open) becomes credit.
-    txn = _lock_txn(txn)
-    if txn.status in (TXN_VOIDED, TXN_REFUNDED):
-        db.session.rollback()
-        return jsonify({'error': f'Transaction already {txn.status}'}), 400
     invoice = _invoice_to_credit(txn)
     if invoice is not None and invoice.transaction_id == txn.id:
         _, released = billing.void_invoice(invoice, uid, reason=reason, roll=False)

@@ -523,7 +523,7 @@ def update_batch(id):
     if 'expiry_date' in data:
         batch.expiry_date = _parse_date(data.get('expiry_date'))
     if data.get('quarantined') is False and batch.quarantined:
-        if batch.batch_number == stock.QUARANTINE_BATCH:
+        if batch.batch_number.upper().startswith(stock.QUARANTINE_BATCH):
             return jsonify({'error': 'Give the checked goods their batch number to release them'}), 400
         batch.quarantined = False
         audit_service.log(session.get('user_id'), 'inventory.batch_release', 'Batch', batch.id,

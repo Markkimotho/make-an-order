@@ -94,6 +94,9 @@ def receive(item, qty, *, batch_number=None, expiry_date=None, unit_cost=None, v
         row.stock = int(row.stock or 0) + qty
     else:
         number = (batch_number or "").strip() or DEFAULT_BATCH
+        if number.upper().startswith(QUARANTINE_BATCH):
+            raise StockError(f"batch numbers starting {QUARANTINE_BATCH} are reserved for "
+                             "returned goods on hold")
         batches = {b.batch_number: b for b in _locked_batches(item)}
         batch = batches.get(number)
         if batch is None:
@@ -162,6 +165,17 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
     return taken
 
 
+def _free_quarantine_number(batches):
+    """QUARANTINE, or QUARANTINE-2, -3... if a batch already uses the name
+    (compared case-insensitively, as MySQL does)."""
+    taken = {(b.batch_number or "").upper() for b in batches}
+    number, n = QUARANTINE_BATCH, 1
+    while number.upper() in taken:
+        n += 1
+        number = f"{QUARANTINE_BATCH}-{n}"
+    return number
+
+
 def _line_batches(transaction_item, order_item):
     if transaction_item is not None:
         return LineBatch.query.filter(LineBatch.transaction_item_id == transaction_item.id)
@@ -211,10 +225,10 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
             batch = next((b for b in batches.values()
                           if named and b.batch_number == named and not b.quarantined), None)
             if batch is None:
-                batch = next((b for b in batches.values()
-                              if b.batch_number == QUARANTINE_BATCH and b.quarantined), None)
+                batch = next((b for b in batches.values() if b.quarantined), None)
             if batch is None:
-                batch = Batch(inventory_item_id=item.id, batch_number=QUARANTINE_BATCH,
+                batch = Batch(inventory_item_id=item.id,
+                              batch_number=_free_quarantine_number(batches.values()),
                               quantity_on_hand=0, quarantined=True,
                               received_at=datetime.utcnow())
                 db.session.add(batch)
