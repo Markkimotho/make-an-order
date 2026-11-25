@@ -4,7 +4,8 @@ from models import (
     Category, Supplier, PurchaseOrder, PurchaseOrderItem,
     PO_DRAFT, PO_SENT, PO_PARTIAL, PO_RECEIVED, PO_CANCELLED, PO_STATUSES,
 )
-from services import stock
+from services import billing, stock
+from services import orders as order_service
 from services.clock import today_nairobi
 from services.sms_service import SendSMS
 from services import audit_service
@@ -329,43 +330,20 @@ def place_inventory_order():
     if not resolved:
         return jsonify({'error': 'No valid items in cart'}), 400
 
-    # Build summary and total
-    summary_parts = []
-    total = Decimal('0')
-    for item, qty in resolved:
-        label    = item.name if qty == 1 else f"{item.name} ×{qty}"
-        subtotal = Decimal(str(item.price)) * qty
-        summary_parts.append(label)
-        total += subtotal
-
-    # Create Order header
-    order = Order(
-        customer_id=customer_id,
-        item=', '.join(summary_parts),
-        amount=total,
-        status='pending',
-    )
-    db.session.add(order)
-    db.session.flush()
-
-    # Create OrderItems, decrement stock, log movements
+    # One order, one invoice on the customer's credit terms, stock taken
+    # (soonest expiry first) through services/orders.py: all or nothing.
     uid = session.get('user_id')
-    for item, qty in resolved:
-        subtotal = Decimal(str(item.price)) * qty
-        line = OrderItem(
-            order_id=order.id, inventory_item_id=item.id,
-            item_name=item.name, quantity=qty,
-            unit_price=item.price, subtotal=subtotal,
-        )
-        db.session.add(line)
-        db.session.flush()
-        try:
-            stock.take(item, qty, order_item=line, reason='sale', user_id=uid,
-                       note=f'order #{order.id}')
-        except stock.StockError as e:
-            db.session.rollback()            # all-or-nothing: no order, no stock change
-            return jsonify({'error': str(e)}), 400
-
+    try:
+        order, invoice = order_service.create_order(
+            [order_service.Line(item=item, quantity=qty, unit_price=item.price)
+             for item, qty in resolved],
+            customer_id=customer.id, channel='staff', pay_now=False,
+            due_date=billing.credit_due_date(customer, today_nairobi()), user_id=uid)
+    except (order_service.OrderError, stock.StockError, billing.BillingError) as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+    summary_parts = [item.name if qty == 1 else f"{item.name} ×{qty}" for item, qty in resolved]
+    total = invoice.total
     db.session.commit()
 
     # SMS confirmation
@@ -381,6 +359,8 @@ def place_inventory_order():
     return jsonify({
         'message':  f"Order placed — {len(resolved)} item type(s), total {float(total):.2f}",
         'order_id': order.id,
+        'order_number': order.order_number,
+        'invoice': invoice.to_dict(),
         'items':    summary_parts,
     }), 201
 

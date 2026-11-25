@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, session, Response  # type: ignore
 from models import db, Order, OrderItem, Customer, InventoryItem, StockMovement
+from services import orders as order_service
 from services import stock
 from services.sms_service import SendSMS
 from sqlalchemy.exc import IntegrityError
@@ -162,10 +163,11 @@ def update_order_status(id):
         if not order:
             return jsonify({'error': 'Order not found'}), 404
 
-        # Restore stock when moving into a cancellation/refund state
+        # Cancelling/refunding puts the stock back (and voids the invoice of
+        # an order placed through services/orders.py).
         if status in FINAL_STATUSES and order.status not in FINAL_STATUSES:
             reason = 'refund' if status == 'refunded' else 'cancel'
-            _restore_stock(order, reason=reason)
+            _cancel(order, reason)
 
         order.status = status
         db.session.commit()
@@ -212,21 +214,17 @@ def _parse_order_label(label: str):
     return label, 1
 
 
-def _restore_stock(order: Order, reason: str = 'cancel'):
-    """Restore inventory stock for an order and log StockMovements.
+def _cancel(order: Order, reason: str = 'cancel'):
+    """Put an order's stock back and void its invoice.
 
-    Uses OrderItems (Phase 2+) when available; falls back to parsing the
-    Order.item summary string for legacy (Phase 1) orders.
+    Orders with lines go through services/orders.cancel (exact batches, or
+    on hold for lines from before batches). Single-line legacy orders have
+    only a summary string to go on.
     """
     uid = session.get('user_id')
     if order.order_items:
-        for oi in order.order_items:
-            if oi.inventory_item_id:
-                inv = db.session.get(InventoryItem, oi.inventory_item_id)
-                if inv and oi.quantity > 0:
-                    stock.give_back(inv, oi.quantity, order_item=oi, reason=reason,
-                                    user_id=uid, note=f"order #{order.id}")
-                    logger.info(f"Restored {oi.quantity}× '{oi.item_name}' (order {order.id}).")
+        if order.fulfillment_status not in ('cancelled', 'collected'):
+            order_service.cancel(order, user_id=uid, reason=reason)
     else:
         # Legacy order: parse the item summary string
         for segment in order.item.split(', '):
@@ -246,7 +244,8 @@ def delete_order(id):
         order = db.session.get(Order, id)
         if not order:
             return jsonify({"error": "Order not found"}), 404
-        _restore_stock(order)
+        if order.status not in FINAL_STATUSES:
+            _cancel(order, 'cancel')
         db.session.delete(order)
         db.session.commit()
         logger.info(f"Order {id} deleted.")

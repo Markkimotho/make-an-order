@@ -397,18 +397,24 @@ def _register_cli(app):
 
     @app.cli.command('payments-sweep')
     def payments_sweep_command():
-        """Ask Daraja about every silent STK push (run every 10 minutes)."""
+        """Ask Daraja about every silent STK push and release unpaid stock
+        holds past their time (run every 10 minutes)."""
         from auth.tenancy import tenant_scope
         from models import PaymentIntent
         from services.billing.stk import WAITING, sweep_tenant
+        from services.orders import release_expired
         with unscoped():
-            tenant_ids = sorted({tid for (tid,) in db.session.query(PaymentIntent.tenant_id)
-                                 .filter(PaymentIntent.status.in_(WAITING)).distinct()})
+            tenant_ids = sorted(
+                {tid for (tid,) in db.session.query(PaymentIntent.tenant_id)
+                 .filter(PaymentIntent.status.in_(WAITING)).distinct()}
+                | {tid for (tid,) in db.session.query(Order.tenant_id)
+                   .filter(Order.fulfillment_status.in_(("pending", "released"))).distinct()})
         totals = {}
         for tenant_id in tenant_ids:
             try:
                 with tenant_scope(tenant_id):
                     counts = sweep_tenant()
+                    counts.update({f"orders_{k}": v for k, v in release_expired().items()})
             except Exception as e:                      # one business never stops the rest
                 db.session.rollback()
                 app.logger.error(f"payments sweep failed for tenant {tenant_id}: {e}")

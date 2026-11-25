@@ -269,7 +269,8 @@ class Order(TenantMixin, db.Model):
         db.UniqueConstraint('tenant_id', 'order_number', name='uq_orders_tenant_order_number'),
     )
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
+    # NULL for campaign orders placed for a member (student, house).
+    customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=True)
     # item/amount kept for backward compat and as a human-readable summary
     item              = db.Column(db.String(255), nullable=False)
     amount            = db.Column(db.Numeric(10, 2), nullable=False)
