@@ -117,5 +117,12 @@
     </form>
   </div>
   <p class="small text-muted mt-2">Changing the token stops the old URLs at once. Do it if a URL was shared by mistake.</p>
+
+  {% if 'backup' in features %}
+  <a class="card text-decoration-none mt-4" href="{{ url_for('backup_page') }}">
+    <div class="card-body py-2 small"><i class="fas fa-database me-2"></i><strong>Backup</strong>:
+      last backup, back up now, download</div>
+  </a>
+  {% endif %}
 </div>
 {% endblock %}

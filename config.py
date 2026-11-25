@@ -78,3 +78,14 @@ class Config:
                              or os.environ.get("REDIS_URL") or "memory://")
     # Absolute base for links sent by SMS (pay links), e.g. https://app.example.co.ke
     PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL")
+
+    # Backups (services/backup.py, `flask backup ...`, Settings > Backup)
+    BACKUP_DIR = os.environ.get("BACKUP_DIR", "backups")
+    # Optional rclone remote for an offsite copy of every backup, e.g. gdrive:mao-backups
+    BACKUP_RCLONE_REMOTE = os.environ.get("BACKUP_RCLONE_REMOTE", "")
+    # Optional MySQL server URL (no database) where `flask backup verify` may
+    # create and drop a scratch database, e.g. mysql://root:pw@db:3306
+    BACKUP_VERIFY_MYSQL_URL = os.environ.get("BACKUP_VERIFY_MYSQL_URL", "")
+    # true on a one-shop install: the owner may download backups. On a shared
+    # server a dump holds every business, so only platform admins may.
+    SINGLE_BUSINESS_INSTALL = os.environ.get("SINGLE_BUSINESS_INSTALL", "").lower() in ("1", "true", "yes")

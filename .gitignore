@@ -50,3 +50,8 @@ instance/
 logs/
 
 _site/
+
+# Database backups (BACKUP_DIR default)
+backups/
+# rclone.conf holds offsite storage credentials
+deploy/rclone/

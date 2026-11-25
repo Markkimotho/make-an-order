@@ -198,6 +198,17 @@ Every row is checked first and rejects are listed by line. `--strict` writes not
 
 ---
 
+## Running it
+
+The `deploy/` folder runs everything with Docker Compose: MySQL, Redis, the app, nightly backups and the scheduled jobs.
+
+- [Install in the shop](docs/install-local.md): one PC serves every till over the shop network (the default). Backups, receipt printers, remote access with Cloudflare Tunnel, and what to do when the server dies.
+- [Install on a VPS](docs/install-vps.md): the same package on a rented server with HTTPS.
+
+Backups: `flask backup create|list|verify|restore|rotate`, and Settings > Backup in the app.
+
+---
+
 ## Getting Started
 
 ### Prerequisites

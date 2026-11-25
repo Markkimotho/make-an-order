@@ -20,6 +20,8 @@ theme:
 
 nav:
   - Home: index.md
+  - Install in the shop: install-local.md
+  - Install on a VPS: install-vps.md
 
 markdown_extensions:
   - admonition
