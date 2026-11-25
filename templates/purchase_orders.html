@@ -4,9 +4,19 @@
 {% block content %}
 <div class="d-flex align-items-center justify-content-between mb-3">
   <h2 class="mb-0"><i class="fas fa-truck me-2"></i>Purchase Orders</h2>
-  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newPoModal">
-    <i class="fas fa-plus me-1"></i>New PO
-  </button>
+  <div class="d-flex gap-2 flex-wrap align-items-center">
+    <div class="input-group input-group-sm" style="width:auto;">
+      <select class="form-select form-select-sm" id="lowSupplier" aria-label="Supplier for the low-stock draft" style="max-width:200px;">
+        <option value="">All low items</option>
+      </select>
+      <button class="btn btn-outline-primary" id="btnDraftLow" title="One draft PO for every item at or below its reorder level">
+        <i class="fas fa-wand-magic-sparkles me-1"></i>Draft from low stock
+      </button>
+    </div>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newPoModal">
+      <i class="fas fa-plus me-1"></i>New PO
+    </button>
+  </div>
 </div>
 
 <ul class="nav nav-tabs mb-3" role="tablist">
@@ -121,6 +131,8 @@
 (function () {
   const $ = s => document.querySelector(s);
   const fmt = n => Number(n||0).toFixed(2);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let inv = [], suppliers = [], poItems = [], receivingPo = null;
 
   async function api(method, url, body) {
@@ -144,6 +156,8 @@
     ).join('') : '<tr><td colspan="4" class="text-muted">No suppliers.</td></tr>';
     $('#poSupplier').innerHTML = suppliers.map(s =>
       `<option value="${s.id}">${s.name}</option>`).join('');
+    $('#lowSupplier').innerHTML = '<option value="">All low items</option>' + suppliers.map(s =>
+      `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   }
 
   async function loadPos() {
@@ -152,7 +166,7 @@
     $('#poList').innerHTML = list.length ? list.map(po => `
       <tr>
         <td>${po.po_number}</td>
-        <td>${po.supplier_name||po.supplier_id}</td>
+        <td>${po.supplier_name||po.supplier_id||'—'}</td>
         <td><span class="badge bg-${badgeColor(po.status)}">${po.status}</span></td>
         <td>${(po.items||[]).length}</td>
         <td>${fmt(po.total)}</td>
@@ -160,7 +174,8 @@
         <td>
           ${po.status==='draft'  ? `<button class="btn btn-sm btn-outline-primary me-1" onclick="window.PO.send(${po.id})">Send</button>` : ''}
           ${po.status==='sent'||po.status==='partial' ? `<button class="btn btn-sm btn-success me-1" onclick="window.PO.recv(${po.id})">Receive</button>` : ''}
-          ${po.status!=='received'&&po.status!=='cancelled' ? `<button class="btn btn-sm btn-outline-danger" onclick="window.PO.cancel(${po.id})">Cancel</button>` : ''}
+          ${po.status!=='received'&&po.status!=='cancelled' ? `<button class="btn btn-sm btn-outline-danger me-1" onclick="window.PO.cancel(${po.id})">Cancel</button>` : ''}
+          <a class="btn btn-sm btn-outline-secondary" href="/inventory/purchase_orders/${po.id}.pdf" target="_blank" rel="noopener"><i class="fas fa-file-pdf me-1"></i>PDF</a>
         </td>
       </tr>`).join('') : '<tr><td colspan="7" class="text-muted">No purchase orders.</td></tr>';
   }
@@ -295,6 +310,17 @@
       await api('POST', '/inventory/suppliers', body);
       $('#supName').value=$('#supContact').value=$('#supPhone').value=$('#supEmail').value='';
       loadSuppliers();
+    } catch (e) { alert(e.message); }
+  });
+
+  $('#btnDraftLow').addEventListener('click', async () => {
+    const sid = $('#lowSupplier').value;
+    try {
+      const d = await api('POST', '/inventory/purchase_orders/draft_from_low_stock',
+                          sid ? { supplier_id: parseInt(sid, 10) } : {});
+      alert(d.message);
+      $('#poStatusFilter').value = '';
+      loadPos();
     } catch (e) { alert(e.message); }
   });
 

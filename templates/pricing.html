@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Pricing{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-tags me-2"></i>Pricing</h2>
+    <p class="text-muted mb-0 small">Selling price = cost plus markup, rounded up. Auto items re-price
+      on every delivery; manual items keep their price and show a suggestion.</p>
+  </div>
+  <div class="text-end small" id="prCounts"></div>
+</div>
+
+<div class="card mb-3"><div class="card-body">
+  <form class="row g-2 align-items-end" id="prDefaults">
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-0" for="prMarkup">Default markup %</label>
+      <input type="number" class="form-control form-control-sm" id="prMarkup" min="0" max="1000" step="0.01" required>
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small mb-0" for="prRounding">Round prices up to</label>
+      <select class="form-select form-select-sm" id="prRounding">
+        <option value="1">the next shilling</option>
+        <option value="5">the next 5 shillings</option>
+        <option value="10">the next 10 shillings</option>
+      </select>
+    </div>
+    <div class="col-12 col-md-2"><button class="btn btn-sm btn-primary w-100" type="submit">Save defaults</button></div>
+    <div class="col-12 col-md-4 small text-muted" id="prDefaultsMsg"></div>
+  </form>
+</div></div>
+
+<div class="alert alert-danger d-none" id="prBelowCost"></div>
+
+<div class="card"><div class="card-body">
+  <div class="d-flex gap-2 mb-2 flex-wrap align-items-center">
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" id="prFlagged">
+      <label class="form-check-label small" for="prFlagged">Below cost or under 10% margin only</label>
+    </div>
+    <input class="form-control form-control-sm" id="prSearch" placeholder="Search items" style="max-width:220px;">
+    <div class="ms-auto d-flex gap-2">
+      <button class="btn btn-sm btn-outline-primary" id="prApplySel">Apply suggested to selected</button>
+      <button class="btn btn-sm btn-primary" id="prApplyAuto">Apply suggested to all auto items</button>
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr>
+        <th><input type="checkbox" class="form-check-input" id="prAll" aria-label="Select all"></th>
+        <th>Item</th><th class="text-end">Cost</th><th class="text-end">Price</th>
+        <th style="width:110px;">Markup %</th><th class="text-end">Suggested</th>
+        <th class="text-end">Margin</th><th style="width:120px;">Mode</th><th></th>
+      </tr></thead>
+      <tbody id="prRows"><tr><td colspan="9" class="text-muted p-3">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => n == null ? '—' : 'KES ' + Number(n).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const $ = id => document.getElementById(id);
+  let data = {items: [], defaults: {}};
+
+  async function call(method, url, body) {
+    const opts = {method, headers: {'Content-Type': 'application/json'}};
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch(url, opts);
+    let d = {}; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  function badge(it) {
+    if (it.below_cost) return '<span class="badge bg-danger">Below cost</span>';
+    if (it.low_margin) return '<span class="badge bg-warning text-dark">Low margin</span>';
+    if (it.cost_price == null) return '<span class="badge bg-secondary">No cost</span>';
+    return '';
+  }
+
+  function render() {
+    const t = $('prSearch').value.trim().toLowerCase();
+    const rows = data.items.filter(it => (!$('prFlagged').checked || it.flagged)
+      && (!t || it.name.toLowerCase().includes(t) || (it.sku || '').toLowerCase().includes(t)));
+    $('prRows').innerHTML = rows.length ? rows.map(it => `<tr data-id="${it.id}">
+      <td><input type="checkbox" class="form-check-input pr-sel" value="${it.id}" aria-label="Select ${esc(it.name)}"></td>
+      <td>${esc(it.name)}${it.sku ? `<div class="small text-muted">${esc(it.sku)}</div>` : ''}</td>
+      <td class="text-end">${kes(it.cost_price)}</td>
+      <td class="text-end ${it.below_cost ? 'text-danger fw-bold' : ''}">${kes(it.price)}</td>
+      <td><input type="number" class="form-control form-control-sm pr-markup" min="0" max="1000" step="0.01"
+           value="${it.markup_pct == null ? '' : esc(it.markup_pct)}" placeholder="${esc(data.defaults.default_markup_pct)}"></td>
+      <td class="text-end ${it.differs ? 'fw-bold' : ''}">${kes(it.suggested_price)}</td>
+      <td class="text-end">${it.margin_pct == null ? '—' : esc(it.margin_pct.toFixed(2)) + '%'}</td>
+      <td><select class="form-select form-select-sm pr-mode">
+           <option value="manual" ${it.price_mode === 'manual' ? 'selected' : ''}>Manual</option>
+           <option value="auto" ${it.price_mode === 'auto' ? 'selected' : ''}>Auto</option></select></td>
+      <td>${badge(it)}</td></tr>`).join('')
+      : '<tr><td colspan="9" class="text-muted p-3">No items to show.</td></tr>';
+  }
+
+  function summary() {
+    const c = data.counts || {};
+    $('prCounts').innerHTML = `<div>${esc(c.items || 0)} items</div>
+      <div class="text-danger">${esc(c.below_cost || 0)} below cost</div>
+      <div class="text-warning-emphasis">${esc(c.low_margin || 0)} under 10% margin</div>`;
+    const below = data.items.filter(it => it.below_cost);
+    const box = $('prBelowCost');
+    box.classList.toggle('d-none', !below.length);
+    box.innerHTML = below.length ? `<strong>Selling below cost:</strong> ` +
+      below.slice(0, 10).map(it => `${esc(it.name)} (cost ${kes(it.cost_price)}, price ${kes(it.price)})`).join(', ') +
+      (below.length > 10 ? ` and ${below.length - 10} more` : '') : '';
+  }
+
+  async function load() {
+    try {
+      data = await call('GET', '/inventory/pricing');
+      $('prMarkup').value = data.defaults.default_markup_pct;
+      $('prRounding').value = String(data.defaults.price_rounding);
+      summary(); render();
+    } catch (e) {
+      $('prRows').innerHTML = `<tr><td colspan="9" class="text-danger p-3">${esc(e.message)}</td></tr>`;
+    }
+  }
+
+  async function saveItem(tr, body) {
+    try { await call('PUT', `/inventory/items/${tr.dataset.id}`, body); await load(); }
+    catch (e) { alert(e.message); load(); }
+  }
+
+  $('prRows').addEventListener('change', e => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    if (e.target.classList.contains('pr-markup')) {
+      const v = e.target.value.trim();
+      saveItem(tr, {markup_pct: v === '' ? null : v});
+    } else if (e.target.classList.contains('pr-mode')) {
+      if (e.target.value === 'auto' &&
+          !confirm('Auto mode sets the price from cost and markup now and on every delivery. Continue?')) {
+        e.target.value = 'manual'; return;
+      }
+      saveItem(tr, {price_mode: e.target.value});
+    }
+  });
+
+  $('prAll').addEventListener('change', e =>
+    document.querySelectorAll('.pr-sel').forEach(cb => { cb.checked = e.target.checked; }));
+  $('prFlagged').addEventListener('change', render);
+  $('prSearch').addEventListener('input', render);
+
+  async function apply(body, btn) {
+    btn.disabled = true;
+    try { const d = await call('POST', '/inventory/pricing/apply', body); alert(d.message); await load(); }
+    catch (e) { alert(e.message); }
+    btn.disabled = false;
+  }
+  $('prApplySel').addEventListener('click', e => {
+    const ids = [...document.querySelectorAll('.pr-sel:checked')].map(cb => Number(cb.value));
+    if (!ids.length) return alert('Select at least one item.');
+    if (confirm(`Set ${ids.length} price(s) to the suggested price?`)) apply({item_ids: ids}, e.currentTarget);
+  });
+  $('prApplyAuto').addEventListener('click', e => {
+    if (confirm('Set every auto item to its suggested price?')) apply({all_auto: true}, e.currentTarget);
+  });
+
+  $('prDefaults').addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      await call('PUT', '/inventory/pricing/defaults', {
+        default_markup_pct: $('prMarkup').value, price_rounding: Number($('prRounding').value)});
+      $('prDefaultsMsg').textContent = 'Saved. Suggested prices updated; auto items change on the next delivery or when you apply.';
+      load();
+    } catch (err) { $('prDefaultsMsg').textContent = err.message; }
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

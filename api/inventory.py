@@ -1,10 +1,10 @@
-from flask import Blueprint, jsonify, request, session, Response
+from flask import Blueprint, g, jsonify, request, session, Response
 from models import (
     db, Batch, InventoryItem, Order, OrderItem, StockMovement, User, Customer,
     Category, Supplier, PurchaseOrder, PurchaseOrderItem,
     PO_DRAFT, PO_SENT, PO_PARTIAL, PO_RECEIVED, PO_CANCELLED, PO_STATUSES,
 )
-from services import billing, controlled, stock
+from services import billing, controlled, pricing, stock
 from services import orders as order_service
 from services.clock import today_nairobi
 from services.sms_service import SendSMS
@@ -128,6 +128,14 @@ def create_item():
     initial_stock = max(0, int(data.get('stock', 0) or 0))
     icon        = (data.get('icon') or 'fa-box').strip()
     sku         = (data.get('sku') or '').strip() or None
+    try:
+        priced = pricing.pricing_fields(data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    auto_price = (priced.get('price_mode') == 'auto'
+                  and data.get('cost_price') not in (None, ''))
+    if auto_price:
+        price = 0       # set from cost and markup below
 
     if not name or price is None or not category:
         return jsonify({'error': 'name, price, and category are required'}), 400
@@ -146,7 +154,12 @@ def create_item():
             requires_prescription=bool(data.get('requires_prescription', False)),
             is_controlled=bool(data.get('is_controlled', False)),
             drug_schedule=(data.get('drug_schedule') or '').strip() or None,
+            **priced,
         )
+        if auto_price:
+            item.price = pricing.selling_price(
+                data.get('cost_price'), pricing.effective_markup(item, g.current_tenant),
+                g.current_tenant.price_rounding)
         db.session.add(item)
         db.session.flush()
 
@@ -163,7 +176,7 @@ def create_item():
         db.session.commit()
         logger.info(f"Inventory item '{name}' created (id={item.id}, sku={sku}).")
         return jsonify({'message': f'"{name}" added to inventory', 'item': item.to_dict()}), 201
-    except stock.StockError as e:
+    except (stock.StockError, ValueError) as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
     except IntegrityError:
@@ -187,8 +200,16 @@ def update_item(id):
     bad_ref = _reference_error(data)
     if bad_ref:
         return bad_ref
+    try:
+        priced = pricing.pricing_fields(data)
+        new_price = pricing.to_decimal(data['price'], 'price') if 'price' in data else None
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if new_price is not None and new_price < 0:
+        return jsonify({'error': 'price cannot be negative'}), 400
+    for field, value in priced.items():
+        setattr(item, field, value)
     item.name        = data.get('name',        item.name)
-    item.price       = data.get('price',       item.price)
     item.category    = data.get('category',    item.category)
     item.description = data.get('description', item.description) or None
     item.icon        = data.get('icon',        item.icon)
@@ -237,6 +258,16 @@ def update_item(id):
     if 'requires_prescription' in data:
         item.requires_prescription = bool(data.get('requires_prescription'))
     # Stock is intentionally NOT updated here — use /restock or /stock_adjustment
+
+    # An 'auto' item's price follows its cost and markup; a manual one takes
+    # the price sent. Either change is audited.
+    uid = session.get('user_id')
+    suggested = pricing.suggested_price(item, g.current_tenant)
+    if item.price_mode == 'auto' and suggested is not None:
+        pricing.set_price(item, suggested, uid, 'pricing.auto',
+                          {'cost_price': str(item.cost_price), 'source': 'item_edit'})
+    elif new_price is not None:
+        pricing.set_price(item, new_price, uid, 'pricing.manual')
 
     try:
         db.session.commit()
@@ -287,18 +318,32 @@ def restock_item(id):
 
     if quantity <= 0:
         return jsonify({'error': 'Quantity must be a positive integer'}), 400
+    unit_cost = None
+    if data.get('unit_cost') not in (None, ''):
+        try:
+            unit_cost = pricing.to_decimal(data.get('unit_cost'), 'unit_cost')
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        if unit_cost < 0:
+            return jsonify({'error': 'unit_cost cannot be negative'}), 400
 
     try:
         item = stock.receive(item, quantity,
                              batch_number=(data.get('batch_number') or '').strip() or None,
                              expiry_date=_parse_date(data.get('expiry_date')),
+                             unit_cost=unit_cost,
                              reason='restock', user_id=session.get('user_id'), note=note,
                              register=_receipt_register(data, item))
+        suggested = None
+        if unit_cost is not None:
+            suggested = pricing.reprice_on_receipt(item, unit_cost, session.get('user_id'))
         db.session.commit()
         logger.info(f"Restocked {quantity}× '{item.name}' → stock={item.stock}.")
         return jsonify({
             'message':   f'Restocked {quantity} units of "{item.name}"',
             'new_stock': item.stock,
+            'price':     float(item.price),
+            'suggested_price': float(suggested) if suggested is not None else None,
         }), 200
     except stock.StockError as e:
         db.session.rollback()
@@ -855,6 +900,8 @@ def receive_purchase_order(id):
                               supplier_name=(db.session.get(Supplier, po.supplier_id).name
                                              if po.supplier_id else None),
                               reference=po.po_number))
+            # The delivery's cost becomes the item's; 'auto' items re-price.
+            pricing.reprice_on_receipt(item, po_item.unit_cost, session.get('user_id'))
         except stock.StockError as e:
             db.session.rollback()
             return jsonify({'error': str(e)}), 400
@@ -869,3 +916,8 @@ def receive_purchase_order(id):
                       {'items': payload_items, 'status': po.status})
     db.session.commit()
     return jsonify({'message': 'PO received', 'purchase_order': po.to_dict()}), 200
+
+
+# Pricing, low-stock purchase order drafts and PO PDFs live in their own
+# module; importing it adds its routes to this blueprint.
+from api import purchasing as _purchasing  # noqa: E402,F401
