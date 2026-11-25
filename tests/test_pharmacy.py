@@ -367,3 +367,10 @@ def test_expiry_radar_buckets(app, login_as):
     radar = login_as("pharmacist").get("/pharmacy/dashboard").get_json()["expiry"]
     assert {k: [b["batch_number"] for b in v] for k, v in radar.items()} == \
         {"expired": ["GONE"], "30": ["E20"], "60": ["E45"], "90": ["E80"]}
+
+
+def test_landing_page_shows_each_vertical_panel_to_staff(app, login_as, other_tenant):
+    assert "Pharmacy today" in login_as("pharmacist").get("/dashboard").get_data(as_text=True)
+    assert "Pharmacy today" not in login_as("cashier").get("/dashboard").get_data(as_text=True)
+    page = login_as("admin", email="boss@globex.co", tenant_id=other_tenant).get("/dashboard")
+    assert "Deni and collections" in page.get_data(as_text=True)

@@ -279,3 +279,11 @@ def test_staff_create_campaigns_and_members(app, school, login_as):
     assert r.status_code == 201 and r.get_json()["guardian_phone"] == "254712000200"
     assert login_as("cashier", email="c2@x.co").post(
         "/institution/members", json={"member_ref": "X1", "name": "Y"}).status_code == 403
+
+
+def test_institution_landing_panel(app, login_as):
+    from tests.conftest import create_tenant
+    school_id = create_tenant("Moi Girls", "moi-girls", "institution")
+    page = login_as("admin", email="head@moi.ac.ke", tenant_id=school_id).get("/dashboard")
+    html = page.get_data(as_text=True)
+    assert "Campaigns" in html and "Hand over" in html and "Pharmacy today" not in html

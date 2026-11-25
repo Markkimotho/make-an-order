@@ -1,0 +1,40 @@
+{% include "dashboards/_helpers.html" %}
+<section class="mb-4" aria-labelledby="in-title">
+  <h2 id="in-title" class="h4 mb-3">Campaigns</h2>
+  <div id="in-campaigns" class="row g-3"><div class="col"><p class="small text-muted">Loading...</p></div></div>
+  <div class="card mt-3"><div class="card-header">Pickup</div><div class="card-body">
+    <form id="in-pickup" class="row g-2">
+      <div class="col-sm-5"><input class="form-control" id="in-ref" placeholder="Admission / house no." required></div>
+      <div class="col-sm-4"><input class="form-control" id="in-code" placeholder="6-digit code" inputmode="numeric" required></div>
+      <div class="col-sm-3"><button class="btn btn-primary w-100" type="submit">Hand over</button></div>
+    </form>
+    <div id="in-result" class="small mt-2" role="status" aria-live="polite"></div>
+  </div></div>
+</section>
+<script>
+dash.get('/institution/campaigns').then(list => {
+  const {esc, kes} = dash;
+  const open = list.filter(c => c.status !== 'draft');
+  const box = document.getElementById('in-campaigns');
+  if (!open.length) { box.innerHTML = '<div class="col"><p class="small text-muted">No campaigns yet.</p></div>'; return; }
+  box.innerHTML = '';
+  open.forEach(c => dash.get('/institution/campaigns/' + c.id + '/report').then(r => {
+    const sizes = Object.entries(r.sizes).map(([k, v]) => `${esc(k)}: ${v}`).join(', ') || 'none yet';
+    box.insertAdjacentHTML('beforeend', `<div class="col-lg-6"><div class="card h-100"><div class="card-body">
+      <h3 class="h6">${esc(c.name)} <span class="badge bg-light text-dark">${esc(c.status)}</span></h3>
+      <p class="small mb-1">Paid ${kes(r.paid)} of ${kes(r.billed)} · outstanding ${kes(r.outstanding)}</p>
+      <p class="small mb-1">Orders: ${r.orders.paid || 0} paid, ${r.orders.partial || 0} part paid, ${r.orders.open || 0} unpaid, ${r.orders.collected || 0} collected</p>
+      <p class="small mb-1">Sizes: ${sizes}</p>
+      <p class="small mb-0">${r.packing_list.length} to pack</p></div></div></div>`);
+  }));
+});
+document.getElementById('in-pickup').addEventListener('submit', e => {
+  e.preventDefault();
+  const out = document.getElementById('in-result');
+  fetch('/institution/pickup', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({member_ref: document.getElementById('in-ref').value, code: document.getElementById('in-code').value})})
+    .then(r => r.json().then(b => ({ok: r.ok, b})))
+    .then(({ok, b}) => { out.className = 'small mt-2 ' + (ok ? 'text-success' : 'text-danger');
+      out.textContent = ok ? 'Handed over: ' + b.order.order_number : b.error; });
+});
+</script>

@@ -1,0 +1,29 @@
+{% include "dashboards/_helpers.html" %}
+<section class="mb-4" aria-labelledby="ph-title">
+  <h2 id="ph-title" class="h4 mb-3">Pharmacy today</h2>
+  <div class="row g-3">
+    <div class="col-lg-4"><div class="card h-100"><div class="card-header">Expiry radar</div>
+      <ul class="list-group list-group-flush" id="ph-expiry"><li class="list-group-item small text-muted">Loading...</li></ul></div></div>
+    <div class="col-lg-4"><div class="card h-100"><div class="card-header">Refills</div>
+      <ul class="list-group list-group-flush" id="ph-refills"><li class="list-group-item small text-muted">Loading...</li></ul></div></div>
+    <div class="col-lg-4"><div class="card h-100"><div class="card-header d-flex justify-content-between">
+      <span>Asked for a call</span><a class="small" href="/pharmacy/register.pdf">Register PDF</a></div>
+      <ul class="list-group list-group-flush" id="ph-calls"><li class="list-group-item small text-muted">Loading...</li></ul></div></div>
+  </div>
+</section>
+<script>
+dash.get('/pharmacy/dashboard').then(d => {
+  const {esc, rows} = dash;
+  const labels = {expired: 'Expired', '30': 'Within 30 days', '60': '31 to 60 days', '90': '61 to 90 days'};
+  document.getElementById('ph-expiry').innerHTML = Object.keys(labels).map(k =>
+    `<li class="list-group-item d-flex justify-content-between"><span>${labels[k]}</span>
+       <span class="badge ${k === 'expired' ? 'bg-danger' : 'bg-secondary'}">${d.expiry[k].length} batches · ${dash.kes(d.expiry[k].reduce((s, b) => s + b.cost_at_risk, 0))}</span></li>`).join('');
+  const refills = [...d.refills.overdue.map(r => ({...r, tag: 'Overdue'})), ...d.refills.today.map(r => ({...r, tag: 'Today'})),
+                   ...d.refills.next_7_days.map(r => ({...r, tag: 'In ' + r.days + ' days'}))];
+  document.getElementById('ph-refills').innerHTML = rows(refills, r =>
+    `<li class="list-group-item small"><strong>${esc(r.customer)}</strong> ${esc(r.phone)} <span class="badge bg-light text-dark">${esc(r.tag)}</span>
+       ${r.controlled ? '<span class="badge bg-warning text-dark">controlled</span>' : ''}</li>`, 'No refills due this week.');
+  document.getElementById('ph-calls').innerHTML = rows(d.callbacks, r =>
+    `<li class="list-group-item small"><strong>${esc(r.customer)}</strong> ${esc(r.phone)}</li>`, 'Nobody is waiting for a call.');
+}).catch(() => { document.getElementById('ph-expiry').innerHTML = '<li class="list-group-item small text-danger">Could not load.</li>'; });
+</script>

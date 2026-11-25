@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
+{# The business's own landing panel (pharmacy / distributor / institution), for staff. #}
+{% set vertical_roles = {'pharmacy': ('pharmacist', 'admin', 'superuser'),
+                         'distributor': ('cashier', 'admin', 'superuser'),
+                         'institution': ('cashier', 'admin', 'superuser')} %}
+{% if biz_configured and user_role in vertical_roles.get(business_type, ()) %}
+  {% include "dashboards/" ~ business_type ~ ".html" %}
+{% endif %}
 
 {% if user_role in ('admin', 'superuser') %}
 <!-- ADMIN / SUPERUSER DASHBOARD -->

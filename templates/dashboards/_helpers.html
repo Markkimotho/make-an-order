@@ -1,0 +1,8 @@
+<script>
+window.dash = window.dash || {
+  esc: s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c])),
+  kes: n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
+  get: url => fetch(url, {headers: {'Accept': 'application/json'}}).then(r => r.ok ? r.json() : Promise.reject(r.status)),
+  rows: (items, render, empty) => items.length ? items.map(render).join('') : `<li class="list-group-item text-muted small">${empty}</li>`,
+};
+</script>

@@ -397,6 +397,32 @@ def _register_cli(app):
             url = callback_url(tenant, 'c2b').rsplit('/', 1)[0] + '/[token]'
         click.echo(f'Registered {url} for {slug} (ResponseType Completed).')
 
+    @tenants_cli.command('import-csv')
+    @click.argument('slug')
+    @click.argument('kind', type=click.Choice(['items', 'customers', 'members', 'tier_prices']))
+    @click.argument('path', type=click.Path(exists=True, dir_okay=False))
+    @click.option('--strict', is_flag=True, help='Import nothing if any row is rejected.')
+    def import_csv_command(slug, kind, path, strict):
+        """Import items, customers, members or tier prices from a CSV file."""
+        from auth.tenancy import tenant_scope
+        from services.csv_import import ImportError_, import_csv
+        with unscoped():
+            tenant = Tenant.query.filter_by(slug=slug).first()
+            if tenant is None:
+                raise click.ClickException(f'No tenant with slug {slug!r}')
+            tenant_id = tenant.id
+        with open(path, encoding='utf-8') as fh:
+            text = fh.read()
+        with tenant_scope(tenant_id):
+            try:
+                report = import_csv(kind, text, strict=strict)
+            except ImportError_ as e:
+                db.session.rollback()
+                raise click.ClickException(str(e))
+        click.echo(report.as_text())
+        if report.rejected:
+            raise SystemExit(1)
+
     app.cli.add_command(tenants_cli)
 
     @app.cli.command('payments-sweep')

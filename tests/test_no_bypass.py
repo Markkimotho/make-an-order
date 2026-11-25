@@ -28,6 +28,7 @@ UNSCOPED_ALLOWLIST = {
     ("app.py", "payments_sweep_command"),       # which businesses have silent STK pushes
     ("app.py", "import_env_credentials"),       # CLI: copy MPESA_* into a named business
     ("app.py", "register_c2b"),                 # CLI: register a named business's URLs
+    ("app.py", "import_csv_command"),           # CLI: slug -> tenant for a CSV import
     ("app.py", "seed_demo_command"),            # resolve slug -> tenant id
     ("api/platform.py", "tenants"),             # platform admins list all tenants
     ("api/platform.py", "act_as"),

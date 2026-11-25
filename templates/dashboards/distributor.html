@@ -1,0 +1,39 @@
+{% include "dashboards/_helpers.html" %}
+<section class="mb-4" aria-labelledby="ds-title">
+  <h2 id="ds-title" class="h4 mb-3">Deni and collections</h2>
+  <div class="row g-3 mb-3" id="ds-totals"></div>
+  <div class="row g-3">
+    <div class="col-lg-7"><div class="card h-100"><div class="card-header">Overdue invoices</div>
+      <ul class="list-group list-group-flush" id="ds-overdue"><li class="list-group-item small text-muted">Loading...</li></ul></div></div>
+    <div class="col-lg-5"><div class="card h-100"><div class="card-header">Containers out</div>
+      <ul class="list-group list-group-flush" id="ds-containers"><li class="list-group-item small text-muted">Loading...</li></ul></div></div>
+  </div>
+  <p class="small text-muted mt-2" id="ds-review"></p>
+</section>
+<script>
+dash.get('/distributor/dashboard').then(d => {
+  const {esc, kes, rows} = dash;
+  const names = {not_due: 'Not yet due', '0_7': '0 to 7 days late', '8_14': '8 to 14 days late', '15_plus': '15+ days late'};
+  document.getElementById('ds-totals').innerHTML = Object.keys(names).map(k =>
+    `<div class="col-6 col-lg-3"><div class="card"><div class="card-body py-2">
+       <div class="small text-muted">${names[k]}</div><div class="fs-5">${kes(d.aging.totals[k])}</div></div></div></div>`).join('');
+  const late = ['15_plus', '8_14', '0_7'].flatMap(k => d.aging.buckets[k]);
+  document.getElementById('ds-overdue').innerHTML = rows(late, r =>
+    `<li class="list-group-item small d-flex justify-content-between align-items-center gap-2">
+       <span><strong>${esc(r.customer)}</strong> ${esc(r.invoice_number)} · ${r.days_past} days · ${kes(r.balance)}
+         <span class="badge bg-light text-dark">${esc(r.etims.label)}</span></span>
+       <button class="btn btn-sm btn-outline-primary" data-remind="${r.invoice_id}">Send reminder</button></li>`, 'Nothing overdue.');
+  document.getElementById('ds-containers').innerHTML = rows(d.containers, r =>
+    `<li class="list-group-item small d-flex justify-content-between"><span>${esc(r.customer)}: ${esc(r.item)}</span><strong>${r.balance}</strong></li>`,
+    'No containers out.');
+  const review = d.review || {};
+  document.getElementById('ds-review').textContent = (d.restock_needed.length ? d.restock_needed.length + ' paid order(s) need restocking. ' : '')
+    + (review.unmatched ? review.unmatched + ' payment(s) to match.' : '');
+  document.getElementById('ds-overdue').addEventListener('click', e => {
+    const id = e.target.dataset.remind; if (!id) return;
+    e.target.disabled = true;
+    fetch('/distributor/invoices/' + id + '/remind', {method: 'POST'})
+      .then(r => { e.target.textContent = r.ok ? 'Sent' : 'Failed'; });
+  });
+}).catch(() => { document.getElementById('ds-overdue').innerHTML = '<li class="list-group-item small text-danger">Could not load.</li>'; });
+</script>
