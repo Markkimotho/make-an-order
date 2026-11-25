@@ -74,6 +74,7 @@ NAV = (
     )),
     Group("Staff", "fa-user-shield", (
         Link("Users & roles", "users_page", "fa-shield-halved", "staff", ADMIN),
+        Link("Roles & permissions", "permissions_page", "fa-table-cells", "staff", ADMIN),
         Link("Performance", "performance_page", "fa-ranking-star", "staff", FINANCE),
         Link("Activity log", "activity_page", "fa-list-check", "activity", ADMIN),
     )),

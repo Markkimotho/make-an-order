@@ -34,11 +34,13 @@ from api.platform import platform_bp
 from api.pos import pos_bp
 from api.reports import reports_bp
 from api.settings import settings_bp
+from api.staff import staff_bp
 from api.users import users_bp
 from auth.auth_middleware import (admin_required, cashier_required, finance_required,
                                   login_required, pharmacist_required,
                                   stock_clerk_required, superuser_required)
-from auth.auth_routes import create_auth_blueprint
+from auth.auth_routes import create_auth_blueprint, record_logout
+from auth.idle import enforce_idle_timeout
 from auth.tenancy import CrossTenantWrite, bind_tenant, reset_tenant, unscoped
 from config import Config
 from verticals.features import VERTICAL_FEATURES, feature_required, gate_blueprint
@@ -138,7 +140,7 @@ def get_user_context():
 
 
 _API_PREFIXES = ('/pos/', '/payments/', '/pharmacy/', '/inventory/',
-                 '/customers/', '/orders/', '/users/', '/reports/')
+                 '/customers/', '/orders/', '/users/', '/reports/', '/staff/')
 
 # Endpoints that still work when the tenant's subscription has lapsed.
 _SUBSCRIPTION_EXEMPT = frozenset({'static', 'logout', 'auth.logout', 'index'})
@@ -188,6 +190,9 @@ def bind_request_tenant():
     if session.get('role') != role:
         session['role'] = role
     g.is_platform_admin = is_platform_admin
+    expired = enforce_idle_timeout(tenant, _wants_json())
+    if expired is not None:
+        return expired
     if tenant is None:
         return None
 
@@ -256,6 +261,7 @@ def create_app(config_override=None):
     app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
     app.register_blueprint(settings_bp, url_prefix='/settings')
+    app.register_blueprint(staff_bp, url_prefix='/staff')
     app.register_blueprint(distributor_bp, url_prefix='/distributor')
     app.register_blueprint(institution_bp, url_prefix='/institution')
     app.register_blueprint(public_bp, url_prefix='/o')
@@ -273,7 +279,8 @@ def create_app(config_override=None):
 _BLUEPRINT_FEATURES = ((customers_bp, ('customers',)), (orders_bp, ('orders',)),
                        (inventory_bp, ('inventory',)), (reports_bp, ('finance',)),
                        (pos_bp, ('pos',)), (pharmacy_bp, ('pharmacy',)),
-                       (distributor_bp, ('dukas',)), (institution_bp, ('campaigns',)))
+                       (distributor_bp, ('dukas',)), (institution_bp, ('campaigns',)),
+                       (staff_bp, ('staff',)))
 
 
 def _gate_blueprints():
@@ -556,6 +563,8 @@ def _register_core_routes(app):
     module, because templates resolve them with ``url_for``.
     """
 
+    import pages.staff; pages.staff.register(app)  # noqa: E702  roles, activity, performance
+
     @app.route('/onboarding', methods=['GET', 'POST'])
     @superuser_required
     def onboarding():
@@ -587,6 +596,7 @@ def _register_core_routes(app):
     @app.route('/logout')
     def logout():
         user_email = (session.get('profile') or {}).get('email') or 'unknown'
+        record_logout()
         session.clear()
         app.logger.info(f"User {user_email} logged out.")
         return redirect(url_for('index'))

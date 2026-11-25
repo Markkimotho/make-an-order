@@ -4,18 +4,93 @@ Login looks the user up across all tenants (emails are globally unique),
 then the session carries that user's tenant. Google login only signs in
 existing users; a new business starts at /register, which creates the
 tenant and its owner (role 'superuser') together.
+
+Login security: MAX_FAILED_LOGINS wrong passwords in a row lock the account
+for LOCK_MINUTES (users.locked_until); a locked account is refused even with
+the right password until the lock passes or an admin unlocks it. The
+password form is also rate limited per IP. Every sign-in, failure, lock and
+sign-out is written to the audit log with the client IP; the password never
+is. Messages never say whether an email exists, except the lock message once
+an account is actually locked.
 """
 import logging
+import math
 import os
+import time
+from datetime import datetime, timedelta
 
 from flask import Blueprint, redirect, render_template, request, session, url_for
 from sqlalchemy.exc import IntegrityError
+from werkzeug.security import check_password_hash, generate_password_hash
 
-from auth.tenancy import unscoped
+from auth.tenancy import current_tenant_id, unscoped
 from config import Config
+from public.limits import limiter
 from services.phone import InvalidPhone, normalize_ke_phone
 
 logger = logging.getLogger(__name__)
+
+MAX_FAILED_LOGINS = 5
+LOCK_MINUTES = 15
+LOGIN_RATE_LIMIT = "10 per minute"
+INVALID_LOGIN = "Invalid email or password."
+
+_dummy_hash = None
+
+
+def _utcnow():
+    """Naive UTC, as the app stores times. Tests monkeypatch this."""
+    return datetime.utcnow()
+
+
+def _spend_hash_time(password):
+    """Check against a throwaway hash so an unknown email takes as long as a
+    wrong password (no timing hint that the email exists)."""
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = generate_password_hash("not-a-password")
+    check_password_hash(_dummy_hash, password)
+
+
+def locked_message(locked_until, now=None):
+    minutes = max(1, math.ceil((locked_until - (now or _utcnow())).total_seconds() / 60))
+    unit = "minute" if minutes == 1 else "minutes"
+    return (f"Too many failed sign-in attempts. This account is locked for "
+            f"{minutes} more {unit}. Try again later or ask your manager to unlock it.")
+
+
+def _audit(action, user=None, details=None):
+    """Queue an audit row for a sign-in event (inside unscoped(); the caller
+    commits). The row belongs to the user's business, or to none when no
+    user matched. ``details`` must never hold a password."""
+    from models import AuditLog, db
+    db.session.add(AuditLog(
+        tenant_id=user.tenant_id if user is not None else None,
+        user_id=user.id if user is not None else None,
+        action=action,
+        entity_type='User' if user is not None else None,
+        entity_id=user.id if user is not None else None,
+        new_value=details,
+        ip_address=request.remote_addr,
+    ))
+
+
+def record_logout(reason='signed_out'):
+    """Audit the current session's sign-out. Needs a tenant bound (the
+    request's, or the caller's tenant_scope); platform admins with no
+    business chosen are not logged. Never blocks the sign-out."""
+    from models import db
+    from services import audit_service
+    user_id = session.get('user_id')
+    if not user_id or current_tenant_id() is None:
+        return
+    try:
+        audit_service.log(user_id, 'logout', 'User', user_id, None, {'reason': reason},
+                          ip_address=request.remote_addr)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.warning("logout audit not written for user %s", user_id, exc_info=True)
 
 
 def _platform_admin_emails():
@@ -30,22 +105,35 @@ def _session_for(user_fields):
     session['role'] = user_fields['role']
     session['user_id'] = user_fields['id']
     session['tenant_id'] = user_fields['tenant_id']
+    session['last_seen'] = int(time.time())
     session.permanent = True
     logger.info(f"Session set: {user_fields['email']} role={user_fields['role']} "
                 f"tenant={user_fields['tenant_id']}")
 
 
-def _login_user(email):
+def _login_user(email, method='password'):
     """Find an approved user by email in any tenant and start their session.
 
     Returns None on success, else the message to show. Removes the
     platform-admin flag if the email is no longer in PLATFORM_ADMIN_EMAILS.
+    A locked account is refused whatever the sign-in method. Success clears
+    the failure count and records last_login_at and a 'login' audit row.
     """
     from models import User, db
     with unscoped():
-        user = User.query.filter_by(email=email).first()
+        user = User.query.filter_by(email=email).with_for_update().first()
         if user is None:
             return 'not_found'
+        now = _utcnow()
+        if user.locked_until is not None and user.locked_until > now:
+            _audit('login.failed', user, {'email': email, 'reason': 'locked', 'method': method})
+            message = locked_message(user.locked_until, now)
+            db.session.commit()
+            return message
+        if user.status in ('pending', 'rejected'):
+            _audit('login.failed', user, {'email': email, 'reason': user.status,
+                                          'method': method})
+            db.session.commit()
         if user.status == 'pending':
             return "Your account is awaiting approval by your business owner."
         if user.status == 'rejected':
@@ -59,8 +147,13 @@ def _login_user(email):
             db.session.commit()
         if user.tenant_id is None and not user.is_platform_admin:
             return "This account is not linked to a business."
+        user.failed_logins = 0
+        user.locked_until = None
+        user.last_login_at = now
+        _audit('login', user, {'method': method})
         fields = {'id': user.id, 'email': user.email, 'name': user.name,
                   'role': user.role, 'tenant_id': user.tenant_id}
+        db.session.commit()
     _session_for(fields)
     return None
 
@@ -92,7 +185,7 @@ def create_auth_blueprint(oauth):
             logger.error(f"OAuth authorization failed: {type(e).__name__}: {e}", exc_info=True)
             return redirect(url_for('login_page', message="Google sign-in failed."))
         email = (user_info.get('email') or '').strip().lower()
-        problem = _login_user(email)
+        problem = _login_user(email, method='google')
         if problem == 'not_found':
             return redirect(url_for('register_page',
                                     message="No account for that Google address. "
@@ -104,16 +197,49 @@ def create_auth_blueprint(oauth):
     # ── Local email/password login ──────────────────────────────────────
 
     @auth_bp.route('/login/local', methods=['POST'])
+    @limiter.limit(LOGIN_RATE_LIMIT)
     def login_local():
-        from models import User
+        from models import User, db
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
+        typed = email[:255]
         with unscoped():
-            user = User.query.filter_by(email=email).first()
-            ok = user is not None and user.check_password(password)
-        if not ok:
-            return redirect(url_for('login_page', message="Invalid email or password."))
-        problem = _login_user(email)
+            # The row lock makes concurrent failures queue (MySQL), and the
+            # increment is one SQL expression, so two failures can never
+            # both read 4 and write 5.
+            user = User.query.filter_by(email=email).with_for_update().first()
+            now = _utcnow()
+            if user is None:
+                _spend_hash_time(password)
+                _audit('login.failed', None, {'email': typed, 'reason': 'unknown_email'})
+                db.session.commit()
+                return redirect(url_for('login_page', message=INVALID_LOGIN))
+            if user.locked_until is not None and user.locked_until > now:
+                _audit('login.failed', user, {'email': typed, 'reason': 'locked'})
+                message = locked_message(user.locked_until, now)
+                db.session.commit()
+                return redirect(url_for('login_page', message=message))
+            if not user.check_password(password):
+                if user.locked_until is not None:
+                    # An old lock that has run out: count from zero again.
+                    user.locked_until = None
+                    user.failed_logins = 0
+                    db.session.flush()
+                user.failed_logins = User.failed_logins + 1
+                db.session.flush()
+                count = user.failed_logins          # re-read after the UPDATE
+                _audit('login.failed', user, {'email': typed, 'reason': 'bad_password',
+                                              'failed_logins': count})
+                message = INVALID_LOGIN
+                if count >= MAX_FAILED_LOGINS:
+                    user.locked_until = now + timedelta(minutes=LOCK_MINUTES)
+                    _audit('login.locked', user, {'email': typed, 'failed_logins': count,
+                                                  'minutes': LOCK_MINUTES})
+                    message = locked_message(user.locked_until, now)
+                    logger.warning("Account %s locked after %d failed sign-ins", user.id, count)
+                db.session.commit()
+                return redirect(url_for('login_page', message=message))
+        problem = _login_user(email, method='password')
         if problem:
             return redirect(url_for('login_page', message=problem))
         return redirect(url_for('dashboard'))
@@ -182,7 +308,7 @@ def create_auth_blueprint(oauth):
             if slug is None:
                 return fail("Could not create the business right now. Please try again.")
         logger.info(f"New business signup: {slug} ({vertical}) owner {email}")
-        problem = _login_user(email)
+        problem = _login_user(email, method='signup')
         if problem:
             return redirect(url_for('login_page', message=problem))
         return redirect(url_for('dashboard'))
@@ -192,6 +318,7 @@ def create_auth_blueprint(oauth):
     @auth_bp.route('/logout')
     def logout():
         identifier = (session.get('profile') or {}).get('email') or 'unknown'
+        record_logout()
         session.clear()
         logger.info(f"User {identifier} logged out.")
         return redirect(url_for('index'))

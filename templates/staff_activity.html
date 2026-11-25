@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Activity log{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-list-check me-2"></i>Activity log</h2>
+    <p class="text-muted mb-0 small">Sign-ins, sales, discounts, payments, stock and staff changes,
+      newest first. Times are Nairobi time.</p>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-4">
+    <div class="card h-100"><div class="card-body">
+      <div class="small text-muted">Failed sign-ins in the last 24 h</div>
+      <div class="fs-3 fw-bold" id="alFailed">…</div>
+      <div class="small" id="alLocked"></div>
+    </div></div>
+  </div>
+  <div class="col-md-8">
+    <div class="card h-100"><div class="card-body p-0"><div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead><tr><th>Account</th><th class="text-end">Failures</th><th>Last</th><th></th></tr></thead>
+        <tbody id="alFailedRows"><tr><td colspan="4" class="text-muted p-2">Loading…</td></tr></tbody>
+      </table>
+    </div></div></div>
+  </div>
+</div>
+
+<form class="card mb-3" id="alFilters"><div class="card-body row g-2 align-items-end">
+  <div class="col-md-3">
+    <label class="form-label small mb-1" for="alUser">Person</label>
+    <select class="form-select form-select-sm" id="alUser">
+      <option value="">Everyone</option>
+      {% for s in staff %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small mb-1" for="alAction">What</label>
+    <select class="form-select form-select-sm" id="alAction">
+      <option value="">Everything</option>
+      {% for value, label in action_filters %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2">
+    <label class="form-label small mb-1" for="alFrom">From</label>
+    <input type="date" class="form-control form-control-sm" id="alFrom">
+  </div>
+  <div class="col-md-2">
+    <label class="form-label small mb-1" for="alTo">To</label>
+    <input type="date" class="form-control form-control-sm" id="alTo">
+  </div>
+  <div class="col-md-2 d-grid">
+    <button class="btn btn-sm btn-primary" type="submit"><i class="fas fa-filter me-1"></i>Filter</button>
+  </div>
+</div></form>
+
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th><th>IP</th></tr></thead>
+    <tbody id="alRows"><tr><td colspan="5" class="text-muted p-3">Loading…</td></tr></tbody>
+  </table>
+</div>
+<div class="card-footer d-flex justify-content-between align-items-center small">
+  <span id="alCount"></span>
+  <div class="btn-group">
+    <button class="btn btn-sm btn-outline-secondary" id="alPrev" type="button">Newer</button>
+    <button class="btn btn-sm btn-outline-secondary" id="alNext" type="button">Older</button>
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  // Stored times are UTC without a zone; show them in Nairobi time.
+  const when = iso => iso ? new Date(iso + 'Z').toLocaleString('en-KE',
+    {timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short'}) : '';
+  const tone = a => a === 'login.failed' || a === 'login.locked' ? 'text-danger fw-semibold'
+    : (a.startsWith('discount.') || a.endsWith('.void') || a.endsWith('.refund') ? 'text-warning-emphasis' : '');
+  function details(d) {
+    if (!d || typeof d !== 'object') return d == null ? '' : esc(d);
+    return Object.entries(d).map(([k, v]) =>
+      `<span class="text-muted">${esc(k.replace(/_/g, ' '))}:</span> ${esc(typeof v === 'object' ? JSON.stringify(v) : v)}`
+    ).join(' · ');
+  }
+  let page = 1, pages = 1;
+  function params() {
+    const p = new URLSearchParams({page});
+    for (const [key, id] of [['user_id', 'alUser'], ['action', 'alAction'], ['from', 'alFrom'], ['to', 'alTo']]) {
+      const v = document.getElementById(id).value;
+      if (v) p.set(key, v);
+    }
+    return p;
+  }
+  async function load() {
+    const rows = document.getElementById('alRows');
+    const r = await fetch('/users/activity?' + params());
+    const data = await r.json();
+    if (!r.ok) {
+      rows.innerHTML = `<tr><td colspan="5" class="text-danger p-3">${esc(data.error || 'Could not load')}</td></tr>`;
+      return;
+    }
+    pages = Math.max(data.pages, 1);
+    rows.innerHTML = data.rows.length ? data.rows.map(e => `<tr>
+        <td class="small text-nowrap">${esc(when(e.created_at))}</td>
+        <td class="small">${esc(e.user_name || (e.user_id ? 'Former staff' : 'System'))}</td>
+        <td class="${tone(e.action)}">${esc(e.action_label)}</td>
+        <td class="small">${details(e.details)}</td>
+        <td class="small font-monospace">${esc(e.ip_address)}</td></tr>`).join('')
+      : '<tr><td colspan="5" class="text-muted p-3">Nothing matches these filters.</td></tr>';
+    document.getElementById('alCount').textContent =
+      `${data.total} entr${data.total === 1 ? 'y' : 'ies'} · page ${data.page} of ${pages}`;
+    document.getElementById('alPrev').disabled = page <= 1;
+    document.getElementById('alNext').disabled = page >= pages;
+
+    const f = data.failed_logins_24h;
+    document.getElementById('alFailed').textContent = f.count;
+    document.getElementById('alLocked').innerHTML = f.accounts_locked_now
+      ? `<span class="text-danger">${f.accounts_locked_now} account(s) locked now.</span> <a href="{{ url_for('users_page') }}">Unlock</a>`
+      : '<span class="text-muted">No account is locked.</span>';
+    document.getElementById('alFailedRows').innerHTML = f.by_user.length ? f.by_user.map(u => `<tr>
+        <td class="small">${esc(u.email || '')}</td>
+        <td class="text-end">${u.count}</td>
+        <td class="small text-nowrap">${esc(when(u.last_at))}</td>
+        <td class="text-end">${u.user_id ? `<button class="btn btn-link btn-sm p-0" data-user="${u.user_id}">Show</button>` : ''}</td></tr>`).join('')
+      : '<tr><td colspan="4" class="text-muted p-2">None. Good.</td></tr>';
+  }
+  document.getElementById('alFilters').addEventListener('submit', e => { e.preventDefault(); page = 1; load(); });
+  document.getElementById('alPrev').addEventListener('click', () => { if (page > 1) { page--; load(); } });
+  document.getElementById('alNext').addEventListener('click', () => { if (page < pages) { page++; load(); } });
+  document.getElementById('alFailedRows').addEventListener('click', e => {
+    const b = e.target.closest('button[data-user]');
+    if (!b) return;
+    document.getElementById('alUser').value = b.dataset.user;
+    document.getElementById('alAction').value = 'login.failed';
+    page = 1; load();
+  });
+  load();
+})();
+</script>
+{% endblock %}
