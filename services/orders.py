@@ -26,7 +26,8 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from models import (InventoryItem, Invoice, ItemVariant, LineBatch, Order, OrderItem, db)
+from models import (ContainerMovement, InventoryItem, Invoice, ItemVariant, LineBatch, Order,
+                    OrderItem, db)
 from services import billing, stock
 from services.billing.invoices import lock_tenant, money
 
@@ -148,6 +149,21 @@ def _give_stock_back(order, reason, user_id=None):
                             note=f"order {order.order_number or order.id}")
 
 
+def _reverse_containers(order, user_id=None):
+    """Containers issued with an order that did not go out come back off
+    the duka's balance."""
+    issued = (db.session.query(ContainerMovement.customer_id, ContainerMovement.inventory_item_id,
+                               db.func.sum(ContainerMovement.delta))
+              .filter(ContainerMovement.order_id == order.id)
+              .group_by(ContainerMovement.customer_id, ContainerMovement.inventory_item_id).all())
+    for customer_id, item_id, total in issued:
+        if total:
+            db.session.add(ContainerMovement(customer_id=customer_id, inventory_item_id=item_id,
+                                             delta=-int(total), order_id=order.id,
+                                             note=f"{order.order_number} did not go out",
+                                             created_by=user_id))
+
+
 def release(order, *, reason="release", user_id=None, force=False):
     """Give an unpaid order's held stock back and expire its invoice.
 
@@ -166,6 +182,7 @@ def release(order, *, reason="release", user_id=None, force=False):
             order.reserved_until = None          # paid: the stock is theirs
             return False
     _give_stock_back(order, reason, user_id)
+    _reverse_containers(order, user_id)
     if invoice is not None and invoice.status in ("open", "partial"):
         if money(invoice.amount_paid) > 0:
             billing.void_invoice(invoice, user_id, reason="void", roll=False)
@@ -186,6 +203,7 @@ def cancel(order, *, user_id=None, reason="cancel"):
         raise OrderError(f"order is {order.fulfillment_status}")
     if order.fulfillment_status not in ("released", "restock_needed"):
         _give_stock_back(order, reason, user_id)     # released orders already gave it back
+        _reverse_containers(order, user_id)
     invoice = invoice_for(order)
     if invoice is not None and invoice.status != "void":
         billing.void_invoice(invoice, user_id, reason="void")

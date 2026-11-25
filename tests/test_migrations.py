@@ -21,8 +21,9 @@ BILLING_TABLES = {"invoices", "payments", "payment_allocations", "payment_intent
 STOCK_TABLES = {"batches", "item_variants", "line_batches"}
 SMS_TABLES = {"sms_messages"}
 PHARMACY_TABLES = {"controlled_drug_ledger"}
+DISTRIBUTOR_TABLES = {"price_tiers", "tier_prices", "customer_phones", "container_movements"}
 HEAD_TABLES = ((BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES | SMS_TABLES
-               | PHARMACY_TABLES)
+               | PHARMACY_TABLES | DISTRIBUTOR_TABLES)
 
 
 @pytest.fixture

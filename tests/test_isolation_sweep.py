@@ -73,6 +73,17 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
         db.session.flush()
         stock.receive(item, 50, batch_number=mark, expiry_date=date(2027, 1, 1))
         stock.receive(sized, 4, variant=variant)
+        from models import ContainerMovement, CustomerPhone, PriceTier, TierPrice
+        tier = PriceTier(name=f"{mark} tier")
+        db.session.add(tier)
+        db.session.flush()
+        cust.price_tier_id = tier.id
+        db.session.add_all([
+            TierPrice(price_tier_id=tier.id, inventory_item_id=item.id, price=Decimal("9")),
+            CustomerPhone(customer_id=cust.id, phone=f"0{phone_base}55", label=mark),
+            ContainerMovement(customer_id=cust.id, inventory_item_id=item.id, delta=2, note=mark),
+        ])
+        db.session.flush()
         from services.controlled import Register
         morphine = InventoryItem(name=f"{mark} morphine", price=Decimal("10"), is_controlled=True)
         db.session.add(morphine)

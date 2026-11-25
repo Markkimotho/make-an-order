@@ -49,7 +49,13 @@ def test_customer_to_dict(client):
         "credit_limit": 0.0,
         "credit_term_days": 30,
         "customer_type": "retail",
+        # The account code defaults to the customer code; no KYC or tier yet.
+        "account_ref": "CUST003",
+        "national_id": None, "physical_address": None, "kra_pin": None,
+        "route_zone": None, "gps_lat": None, "gps_lng": None, "price_tier_id": None,
     }
+    assert "public_token" not in customer_dict           # the duka's link is not echoed
+    assert len(customer.public_token) >= 20
 
 # Test to_dict method of Order
 def test_order_to_dict(client):

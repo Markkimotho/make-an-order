@@ -155,6 +155,9 @@ class InventoryItem(TenantMixin, db.Model):
     # the register (models/pharmacy.py) and only a pharmacist dispenses them.
     is_controlled         = db.Column(db.Boolean, default=False, nullable=False,
                                       server_default=db.false())
+    # Gas cylinders, crates: issuing one adds to the duka's container balance.
+    is_returnable_container = db.Column(db.Boolean, default=False, nullable=False,
+                                        server_default=db.false())
     drug_schedule         = db.Column(db.String(16), nullable=True)
 
     @staticmethod
@@ -210,6 +213,7 @@ class InventoryItem(TenantMixin, db.Model):
             'unit':        self.unit,
             'has_variants': bool(self.has_variants),
             'is_controlled': bool(self.is_controlled),
+            'is_returnable_container': bool(self.is_returnable_container),
             'drug_schedule': self.drug_schedule,
             'is_drug':     self.is_drug,
             'requires_prescription': self.requires_prescription,
@@ -221,6 +225,8 @@ class Customer(TenantMixin, db.Model):
     __table_args__ = (
         db.UniqueConstraint('tenant_id', 'phone_number', name='uq_customers_tenant_phone_number'),
         db.UniqueConstraint('tenant_id', 'code', name='uq_customers_tenant_code'),
+        db.UniqueConstraint('tenant_id', 'account_ref', name='uq_customers_tenant_account_ref'),
+        db.UniqueConstraint('tenant_id', 'public_token', name='uq_customers_tenant_public_token'),
     )
     id           = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name         = db.Column(db.String(255), nullable=False)
@@ -238,6 +244,19 @@ class Customer(TenantMixin, db.Model):
     customer_type  = db.Column(db.String(20), default='retail', nullable=False)
     # 'retail' | 'wholesale' | 'vip'
     created_at     = db.Column(db.DateTime, server_default=db.func.now())
+    # Distributor: the Paybill account code a duka pays with, its order
+    # link token, KYC and route details, its price tier.
+    account_ref      = db.Column(db.String(20), nullable=True)
+    public_token     = db.Column(db.String(32), nullable=True,
+                                 default=lambda: __import__('secrets').token_urlsafe(16)[:22])
+    national_id      = db.Column(db.String(32), nullable=True)
+    physical_address = db.Column(db.String(255), nullable=True)
+    kra_pin          = db.Column(db.String(20), nullable=True)
+    route_zone       = db.Column(db.String(64), nullable=True)
+    gps_lat          = db.Column(db.Numeric(9, 6), nullable=True)
+    gps_lng          = db.Column(db.Numeric(9, 6), nullable=True)
+    price_tier_id    = db.Column(db.Integer, db.ForeignKey('price_tiers.id', ondelete='SET NULL'),
+                                 nullable=True)
 
     orders        = db.relationship('Order', backref='customer', lazy=True, cascade='all, delete')
     transactions  = db.relationship('Transaction', backref='customer', lazy=True)
@@ -247,6 +266,20 @@ class Customer(TenantMixin, db.Model):
     @validates('phone_number')
     def _normalize_phone(self, key, value):
         return normalize_ke_phone(value)
+
+    @validates('code')
+    def _default_account_ref(self, key, value):
+        # A new duka pays with its customer code unless given another.
+        if self.account_ref is None and value:
+            self.account_ref = value
+        return value
+
+    @validates('account_ref')
+    def _normalize_account_ref(self, key, value):
+        # Same form as Paybill references are matched in (services/billing/matching.py).
+        import re
+        value = re.sub(r'[^A-Z0-9]', '', (value or '').upper())
+        return value or None
 
     def __repr__(self):
         return f"<Customer(id={self.id}, name={self.name}, phone_number={self.phone_number}, code={self.code})>"
@@ -262,6 +295,14 @@ class Customer(TenantMixin, db.Model):
             'credit_limit':   float(self.credit_limit or 0),
             'credit_term_days': self.credit_term_days,
             'customer_type':  self.customer_type,
+            'account_ref':    self.account_ref,
+            'national_id':    self.national_id,
+            'physical_address': self.physical_address,
+            'kra_pin':        self.kra_pin,
+            'route_zone':     self.route_zone,
+            'gps_lat':        float(self.gps_lat) if self.gps_lat is not None else None,
+            'gps_lng':        float(self.gps_lng) if self.gps_lng is not None else None,
+            'price_tier_id':  self.price_tier_id,
         }
 
 

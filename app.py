@@ -24,6 +24,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from public import limiter, public_bp
 from api.customers import customers_bp
 from api.daraja import daraja_bp
+from api.distributor import distributor_bp
 from api.inventory import inventory_bp
 from api.orders import orders_bp
 from api.payments import payments_bp
@@ -232,6 +233,7 @@ def create_app(config_override=None):
     app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
     app.register_blueprint(settings_bp, url_prefix='/settings')
+    app.register_blueprint(distributor_bp, url_prefix='/distributor')
     app.register_blueprint(public_bp, url_prefix='/o')
     limiter.init_app(app)
     app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
@@ -266,7 +268,7 @@ class RedactCallbackTokens(logging.Filter):
 def _configure_logging(app):
     token_filter = RedactCallbackTokens()
     for name in ("werkzeug", "gunicorn.access", "gunicorn.error", "api.daraja",
-                 "services.billing.stk", "public.routes", "public.refill", app.logger.name):
+                 "services.billing.stk", "public.routes", "public.refill", "public.duka", app.logger.name):
         target = logging.getLogger(name)
         if not any(isinstance(f, RedactCallbackTokens) for f in target.filters):
             target.addFilter(token_filter)
