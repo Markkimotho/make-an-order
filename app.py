@@ -249,7 +249,7 @@ class RedactCallbackTokens(logging.Filter):
     invoice's pay token; keep both out of request logs (werkzeug, gunicorn
     access log, app logs)."""
 
-    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/|/o/[^/\s]+/pay/)"
+    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/|/o/[^/\s]+/(?:pay|r|d)/)"
                           r"[^/\s?\"]+")
 
     def filter(self, record):
@@ -266,7 +266,7 @@ class RedactCallbackTokens(logging.Filter):
 def _configure_logging(app):
     token_filter = RedactCallbackTokens()
     for name in ("werkzeug", "gunicorn.access", "gunicorn.error", "api.daraja",
-                 "services.billing.stk", "public.routes", app.logger.name):
+                 "services.billing.stk", "public.routes", "public.refill", app.logger.name):
         target = logging.getLogger(name)
         if not any(isinstance(f, RedactCallbackTokens) for f in target.filters):
             target.addFilter(token_filter)

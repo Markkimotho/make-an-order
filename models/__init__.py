@@ -30,6 +30,7 @@ from models.billing import (  # noqa: F401
     Payment, PaymentAllocation, PaymentIntent,
 )
 from models.billing import PAYMENT_METHODS as BILLING_PAYMENT_METHODS  # noqa: F401
+from models.pharmacy import ENTRY_TYPES, ControlledDrugEntry, RegisterIsAppendOnly  # noqa: F401
 from models.sms import SMS_STATUSES, SmsMessage  # noqa: F401
 from models.stock import Batch, ItemVariant, LineBatch  # noqa: F401
 from models.types import EncryptedString, SecretsKeyMissing  # noqa: F401

@@ -78,6 +78,9 @@ def create_order(lines, *, customer_id=None, channel="staff", pay_now, due_date=
             raise OrderError("prices cannot be negative")
         if line.item.has_variants and line.variant is None:
             raise OrderError(f"{line.item.name} comes in sizes; choose one")
+        if line.item.is_controlled:
+            raise OrderError(f"{line.item.name} is a controlled drug; it is dispensed only "
+                             "at the counter by a pharmacist")
     if not pay_now and due_date is None:
         raise OrderError("a credit order needs a due date")
     total = sum((money(line.unit_price) * int(line.quantity) for line in lines), Decimal("0"))

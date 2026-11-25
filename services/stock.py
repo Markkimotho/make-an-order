@@ -84,11 +84,30 @@ def _units(qty):
     return qty
 
 
+def _controlled(item, variant, entry_type, register):
+    """Controlled drugs: check the register details before any change."""
+    if not item.is_controlled:
+        return None
+    from services import controlled
+    if item.has_variants:
+        raise StockError(f"{item.name} is controlled; controlled drugs cannot have sizes")
+    controlled.check(item, entry_type, register)
+    return controlled
+
+
 def receive(item, qty, *, batch_number=None, expiry_date=None, unit_cost=None, variant=None,
-            reason="restock", note=None, user_id=None):
-    """Add stock: into a batch (new or existing) or a variant."""
+            reason="restock", note=None, user_id=None, register=None,
+            register_entry="receipt"):
+    """Add stock: into a batch (new or existing) or a variant.
+
+    Controlled drugs need ``register`` (services/controlled.Register) with
+    what a ``register_entry`` (receipt, or adjustment) entry requires.
+    """
     qty = _units(qty)
     item = _lock_item(item)
+    ledger = _controlled(item, variant, register_entry, register)
+    before = int(item.stock or 0)
+    batch = None
     if item.has_variants:
         row = _locked_variant(item, variant)
         row.stock = int(row.stock or 0) + qty
@@ -112,6 +131,8 @@ def receive(item, qty, *, batch_number=None, expiry_date=None, unit_cost=None, v
     db.session.flush()
     _resync(item)
     _movement(item, qty, reason, user_id, note)
+    if ledger is not None:
+        ledger.record(item, register_entry, [(batch, qty, 0)], register, before)
     db.session.flush()
     return item
 
@@ -121,14 +142,19 @@ def _fefo_order(batch):
 
 
 def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
-         allow_expired=False, reason="sale", note=None, user_id=None, today=None):
+         allow_expired=False, reason="sale", note=None, user_id=None, today=None,
+         register=None, register_entry="dispense"):
     """Remove stock, soonest expiry first. Returns [(batch, units)].
 
     Expired batches are skipped unless ``allow_expired`` (write-offs).
-    Raises InsufficientStock before changing anything.
+    Raises InsufficientStock before changing anything. Controlled drugs
+    need ``register`` for a ``register_entry`` (dispense, adjustment,
+    destruction) entry: one register row per batch taken.
     """
     qty = _units(qty)
     item = _lock_item(item)
+    ledger = _controlled(item, variant, register_entry, register)
+    before = int(item.stock or 0)
     taken = []
     if item.has_variants:
         row = _locked_variant(item, variant)
@@ -161,6 +187,8 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
     db.session.flush()
     _resync(item)
     _movement(item, -qty, reason, user_id, note)
+    if ledger is not None:
+        ledger.record(item, register_entry, [(b, 0, n) for b, n in taken], register, before)
     db.session.flush()
     return taken
 
@@ -185,7 +213,7 @@ def _line_batches(transaction_item, order_item):
 
 
 def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None,
-              reason="refund", note=None, user_id=None):
+              reason="refund", note=None, user_id=None, register=None):
     """Return units to stock. Returns [(batch, units)].
 
     A line with batch records gets its units back in those batches (latest
@@ -196,6 +224,8 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
     """
     qty = _units(qty)
     item = _lock_item(item)
+    ledger = _controlled(item, variant, "return", register)
+    before = int(item.stock or 0)
     restored = []
     if item.has_variants:
         row = _locked_variant(item, variant)
@@ -237,22 +267,33 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
     db.session.flush()
     _resync(item)
     _movement(item, qty, reason, user_id, note)
+    if ledger is not None:
+        reverses = {}
+        if transaction_item is not None:
+            reverses = {batch_id: entry.id for batch_id, entry in
+                        ledger.dispense_entries(transaction_item.transaction_id, item.id).items()}
+        ledger.record(item, "return", [(b, n, 0) for b, n in restored], register, before,
+                      reverses=reverses)
     db.session.flush()
     return restored
 
 
 def adjust(item, delta, *, batch_number=None, expiry_date=None, variant=None,
-           reason="adjustment", note=None, user_id=None):
+           reason="adjustment", note=None, user_id=None, register=None):
     """Manual correction. Positive adds (to a named or default batch);
-    negative removes soonest-expiry first, expired stock included."""
+    negative removes soonest-expiry first, expired stock included.
+    A controlled drug's write-off of expired stock is a "destruction"
+    entry; anything else an "adjustment"; both need a witness."""
     delta = int(delta)
     if delta == 0:
         raise StockError("adjustment must not be zero")
+    entry = "destruction" if "expir" in (reason or "") or "destr" in (reason or "") else "adjustment"
     if delta > 0:
         return receive(item, delta, batch_number=batch_number, expiry_date=expiry_date,
-                       variant=variant, reason=reason, note=note, user_id=user_id)
+                       variant=variant, reason=reason, note=note, user_id=user_id,
+                       register=register, register_entry="adjustment")
     take(item, -delta, variant=variant, allow_expired=True, reason=reason, note=note,
-         user_id=user_id)
+         user_id=user_id, register=register, register_entry=entry)
     return item
 
 

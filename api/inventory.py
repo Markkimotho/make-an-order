@@ -4,7 +4,7 @@ from models import (
     Category, Supplier, PurchaseOrder, PurchaseOrderItem,
     PO_DRAFT, PO_SENT, PO_PARTIAL, PO_RECEIVED, PO_CANCELLED, PO_STATUSES,
 )
-from services import billing, stock
+from services import billing, controlled, stock
 from services import orders as order_service
 from services.clock import today_nairobi
 from services.sms_service import SendSMS
@@ -97,6 +97,23 @@ def get_item_by_sku(sku):
 
 # ---------------------------------------------------------------------------
 
+def _receipt_register(data, item, supplier_name=None, reference=None):
+    """Register details for stock arriving (used only for controlled drugs)."""
+    supplier = supplier_name
+    if not supplier and item.supplier_id:
+        found = db.session.get(Supplier, item.supplier_id)
+        supplier = found.name if found else None
+    return controlled.Register.from_request(
+        data, supplier_name=(data.get('supplier_name') or supplier),
+        reference_doc_no=(data.get('reference_doc_no') or reference),
+    ).with_pharmacist(db.session.get(User, session.get('user_id')))
+
+
+def _witness_register(data):
+    return controlled.Register.from_request(data).with_pharmacist(
+        db.session.get(User, session.get('user_id')))
+
+
 @inventory_bp.route('/items', methods=['POST'])
 @admin_api_required
 def create_item():
@@ -127,6 +144,8 @@ def create_item():
             unit=(data.get('unit') or 'pcs').strip() or 'pcs',
             is_drug=bool(data.get('is_drug', False)),
             requires_prescription=bool(data.get('requires_prescription', False)),
+            is_controlled=bool(data.get('is_controlled', False)),
+            drug_schedule=(data.get('drug_schedule') or '').strip() or None,
         )
         db.session.add(item)
         db.session.flush()
@@ -136,11 +155,17 @@ def create_item():
                                  batch_number=(data.get('batch_number') or '').strip() or None,
                                  expiry_date=_parse_date(data.get('expiry_date')),
                                  unit_cost=data.get('cost_price'), reason='initial_stock',
-                                 user_id=session.get('user_id'))
+                                 user_id=session.get('user_id'),
+                                 register=_receipt_register(data, item))
+        elif item.is_controlled:
+            controlled.open_register(item, db.session.get(User, session.get('user_id')))
 
         db.session.commit()
         logger.info(f"Inventory item '{name}' created (id={item.id}, sku={sku}).")
         return jsonify({'message': f'"{name}" added to inventory', 'item': item.to_dict()}), 201
+    except stock.StockError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'SKU/barcode must be unique' if (sku or data.get('barcode'))
@@ -169,6 +194,20 @@ def update_item(id):
     item.icon        = data.get('icon',        item.icon)
     if 'sku' in data:
         item.sku = (data.get('sku') or '').strip() or None
+    if 'drug_schedule' in data:
+        item.drug_schedule = (data.get('drug_schedule') or '').strip() or None
+    if 'is_controlled' in data:
+        wanted = bool(data.get('is_controlled'))
+        if wanted and not item.is_controlled:
+            item.is_controlled = True
+            db.session.flush()
+            # The register starts at the stock on hand.
+            controlled.open_register(item, db.session.get(User, session.get('user_id')))
+        elif not wanted and item.is_controlled:
+            if controlled.ControlledDrugEntry.query.filter_by(inventory_item_id=item.id).first():
+                db.session.rollback()
+                return jsonify({'error': 'A drug with register entries stays controlled'}), 409
+            item.is_controlled = False
     if 'barcode' in data:
         item.barcode = (data.get('barcode') or '').strip() or None
     if 'cost_price' in data:
@@ -247,7 +286,8 @@ def restock_item(id):
         item = stock.receive(item, quantity,
                              batch_number=(data.get('batch_number') or '').strip() or None,
                              expiry_date=_parse_date(data.get('expiry_date')),
-                             reason='restock', user_id=session.get('user_id'), note=note)
+                             reason='restock', user_id=session.get('user_id'), note=note,
+                             register=_receipt_register(data, item))
         db.session.commit()
         logger.info(f"Restocked {quantity}× '{item.name}' → stock={item.stock}.")
         return jsonify({
@@ -427,7 +467,8 @@ def stock_adjustment():
     try:
         item = stock.adjust(item, delta, batch_number=data.get('batch_number'),
                             expiry_date=_parse_date(data.get('expiry_date')),
-                            reason=reason, note=note, user_id=session.get('user_id'))
+                            reason=reason, note=note, user_id=session.get('user_id'),
+                            register=_witness_register(data))
     except stock.StockError as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
@@ -799,7 +840,12 @@ def receive_purchase_order(id):
                           or (po_item.batch_number or None) or f'PO-{po.po_number}',
                           expiry_date=_parse_date(entry.get('expiry_date')) or po_item.expiry_date,
                           unit_cost=po_item.unit_cost, reason='restock',
-                          user_id=session.get('user_id'), note=f'PO {po.po_number}')
+                          user_id=session.get('user_id'), note=f'PO {po.po_number}',
+                          register=_receipt_register(
+                              entry, item,
+                              supplier_name=(db.session.get(Supplier, po.supplier_id).name
+                                             if po.supplier_id else None),
+                              reference=po.po_number))
         except stock.StockError as e:
             db.session.rollback()
             return jsonify({'error': str(e)}), 400

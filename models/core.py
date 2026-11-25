@@ -42,6 +42,7 @@ class User(TenantMixin, db.Model):
     # 'superuser' | 'admin' | 'user' | 'cashier' | 'pharmacist' | 'stock_clerk'
     status        = db.Column(db.String(20), default='pending', nullable=False) # 'pending'|'approved'|'rejected'
     password_hash = db.Column(db.String(255), nullable=True)                   # null for OAuth-only users
+    ppb_reg_no    = db.Column(db.String(64), nullable=True)   # pharmacists' PPB registration
     is_platform_admin = db.Column(db.Boolean, nullable=False, default=False,
                                   server_default=db.false())
     created_at    = db.Column(db.DateTime, server_default=db.func.now())
@@ -71,6 +72,7 @@ class User(TenantMixin, db.Model):
             'name':         self.name,
             'phone_number': self.phone_number,
             'role':         self.role,
+            'ppb_reg_no':   self.ppb_reg_no,
             'status':       self.status,
             'tenant_id':    self.tenant_id,
             'is_platform_admin': bool(self.is_platform_admin),
@@ -149,6 +151,11 @@ class InventoryItem(TenantMixin, db.Model):
     unit                  = db.Column(db.String(20), nullable=True, default='pcs')
     is_drug               = db.Column(db.Boolean, default=False, nullable=False)
     requires_prescription = db.Column(db.Boolean, default=False, nullable=False)
+    # Controlled drugs (narcotics, psychotropics): every movement goes in
+    # the register (models/pharmacy.py) and only a pharmacist dispenses them.
+    is_controlled         = db.Column(db.Boolean, default=False, nullable=False,
+                                      server_default=db.false())
+    drug_schedule         = db.Column(db.String(16), nullable=True)
 
     @staticmethod
     def soonest_batches(item_ids):
@@ -202,6 +209,8 @@ class InventoryItem(TenantMixin, db.Model):
             'supplier_id': self.supplier_id,
             'unit':        self.unit,
             'has_variants': bool(self.has_variants),
+            'is_controlled': bool(self.is_controlled),
+            'drug_schedule': self.drug_schedule,
             'is_drug':     self.is_drug,
             'requires_prescription': self.requires_prescription,
         }
@@ -604,6 +613,9 @@ class PurchaseOrderItem(TenantMixin, db.Model):
 
 class Prescription(TenantMixin, db.Model):
     __tablename__ = 'prescriptions'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'refill_token', name='uq_prescriptions_tenant_refill_token'),
+    )
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
     customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=False)
     pharmacist_id     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
@@ -613,6 +625,18 @@ class Prescription(TenantMixin, db.Model):
     notes             = db.Column(db.Text, nullable=True)
     transaction_id    = db.Column(db.Integer, db.ForeignKey('transactions.id', ondelete='SET NULL'), nullable=True)
     created_at        = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
+    # Chronic refills: due date drives the reminder and the refill link.
+    prescriber_reg_no = db.Column(db.String(64), nullable=True)
+    is_chronic        = db.Column(db.Boolean, nullable=False, default=False,
+                                  server_default=db.false())
+    duration_days     = db.Column(db.Integer, nullable=True)            # 14 / 30 / 90
+    last_dispensed_at = db.Column(db.DateTime, nullable=True)
+    refill_due_date   = db.Column(db.Date, nullable=True, index=True)
+    refills_remaining = db.Column(db.Integer, nullable=True)
+    refill_status     = db.Column(db.String(16), nullable=False, default='active',
+                                  server_default='active')             # active|paused|ended
+    refill_token      = db.Column(db.String(32), nullable=True)
+    callback_requested_at = db.Column(db.DateTime, nullable=True)
 
     items = db.relationship('PrescriptionItem', backref='prescription',
                             lazy=True, cascade='all, delete-orphan')
@@ -628,6 +652,15 @@ class Prescription(TenantMixin, db.Model):
             'notes':             self.notes,
             'transaction_id':    self.transaction_id,
             'created_at':        self.created_at.isoformat() if self.created_at else None,
+            'prescriber_reg_no': self.prescriber_reg_no,
+            'is_chronic':        bool(self.is_chronic),
+            'duration_days':     self.duration_days,
+            'last_dispensed_at': self.last_dispensed_at.isoformat() if self.last_dispensed_at else None,
+            'refill_due_date':   self.refill_due_date.isoformat() if self.refill_due_date else None,
+            'refills_remaining': self.refills_remaining,
+            'refill_status':     self.refill_status,
+            'callback_requested_at': (self.callback_requested_at.isoformat()
+                                      if self.callback_requested_at else None),
             'items':             [i.to_dict() for i in self.items],
         }
 

@@ -44,9 +44,9 @@ from models import (
     SHIFT_OPEN, SHIFT_CLOSED,
     TXN_OPEN, TXN_COMPLETED, TXN_VOIDED, TXN_REFUNDED,
     PAY_CASH, PAY_MPESA, PAY_CARD, PAY_CREDIT, PAY_SPLIT, PAYMENT_METHODS,
-    ROLE_ADMIN, ROLE_SUPERUSER,
+    ROLE_ADMIN, ROLE_SUPERUSER, ROLE_PHARMACIST,
 )
-from services import audit_service, billing, loyalty_service, otp_service, stock
+from services import audit_service, billing, controlled, loyalty_service, otp_service, stock
 from services.receipt_service import build_receipt
 from services.clock import today_nairobi
 from services.sms_service import SendSMS
@@ -73,6 +73,43 @@ def _q(value) -> Decimal:
 
 def _user_id() -> int | None:
     return session.get('user_id')
+
+
+def _can_dispense_controlled(user) -> bool:
+    """Pharmacists; and admins who are pharmacists (a PPB number on file)."""
+    if user is None:
+        return False
+    return user.role == ROLE_PHARMACIST or (user.role in (ROLE_ADMIN, ROLE_SUPERUSER)
+                                            and bool(user.ppb_reg_no))
+
+
+def _controlled_lines(txn):
+    return [li for li in txn.items if li.inventory_item_id
+            and getattr(db.session.get(InventoryItem, li.inventory_item_id), 'is_controlled', False)]
+
+
+def _dispense_register(txn, body, user):
+    """The register details for a sale's controlled lines: typed at the till,
+    else from the prescription linked to the sale."""
+    rx = Prescription.query.filter(Prescription.transaction_id == txn.id).first()
+    patient = db.session.get(Customer, txn.customer_id) if txn.customer_id else None
+    register = controlled.Register.from_request(
+        body, transaction_id=txn.id, prescription_id=rx.id if rx else None)
+    if rx is not None:
+        register.prescriber_name = register.prescriber_name or rx.doctor_name
+        register.prescriber_reg_no = register.prescriber_reg_no or rx.prescriber_reg_no
+    if patient is not None:
+        register.patient_name = register.patient_name or patient.name
+        register.patient_national_id = (register.patient_national_id
+                                        or getattr(patient, 'national_id', None))
+        register.patient_address = (register.patient_address
+                                    or getattr(patient, 'physical_address', None))
+    return register.with_pharmacist(user)
+
+
+def _witness_register(txn, body, user):
+    register = controlled.Register.from_request(body, transaction_id=txn.id)
+    return register.with_pharmacist(user if _can_dispense_controlled(user) else None)
 
 
 def _current_shift() -> Shift | None:
@@ -467,6 +504,11 @@ def transaction_add_item(txn_id):
         return jsonify({'error': f'Insufficient stock for {item.name} '
                                   f'(have {item.stock}, need {needed_units})'}), 400
 
+    # Controlled drugs: only a pharmacist sells them.
+    if item.is_controlled and not _can_dispense_controlled(db.session.get(User, _user_id())):
+        return jsonify({'error': f'{item.name} is a controlled drug; only a pharmacist can '
+                                 'sell it'}), 403
+
     # Prescription gating happens at /complete time so the cashier can build
     # the cart freely first; the dispensary endpoint links a Prescription.
 
@@ -620,6 +662,23 @@ def transaction_complete(txn_id):
             return jsonify({'error': 'Prescription required for: ' + ', '.join(missing),
                             'requires_prescription': missing}), 403
 
+    # Controlled drugs: a pharmacist completes the sale, with every detail
+    # the register needs (checked here, before anything is written).
+    register = None
+    controlled_lines = _controlled_lines(txn)
+    if controlled_lines:
+        user = db.session.get(User, _user_id())
+        if not _can_dispense_controlled(user):
+            return jsonify({'error': 'Only a pharmacist can complete a sale of controlled '
+                                     'drugs'}), 403
+        register = _dispense_register(txn, body, user)
+        for li in controlled_lines:
+            try:
+                controlled.check(db.session.get(InventoryItem, li.inventory_item_id),
+                                 'dispense', register)
+            except controlled.RegisterIncomplete as e:
+                return jsonify({'error': str(e), 'register_missing': e.missing}), 400
+
     # ----- Payment checks (nothing is written until all of them pass) -----
     customer = db.session.get(Customer, txn.customer_id) if txn.customer_id else None
     invoice = billing.open_invoice_for_transaction(txn.id)
@@ -667,7 +726,8 @@ def transaction_complete(txn_id):
         units = _stock_units_for(li.quantity)
         try:
             taken = stock.take(item, units, transaction_item=li, reason='sale', user_id=uid,
-                               note=f'TXN {txn.transaction_ref}')
+                               note=f'TXN {txn.transaction_ref}',
+                               register=register if item.is_controlled else None)
         except stock.StockError as e:
             # Nothing is committed yet: no stock, invoice or payment changes.
             db.session.rollback()
@@ -798,6 +858,14 @@ def transaction_void(txn_id):
         if not otp_service.verify_otp(scope, provided_otp):
             db.session.rollback()
             return jsonify({'error': 'Invalid or expired OTP'}), 403
+        witness = _witness_register(txn, body, db.session.get(User, uid))
+        for li in _controlled_lines(txn):
+            try:
+                controlled.check(db.session.get(InventoryItem, li.inventory_item_id),
+                                 'return', witness)
+            except controlled.RegisterIncomplete as e:
+                db.session.rollback()
+                return jsonify({'error': str(e), 'register_missing': e.missing}), 400
         # Restore what is still out (a partial refund already put some back).
         for li in txn.items:
             if not li.inventory_item_id:
@@ -808,7 +876,8 @@ def transaction_void(txn_id):
             units = _stock_units_for(Decimal(str(li.quantity))) - _units_returned(li)
             if units > 0:
                 stock.give_back(item, units, transaction_item=li, reason='cancel', user_id=uid,
-                                note=f'VOID {txn.transaction_ref}')
+                                note=f'VOID {txn.transaction_ref}',
+                                register=witness if item.is_controlled else None)
         # Reverse loyalty earned on the original sale
         if txn.customer_id:
             earned = (db.session.query(func.coalesce(func.sum(LoyaltyTransaction.points_earned), 0))
@@ -904,6 +973,16 @@ def transaction_refund(txn_id):
             db.session.rollback()
             return jsonify({'error': f'Only {left} of {line.item_name} left to refund'}), 400
 
+    witness = _witness_register(txn, body, db.session.get(User, uid))
+    for line, _ in wanted.values():
+        item = db.session.get(InventoryItem, line.inventory_item_id) if line.inventory_item_id else None
+        if item is not None and item.is_controlled:
+            try:
+                controlled.check(item, 'return', witness)
+            except controlled.RegisterIncomplete as e:
+                db.session.rollback()
+                return jsonify({'error': str(e), 'register_missing': e.missing}), 400
+
     # Each line's share of what the customer actually paid: tax and any
     # sale-wide discount are spread in proportion to the line totals.
     subtotal = Decimal(str(txn.subtotal or 0))
@@ -921,7 +1000,8 @@ def transaction_refund(txn_id):
             if item:
                 stock.give_back(item, units, transaction_item=line,
                                 reason='refund', user_id=uid,
-                                note=f'REFUND {txn.transaction_ref}')
+                                note=f'REFUND {txn.transaction_ref}',
+                                register=witness if item.is_controlled else None)
     fully_refunded = all(Decimal(str(li.refunded_quantity or 0)) >= Decimal(str(li.quantity))
                          for li in txn.items)
 

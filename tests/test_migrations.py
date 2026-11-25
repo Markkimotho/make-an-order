@@ -20,7 +20,9 @@ BILLING_TABLES = {"invoices", "payments", "payment_allocations", "payment_intent
                   "invoice_adjustments"}
 STOCK_TABLES = {"batches", "item_variants", "line_batches"}
 SMS_TABLES = {"sms_messages"}
-HEAD_TABLES = (BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES | SMS_TABLES
+PHARMACY_TABLES = {"controlled_drug_ledger"}
+HEAD_TABLES = ((BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES | SMS_TABLES
+               | PHARMACY_TABLES)
 
 
 @pytest.fixture
@@ -140,3 +142,23 @@ def test_disable_foreign_keys_ignores_other_dialects():
 ])
 def test_compare_server_default(inspected, rendered, expected):
     assert compare_server_default(None, None, None, inspected, None, rendered) is expected
+
+
+def test_names_fit_mysql_identifier_limit():
+    """MySQL refuses names over 64 characters; SQLite does not, so only the
+    MySQL lane would notice. Check models and migration files here."""
+    import re
+    from pathlib import Path
+    limit = 64
+    too_long = []
+    for table in db.metadata.tables.values():
+        for thing in [*table.constraints, *table.indexes]:
+            name = str(thing.name) if thing.name else ""
+            if len(name) > limit:
+                too_long.append(f"model {table.name}: {name}")
+    versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+    for path in sorted(versions.glob("*.py")):
+        for name in re.findall(r'"((?:fk|uq|ix|pk|ck)_[A-Za-z0-9_]+)"', path.read_text()):
+            if len(name) > limit:
+                too_long.append(f"{path.name}: {name}")
+    assert too_long == []

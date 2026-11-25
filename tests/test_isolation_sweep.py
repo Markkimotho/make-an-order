@@ -73,6 +73,12 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
         db.session.flush()
         stock.receive(item, 50, batch_number=mark, expiry_date=date(2027, 1, 1))
         stock.receive(sized, 4, variant=variant)
+        from services.controlled import Register
+        morphine = InventoryItem(name=f"{mark} morphine", price=Decimal("10"), is_controlled=True)
+        db.session.add(morphine)
+        db.session.flush()
+        stock.receive(morphine, 5, batch_number=f"{mark}-CD",
+                      register=Register(supplier_name=mark, reference_doc_no=mark))
         order = Order(customer_id=cust.id, item=f"{mark} order", amount=Decimal("10"))
         txn = Transaction(transaction_ref=f"{tag}-TXN", customer_id=cust.id, cashier_id=user.id,
                           shift_id=shift.id, total=Decimal("10"), notes=mark,
@@ -240,7 +246,9 @@ def sweep(app, client, ids):
     leaks, crashes = [], []
 
     def check(method, url, response):
-        found = leaked(response.get_data(as_text=True))
+        # Binary bodies (the register PDF) are checked through the JSON view
+        # built from the same query; decode leniently so they do not crash.
+        found = leaked(response.get_data().decode("utf-8", "replace"))
         if found:
             leaks.append(f"{method} {url} -> {response.status_code} shows {found}")
         # 502 is the app reporting a payment provider as down (stubbed offline

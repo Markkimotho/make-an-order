@@ -9,6 +9,10 @@ Endpoints
 * ``GET  /pharmacy/prescriptions/<id>``            — detail with dispensing status
 * ``POST /pharmacy/prescriptions/<id>/dispense``   — dispense items against an open POS txn
 * ``GET  /pharmacy/controlled_drugs``              — controlled drug ledger
+* ``PUT  /pharmacy/prescriptions/<id>/refill``     — pause / resume / end refills, clear a call-back
+* ``GET  /pharmacy/dashboard``                     — expiry radar, refill schedule, call-backs
+* ``GET  /pharmacy/register``                      — controlled-drug register (JSON)
+* ``GET  /pharmacy/register.pdf``                  — the register for a PPB inspection
 
 All routes require pharmacist role or higher.
 """
@@ -18,13 +22,17 @@ import logging
 from datetime import date, datetime
 from decimal import Decimal
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, session
 
 from auth.auth_middleware import pharmacist_api_required
 from models import (
-    db, Customer, InventoryItem, Prescription, PrescriptionItem,
+    db, Customer, InventoryItem, Prescription, PrescriptionItem, Tenant,
     Transaction, TransactionItem, TXN_OPEN,
 )
+from auth.tenancy import current_tenant_id
+from services.clock import now_nairobi
+from verticals.pharmacy import register_pdf
+from verticals.pharmacy import service as pharmacy
 from services import audit_service
 from services.sms_service import SendSMS
 
@@ -68,7 +76,14 @@ def create_prescription():
         doctor_phone=(body.get('doctor_phone') or '').strip() or None,
         prescription_date=_parse_date(body.get('prescription_date')) or date.today(),
         notes=(body.get('notes') or '').strip() or None,
+        prescriber_reg_no=(body.get('prescriber_reg_no') or '').strip() or None,
     )
+    if body.get('is_chronic'):
+        try:
+            pharmacy.make_chronic(rx, body.get('duration_days') or 30,
+                                  body.get('refills_remaining'))
+        except (pharmacy.PharmacyError, ValueError, TypeError) as e:
+            return jsonify({'error': str(e)}), 400
     db.session.add(rx)
     db.session.flush()
 
@@ -157,7 +172,13 @@ def dispense_prescription(rx_id):
     if txn.status != TXN_OPEN:
         return jsonify({'error': f'Transaction is {txn.status}, cannot dispense'}), 400
     if rx.transaction_id and rx.transaction_id != txn.id:
-        return jsonify({'error': 'Prescription already linked to another transaction'}), 400
+        if not (rx.is_chronic and pharmacy.cycle_complete(rx)):
+            return jsonify({'error': 'Prescription already linked to another transaction'}), 400
+        try:
+            pharmacy.start_new_cycle(rx)            # a refill of a chronic prescription
+        except pharmacy.PharmacyError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 400
 
     items_payload = body.get('items') or []
     if not items_payload:
@@ -192,6 +213,8 @@ def dispense_prescription(rx_id):
             }), 400
 
     rx.transaction_id = txn.id
+    if pharmacy.cycle_complete(rx):
+        pharmacy.mark_dispensed(rx)
     audit_service.log(session.get('user_id'), 'prescription.dispense',
                       'Prescription', rx.id, None,
                       {'transaction_id': txn.id, 'items': items_payload})
@@ -219,8 +242,9 @@ def controlled_drugs():
     """List controlled drugs (is_drug=True AND requires_prescription=True) with
     the full dispensing history per item: who, when, how much, to whom."""
     items = (InventoryItem.query
-             .filter(InventoryItem.is_drug.is_(True),
-                     InventoryItem.requires_prescription.is_(True))
+             .filter(db.or_(InventoryItem.is_controlled.is_(True),
+                            db.and_(InventoryItem.is_drug.is_(True),
+                                    InventoryItem.requires_prescription.is_(True))))
              .order_by(InventoryItem.name).all())
 
     out = []
@@ -245,3 +269,83 @@ def controlled_drugs():
         d['dispensing_history'] = history
         out.append(d)
     return jsonify(out), 200
+
+
+# ===========================================================================
+# Refills, dashboard, register
+# ===========================================================================
+
+@pharmacy_bp.route('/prescriptions/<int:rx_id>/refill', methods=['PUT'])
+@pharmacist_api_required
+def update_refill(rx_id):
+    """Body: ``{"status": "active|paused|ended"}``, ``{"callback_done": true}``,
+    or ``{"is_chronic": true, "duration_days": 30, "refills_remaining": 5}``."""
+    rx = db.session.get(Prescription, rx_id)
+    if not rx:
+        return jsonify({'error': 'Prescription not found'}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        if body.get('is_chronic'):
+            pharmacy.make_chronic(rx, body.get('duration_days') or rx.duration_days or 30,
+                                  body.get('refills_remaining', rx.refills_remaining))
+        status = body.get('status')
+        if status:
+            if status not in pharmacy.REFILL_STATUSES:
+                raise pharmacy.PharmacyError(f'status must be one of {pharmacy.REFILL_STATUSES}')
+            if not rx.is_chronic:
+                raise pharmacy.PharmacyError('not a chronic prescription')
+            rx.refill_status = status
+    except (pharmacy.PharmacyError, ValueError, TypeError) as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+    if body.get('callback_done'):
+        rx.callback_requested_at = None
+    audit_service.log(session.get('user_id'), 'prescription.refill', 'Prescription', rx.id,
+                      None, {k: body[k] for k in body})
+    db.session.commit()
+    return jsonify({'prescription': rx.to_dict()}), 200
+
+
+@pharmacy_bp.route('/dashboard', methods=['GET'])
+@pharmacist_api_required
+def dashboard_data():
+    return jsonify({'expiry': pharmacy.expiry_radar(),
+                    'refills': pharmacy.refill_schedule(),
+                    'callbacks': pharmacy.callbacks_requested()}), 200
+
+
+def _register_query():
+    try:
+        item_id = int(request.args['item_id']) if request.args.get('item_id') else None
+    except ValueError:
+        return None, (jsonify({'error': 'item_id must be a number'}), 400)
+    date_from = _parse_date(request.args.get('from'))
+    date_to = _parse_date(request.args.get('to'))
+    return pharmacy.register_rows(item_id, date_from, date_to), None
+
+
+@pharmacy_bp.route('/register', methods=['GET'])
+@pharmacist_api_required
+def register_json():
+    rows, err = _register_query()
+    if err:
+        return err
+    return jsonify({'entries': [r.to_dict() for r in rows],
+                    'breaks': pharmacy.register_breaks(rows)}), 200
+
+
+@pharmacy_bp.route('/register.pdf', methods=['GET'])
+@pharmacist_api_required
+def register_pdf_view():
+    rows, err = _register_query()
+    if err:
+        return err
+    business = db.session.get(Tenant, current_tenant_id())
+    period = ' to '.join(filter(None, [request.args.get('from'), request.args.get('to')])) or None
+    pdf = register_pdf.build(business, rows, now_nairobi(), period=period,
+                             breaks=set(pharmacy.register_breaks(rows)))
+    audit_service.log(session.get('user_id'), 'pharmacy.register_pdf', 'Tenant',
+                      current_tenant_id(), None, {'entries': len(rows)})
+    db.session.commit()
+    return Response(pdf, mimetype='application/pdf', headers={
+        'Content-Disposition': f'attachment; filename="controlled-register-{business.slug}.pdf"'})
