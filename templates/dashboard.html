@@ -101,7 +101,7 @@
         </div>
     </div>
     {% endif %}
-    {% if 'purchase_orders' in features %}
+    {% if 'purchasing' in features %}
     <div class="col-md-3 mb-4">
         <div class="card dashboard-card h-100">
             <div class="card-header" style="background: linear-gradient(to bottom,#fff3e0,#ffe0b2)!important;color:#e65100!important;">
@@ -117,7 +117,7 @@
         </div>
     </div>
     {% endif %}
-    {% if 'reports' in features %}
+    {% if 'finance' in features %}
     <div class="col-md-3 mb-4">
         <div class="card dashboard-card h-100">
             <div class="card-header" style="background:linear-gradient(to bottom,#e3f2fd,#bbdefb)!important;color:#1565c0!important;">
@@ -231,7 +231,7 @@
     </div>
     {% endif %}
     {% if user_role == 'stock_clerk' %}
-    {% if 'purchase_orders' in features %}
+    {% if 'purchasing' in features %}
     <div class="col-md-4 mb-4">
         <div class="card dashboard-card h-100">
             <div class="card-header bg-warning">

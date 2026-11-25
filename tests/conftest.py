@@ -106,6 +106,13 @@ def app(database_url, request):
             db.engine.dispose()
 
 
+def set_vertical(tenant_id, vertical):
+    """Switch a tenant's vertical (features follow it: verticals/features.py)."""
+    with unscoped():
+        db.session.get(Tenant, tenant_id).vertical = vertical
+        db.session.commit()
+
+
 @pytest.fixture
 def other_tenant(app):
     """A second business, 'globex'. Returns its id; acme stays bound."""

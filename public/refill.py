@@ -17,7 +17,7 @@ from flask import abort, g, jsonify, render_template, request
 
 from models import InventoryItem, Invoice, Prescription, db
 from public.limits import limiter
-from public.routes import _error, public_bp, public_tenant
+from public.routes import _error, public_bp, public_feature, public_tenant
 from services import orders as order_service
 from services import stock
 from verticals.pharmacy import service as pharmacy
@@ -58,6 +58,7 @@ def _pay_path(slug, invoice):
 @public_bp.route("/<slug>/r/<refill_token>", methods=["GET"])
 @limiter.limit("60 per minute")
 @public_tenant
+@public_feature("pharmacy")
 def refill_page(slug, refill_token):
     rx = _prescription(refill_token)
     lines = _lines(rx)
@@ -75,6 +76,7 @@ def refill_page(slug, refill_token):
 @public_bp.route("/<slug>/r/<refill_token>/order", methods=["POST"])
 @limiter.limit("5 per minute")
 @public_tenant
+@public_feature("pharmacy")
 def refill_order(slug, refill_token):
     rx = _prescription(refill_token)
     if pharmacy.has_controlled(rx):
@@ -123,6 +125,7 @@ def refill_order(slug, refill_token):
 @public_bp.route("/<slug>/r/<refill_token>/callback", methods=["POST"])
 @limiter.limit("3 per minute")
 @public_tenant
+@public_feature("pharmacy")
 def refill_callback(slug, refill_token):
     rx = _prescription(refill_token)
     if rx.callback_requested_at is None:

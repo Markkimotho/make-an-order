@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{% if user_role in ('admin', 'superuser') %}Inventory{% else %}Shop{% endif %}{% endblock %}
+{% block title %}{% if user_role in ('admin', 'superuser') %}Inventory{% else %}Stock lookup{% endif %}{% endblock %}
 
 {% block content %}
 
@@ -223,42 +223,13 @@
 </div>
 
 {% else %}
-<!-- ═══════════════════════════════ NORMAL USER VIEW ═══════════════════════════════ -->
-<h2 class="mb-1">Shop</h2>
-<p class="lead mb-0">Pick items and place your order — your tab is updated instantly.</p>
+<!-- ═══════════════════════════════ STAFF STOCK LOOKUP ═══════════════════════════════ -->
+<h2 class="mb-1">Stock lookup</h2>
+<p class="lead mb-0">Search an item to see its price and what is on the shelf. Sell from the
+    <a href="{{ url_for('pos_page') if 'pos' in features else '#' }}">point of sale</a>.</p>
 <div class="cat-filter" id="catFilter"></div>
-<div class="row g-3">
-    <div class="col-lg-8">
-        <div class="item-grid" id="itemGrid">
-            <div style="color:var(--mac-text-muted);font-size:13px;padding:20px;">Loading inventory&hellip;</div>
-        </div>
-    </div>
-    <div class="col-lg-4">
-        <div class="cart-panel">
-            <div class="cart-header">
-                <span><i class="fas fa-cart-shopping me-2"></i>Current Order</span>
-                <span class="cart-count-badge" id="cartBadge">0</span>
-            </div>
-            <div class="cart-items" id="cartItems">
-                <div class="cart-empty" id="cartEmpty">No items yet.<br>Click an item to add it.</div>
-            </div>
-            <div class="cart-footer">
-                <div class="cart-total-row">
-                    <span class="cart-total-label">Total</span>
-                    <span class="cart-total-amount" id="cartTotal">$0.00</span>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label" style="font-size:11px;">Ordering as</label>
-                    <div style="font-size:13px;font-weight:600;color:var(--mac-text);padding:5px 0;">
-                        <i class="fas fa-circle-user me-2" style="color:var(--mac-blue);"></i>{{ user_name or user_email }}
-                    </div>
-                </div>
-                <button class="btn-place-order" id="placeOrderBtn" disabled>
-                    <i class="fas fa-check me-2"></i>Place Order
-                </button>
-            </div>
-        </div>
-    </div>
+<div class="item-grid" id="itemGrid">
+    <div style="color:var(--mac-text-muted);font-size:13px;padding:20px;">Loading inventory&hellip;</div>
 </div>
 {% endif %}
 
@@ -432,6 +403,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     /* ── cart logic ─────────────────────────────────── */
     function addToCart(id) {
+        if (!cartItems) return;          // staff stock lookup has no cart
         const item = allItems.find(i => i.id === id);
         if (!item || item.stock === 0) return;
         if (!cart[id]) cart[id] = { item, qty: 0 };
@@ -468,6 +440,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function renderCart() {
+        if (!cartItems) return;
         const entries = Object.values(cart);
         cartBadge.textContent = cartItemCount();
         cartTotal.textContent = `$${cartTotalAmount().toFixed(2)}`;
@@ -530,7 +503,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     /* ── place order ─────────────────────────────────── */
-    placeOrderBtn.addEventListener('click', async () => {
+    if (placeOrderBtn) placeOrderBtn.addEventListener('click', async () => {
         if (!canPlaceOrder()) {
             if ('{{ user_role }}' === 'guest') {
                 showToast('Please sign in or create an account to place an order.', false);

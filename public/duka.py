@@ -12,7 +12,7 @@ from flask import abort, g, jsonify, render_template, request
 
 from models import Customer, InventoryItem, Invoice, db
 from public.limits import limiter
-from public.routes import _error, public_bp, public_tenant
+from public.routes import _error, public_bp, public_feature, public_tenant
 from services import billing, stock
 from services import orders as order_service
 from verticals.distributor import service as distributor
@@ -40,6 +40,7 @@ def _catalogue(customer):
 @public_bp.route("/<slug>/d/<duka_token>", methods=["GET"])
 @limiter.limit("60 per minute")
 @public_tenant
+@public_feature("dukas")
 def duka_page(slug, duka_token):
     customer = _duka(duka_token)
     open_invoices = (Invoice.query
@@ -59,6 +60,7 @@ def duka_page(slug, duka_token):
 @public_bp.route("/<slug>/d/<duka_token>/order", methods=["POST"])
 @limiter.limit("5 per minute")
 @public_tenant
+@public_feature("dukas")
 def duka_order(slug, duka_token):
     customer = _duka(duka_token)
     body = request.get_json(silent=True) or {}

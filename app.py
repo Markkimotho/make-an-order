@@ -41,6 +41,8 @@ from auth.auth_middleware import (admin_required, cashier_required,
 from auth.auth_routes import create_auth_blueprint
 from auth.tenancy import CrossTenantWrite, bind_tenant, reset_tenant, unscoped
 from config import Config
+from verticals.features import VERTICAL_FEATURES, feature_required, gate_blueprint
+from verticals.nav import nav_for
 from models import VERTICALS, Campaign, Customer, Order, Tenant, User, db
 
 load_dotenv()
@@ -51,19 +53,26 @@ migrate = Migrate()
 # ---------------------------------------------------------------------------
 # Verticals
 # ---------------------------------------------------------------------------
-# One entry per tenant vertical (models.VERTICALS). ``features`` drives nav
-# visibility and dashboard cards; ``seed`` names the demo catalogue used by
-# ``flask seed-demo``.
+# One entry per tenant vertical (models.VERTICALS). ``features`` comes from
+# verticals/features.py and drives the nav, dashboard cards and which routes
+# answer; ``seed`` names the demo catalogue used by ``flask seed-demo``.
 BUSINESS_CONFIGS = {
     'pharmacy': {
-        'label':       'Pharmacy / Agro-vet',
+        'label':       'Pharmacy',
         'icon':        'fa-prescription-bottle-medical',
         'color':       '#198754',
-        'tagline':     'Prescriptions · Expiry · Controlled drugs · Refills',
-        'description': 'For chemists and agro-vets. Prescription capture, batch and '
-                       'expiry tracking, the controlled-drug register and refill reminders.',
-        'features':    {'pos', 'shift', 'pharmacy', 'purchase_orders',
-                        'inventory', 'reports', 'customers'},
+        'tagline':     'Batches & expiry · Patients · Controlled drugs · Profit',
+        'description': 'For chemists and pharmacies. Till with discounts and M-Pesa or '
+                       'bank confirmation, batch and expiry tracking, recalls, patient '
+                       'medication history, the controlled-drug register, purchase '
+                       'orders, daily profit and cashier reconciliation.',
+        'includes':    ['Point of sale with M-Pesa, bank and cash',
+                        'Batch, expiry and recall tracking',
+                        'Patient medication history and refills',
+                        'Controlled-drug register (PPB)',
+                        'Purchase orders and markup pricing',
+                        'Daily sales, profit and cash reconciliation',
+                        'Staff roles, performance and activity log'],
         'seed':        'pharmacy',
     },
     'distributor': {
@@ -73,8 +82,12 @@ BUSINESS_CONFIGS = {
         'tagline':     'Trade credit · Route orders · Collections',
         'description': 'For FMCG, gas and hardware distributors selling to dukas on '
                        'credit, with M-Pesa collections and credit limits.',
-        'features':    {'pos', 'shift', 'purchase_orders', 'inventory',
-                        'reports', 'customers'},
+        'includes':    ['Point of sale with M-Pesa, bank and cash',
+                        'Dukas on credit with limits and deni aging',
+                        'Duka order links and price tiers',
+                        'Purchase orders and markup pricing',
+                        'Daily sales, profit and cash reconciliation',
+                        'Staff roles, performance and activity log'],
         'seed':        'supermarket',
     },
     'institution': {
@@ -84,10 +97,16 @@ BUSINESS_CONFIGS = {
         'tagline':     'Pre-orders · M-Pesa collection · Pickup',
         'description': 'For schools, gated estates and chamas collecting payments '
                        'for uniforms, bundles and levies against a student or house number.',
-        'features':    {'inventory', 'reports', 'customers'},
+        'includes':    ['Campaign links parents pay through M-Pesa',
+                        'Instalments matched to admission or house numbers',
+                        'Pickup codes and packing lists',
+                        'Purchasing, expenses and collection reports',
+                        'Staff roles and activity log'],
         'seed':        'general',
     },
 }
+for _vertical, _config in BUSINESS_CONFIGS.items():
+    _config['features'] = VERTICAL_FEATURES[_vertical]
 assert set(BUSINESS_CONFIGS) == set(VERTICALS)
 
 
@@ -105,6 +124,8 @@ def get_user_context():
         'features':       features,
         'BUSINESS_CONFIGS': BUSINESS_CONFIGS,
     }
+    role = session.get('role', 'user') if session.get('profile') else 'guest'
+    base['nav'] = nav_for(vertical, role) if tenant is not None else []
     profile = session.get('profile')
     if profile:
         return {
@@ -223,6 +244,7 @@ def create_app(config_override=None):
     migrate.init_app(app, db)
 
     oauth = _register_oauth(app)
+    _gate_blueprints()
     app.register_blueprint(customers_bp, url_prefix='/customers')
     app.register_blueprint(orders_bp, url_prefix='/orders')
     app.register_blueprint(inventory_bp, url_prefix='/inventory')
@@ -246,6 +268,21 @@ def create_app(config_override=None):
     _register_core_routes(app)
     _register_cli(app)
     return app
+
+
+_BLUEPRINT_FEATURES = ((customers_bp, ('customers',)), (orders_bp, ('orders',)),
+                       (inventory_bp, ('inventory',)), (reports_bp, ('finance',)),
+                       (pos_bp, ('pos',)), (pharmacy_bp, ('pharmacy',)),
+                       (distributor_bp, ('dukas',)), (institution_bp, ('campaigns',)))
+
+
+def _gate_blueprints():
+    """API blueprints answer only for verticals with their feature. Gates
+    are added once, however many apps the process builds."""
+    for bp, features in _BLUEPRINT_FEATURES:
+        if not getattr(bp, '_feature_gated', False):
+            gate_blueprint(bp, *features)
+            bp._feature_gated = True
 
 
 class RedactCallbackTokens(logging.Filter):
@@ -545,7 +582,7 @@ def _register_core_routes(app):
     def index():
         if 'profile' in session:
             return redirect(url_for('dashboard'))
-        return render_template('landing.html')
+        return render_template('landing.html', BUSINESS_CONFIGS=BUSINESS_CONFIGS)
 
     @app.route('/logout')
     def logout():
@@ -580,16 +617,19 @@ def _register_core_routes(app):
 
     @app.route('/customers-ui')
     @admin_required
+    @feature_required('customers')
     def customers_page():
         return render_template('customers.html', **get_user_context())
 
     @app.route('/orders-ui')
     @admin_required
+    @feature_required('orders')
     def orders_page():
         return render_template('orders.html', **get_user_context())
 
     @app.route('/inventory-ui')
     @login_required
+    @feature_required('inventory')
     def inventory_page():
         return render_template('inventory.html', **get_user_context())
 
@@ -600,36 +640,43 @@ def _register_core_routes(app):
 
     @app.route('/reports-ui')
     @admin_required
+    @feature_required('finance')
     def reports_page():
         return render_template('reports.html', **get_user_context())
 
     @app.route('/pos-ui')
     @cashier_required
+    @feature_required('pos')
     def pos_page():
         return _safe_render('pos.html', **get_user_context())
 
     @app.route('/shift-ui')
     @cashier_required
+    @feature_required('shift')
     def shift_page():
         return _safe_render('shift.html', **get_user_context())
 
     @app.route('/pharmacy-ui')
     @pharmacist_required
+    @feature_required('pharmacy')
     def pharmacy_page():
         return _safe_render('pharmacy.html', **get_user_context())
 
     @app.route('/purchase-orders-ui')
     @stock_clerk_required
+    @feature_required('purchasing')
     def purchase_orders_page():
         return _safe_render('purchase_orders.html', **get_user_context())
 
     @app.route('/reports-dashboard')
     @admin_required
+    @feature_required('finance')
     def reports_dashboard_page():
         return _safe_render('reports_dashboard.html', **get_user_context())
 
     @app.route('/orders/<int:order_id>/receipt')
     @admin_required
+    @feature_required('orders')
     def order_receipt_page(order_id):
         order = db.session.get(Order, order_id)
         if not order:
@@ -638,6 +685,7 @@ def _register_core_routes(app):
 
     @app.route('/customers/<int:customer_id>')
     @admin_required
+    @feature_required('customers')
     def customer_detail_page(customer_id):
         customer = db.session.get(Customer, customer_id)
         if not customer:
@@ -646,6 +694,7 @@ def _register_core_routes(app):
 
     @app.route('/customers/<int:customer_id>/edit')
     @admin_required
+    @feature_required('customers')
     def customer_edit_page(customer_id):
         customer = db.session.get(Customer, customer_id)
         if not customer:
@@ -654,6 +703,7 @@ def _register_core_routes(app):
 
     @app.route('/orders/<int:order_id>/edit')
     @admin_required
+    @feature_required('orders')
     def order_edit_page(order_id):
         order = db.session.get(Order, order_id)
         if not order:

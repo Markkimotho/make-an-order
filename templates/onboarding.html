@@ -151,7 +151,10 @@
       font-size: .83rem;
       margin-bottom: 1.75rem;
     }
-  </style>
+    .biz-includes { list-style: none; padding: 0; margin: 10px 0 0; font-size: 12px; text-align: left; }
+  .biz-includes li { margin-bottom: 3px; color: #3a3a3c; }
+  .biz-includes i { color: var(--accent-color); }
+</style>
 </head>
 <body>
 
@@ -195,6 +198,9 @@
       <h5>{{ cfg.label }}</h5>
       <p class="biz-tagline">{{ cfg.tagline }}</p>
       <p class="biz-desc">{{ cfg.description }}</p>
+      <ul class="biz-includes">
+        {% for line in cfg.includes %}<li><i class="fa-solid fa-check me-1"></i>{{ line }}</li>{% endfor %}
+      </ul>
     </div>
     {% endfor %}
   </div>

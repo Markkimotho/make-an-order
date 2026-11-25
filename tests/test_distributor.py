@@ -11,11 +11,18 @@ from auth.tenancy import tenant_scope, unscoped
 from models import (ContainerMovement, Customer, InventoryItem, Invoice, ItemVariant, Order,
                     PriceTier, SmsMessage, Tenant, TierPrice, db)
 from services import billing, stock
+from services.clock import today_nairobi
 from services import orders as order_service
-from tests.conftest import on_mysql
+from tests.conftest import set_vertical, on_mysql
 from verticals.distributor import service as distributor
 
 D = Decimal
+
+
+@pytest.fixture(autouse=True)
+def _distributor_vertical(app):
+    """acme runs as a distributor here: its routes 404 for other verticals."""
+    set_vertical(app.acme_id, "distributor")
 
 
 @pytest.fixture
@@ -48,7 +55,8 @@ def test_orders_use_the_duka_tier_price_and_its_terms(app, dist):
     o, inv = order(dist, 3)
     db.session.commit()
     assert (inv.total, inv.kind) == (D("540.00"), "credit")
-    assert inv.due_date - inv.issued_at.date() <= timedelta(days=14)
+    # Terms count from the Nairobi date, which is a day ahead of UTC after 21:00 UTC.
+    assert inv.due_date - today_nairobi(inv.issued_at) <= timedelta(days=14)
     assert db.session.get(Customer, dist["duka"]).account_ref == "DK01"
 
 

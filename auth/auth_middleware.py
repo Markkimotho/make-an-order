@@ -13,7 +13,7 @@ from flask import g, jsonify, redirect, session, url_for
 ADMIN_ROLES     = ('admin', 'superuser')
 POS_ROLES       = ('cashier', 'pharmacist', 'admin', 'superuser')
 PHARMACY_ROLES  = ('pharmacist', 'admin', 'superuser')
-STOCK_ROLES     = ('stock_clerk', 'admin', 'superuser')
+STOCK_ROLES     = ('stock_clerk', 'pharmacist', 'admin', 'superuser')
 
 
 def _role() -> str:

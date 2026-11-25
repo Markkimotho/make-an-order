@@ -275,14 +275,15 @@
 <!-- ── Hero ───────────────────────────────────────────────────────────── -->
 <section class="hero">
     <div class="hero-eyebrow">
-        <i class="fas fa-bolt"></i> One platform &middot; Any business type
+        <i class="fas fa-bolt"></i> Built for Kenyan pharmacies, distributors and schools
     </div>
     <h1 class="hero-title">
-        The POS system that<br><span>adapts to your business</span>
+        Run your business,<br><span>see every shilling</span>
     </h1>
     <p class="hero-subtitle">
-        Whether you run a pharmacy, supermarket, hardware shop, salon or restaurant —
-        Make-An-Order configures itself to show only what you need.
+        A pharmacy, a distributor selling to dukas, or a school collecting for uniforms:
+        pick your business type and get the screens that business needs, with M-Pesa
+        confirmed before the receipt prints.
     </p>
     <div class="hero-buttons">
         <a href="/login" class="btn-hero btn-primary-hero">
@@ -294,12 +295,9 @@
     </div>
     <!-- Business-type pill showcase -->
     <div class="biz-pills">
-        <span class="biz-pill"><i class="fas fa-prescription-bottle-medical" style="color:#198754"></i> Pharmacy</span>
-        <span class="biz-pill"><i class="fas fa-cart-shopping" style="color:#0d6efd"></i> Supermarket</span>
-        <span class="biz-pill"><i class="fas fa-hammer" style="color:#fd7e14"></i> Hardware</span>
-        <span class="biz-pill"><i class="fas fa-scissors" style="color:#d63384"></i> Salon &amp; Beauty</span>
-        <span class="biz-pill"><i class="fas fa-utensils" style="color:#dc3545"></i> Restaurant</span>
-        <span class="biz-pill"><i class="fas fa-store" style="color:#6c757d"></i> General Retail</span>
+        {% for slug, cfg in BUSINESS_CONFIGS.items() %}
+        <span class="biz-pill"><i class="fas {{ cfg.icon }}" style="color:{{ cfg.color }}"></i> {{ cfg.label }}</span>
+        {% endfor %}
     </div>
 </section>
 
@@ -308,91 +306,25 @@
     <div class="biz-container">
         <div class="text-center">
             <span class="section-label">Business types</span>
-            <h2 class="section-title">One setup for every kind of shop</h2>
+            <h2 class="section-title">Three businesses, each with its own screens</h2>
             <p class="section-sub">
                 During onboarding you pick your business type. The system enables only the modules
                 your business actually uses — no clutter, no confusion.
             </p>
         </div>
         <div class="biz-grid">
+            {% for slug, cfg in BUSINESS_CONFIGS.items() %}
             <div class="biz-card">
-                <div class="biz-card-icon" style="background:#d1fae5; color:#065f46">
-                    <i class="fas fa-prescription-bottle-medical"></i>
+                <div class="biz-card-icon" style="color:{{ cfg.color }}">
+                    <i class="fas {{ cfg.icon }}"></i>
                 </div>
-                <h4>Pharmacy</h4>
-                <p>Prescriptions, dispensing &amp; controlled-drug ledger</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Pharmacy Rx</span>
-                    <span class="biz-feature-tag">Purchase Orders</span>
-                    <span class="biz-feature-tag">Expiry Tracking</span>
-                </div>
+                <h4>{{ cfg.label }}</h4>
+                <p>{{ cfg.tagline }}</p>
+                <ul class="text-start small mt-2 mb-0 ps-3">
+                    {% for line in cfg.includes %}<li>{{ line }}</li>{% endfor %}
+                </ul>
             </div>
-            <div class="biz-card">
-                <div class="biz-card-icon" style="background:#dbeafe; color:#1d4ed8">
-                    <i class="fas fa-cart-shopping"></i>
-                </div>
-                <h4>Supermarket</h4>
-                <p>FMCG, perishables &amp; loyalty programme</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Loyalty</span>
-                    <span class="biz-feature-tag">Purchase Orders</span>
-                    <span class="biz-feature-tag">Barcode</span>
-                </div>
-            </div>
-            <div class="biz-card">
-                <div class="biz-card-icon" style="background:#ffedd5; color:#c2410c">
-                    <i class="fas fa-hammer"></i>
-                </div>
-                <h4>Hardware</h4>
-                <p>Trade accounts, bulk items &amp; stock control</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Credit Accounts</span>
-                    <span class="biz-feature-tag">Purchase Orders</span>
-                    <span class="biz-feature-tag">Reports</span>
-                </div>
-            </div>
-            <div class="biz-card">
-                <div class="biz-card-icon" style="background:#fce7f3; color:#9d174d">
-                    <i class="fas fa-scissors"></i>
-                </div>
-                <h4>Salon</h4>
-                <p>Service-based billing &amp; client profiles</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Services</span>
-                    <span class="biz-feature-tag">Customers</span>
-                    <span class="biz-feature-tag">Reports</span>
-                </div>
-            </div>
-            <div class="biz-card">
-                <div class="biz-card-icon" style="background:#fee2e2; color:#991b1b">
-                    <i class="fas fa-utensils"></i>
-                </div>
-                <h4>Restaurant</h4>
-                <p>Menu-based POS &amp; daily sales reporting</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Menu Items</span>
-                    <span class="biz-feature-tag">Customers</span>
-                    <span class="biz-feature-tag">Reports</span>
-                </div>
-            </div>
-            <div class="biz-card">
-                <div class="biz-card-icon" style="background:#f1f5f9; color:#475569">
-                    <i class="fas fa-store"></i>
-                </div>
-                <h4>General Retail</h4>
-                <p>Flexible for any product type</p>
-                <div class="mt-2">
-                    <span class="biz-feature-tag">POS</span>
-                    <span class="biz-feature-tag">Inventory</span>
-                    <span class="biz-feature-tag">Purchase Orders</span>
-                    <span class="biz-feature-tag">Reports</span>
-                </div>
-            </div>
+            {% endfor %}
         </div>
     </div>
 </section>
@@ -525,7 +457,7 @@
         <div class="step">
             <div class="step-number">2</div>
             <h3 class="step-title">Choose your business type</h3>
-            <p class="step-text">Select pharmacy, supermarket, hardware, salon, restaurant or general retail. The system enables the right modules automatically.</p>
+            <p class="step-text">Pick pharmacy, distributor or school/estate. You only see the screens that business uses.</p>
         </div>
         <div class="step">
             <div class="step-number">3</div>
@@ -535,7 +467,7 @@
         <div class="step">
             <div class="step-number">4</div>
             <h3 class="step-title">Open a shift &amp; sell</h3>
-            <p class="step-text">Open your till, process sales with cash, M-Pesa or card, then close the shift with a full Z-report.</p>
+            <p class="step-text">Open your till, process sales with cash, M-Pesa or bank transfer, then close the shift with a full Z-report.</p>
         </div>
         <div class="step">
             <div class="step-number">5</div>

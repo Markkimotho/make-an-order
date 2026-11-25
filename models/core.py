@@ -23,7 +23,8 @@ ALL_ROLES = (
 # Roles that may operate the POS checkout
 POS_ROLES        = (ROLE_CASHIER, ROLE_PHARMACIST, ROLE_ADMIN, ROLE_SUPERUSER)
 PHARMACY_ROLES   = (ROLE_PHARMACIST, ROLE_ADMIN, ROLE_SUPERUSER)
-STOCK_ROLES      = (ROLE_STOCK_CLERK, ROLE_ADMIN, ROLE_SUPERUSER)
+# Pharmacists order and receive stock in a pharmacy.
+STOCK_ROLES      = (ROLE_STOCK_CLERK, ROLE_PHARMACIST, ROLE_ADMIN, ROLE_SUPERUSER)
 
 
 class User(TenantMixin, db.Model):

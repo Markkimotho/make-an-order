@@ -41,11 +41,27 @@
                     <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
                         Type of business <span style="color: var(--mac-red);">*</span>
                     </label>
-                    <select name="vertical" class="form-select form-select-sm" required style="font-size: 13px;">
+                    <select name="vertical" id="verticalSelect" class="form-select form-select-sm" required style="font-size: 13px;">
                         {% for slug, cfg in BUSINESS_CONFIGS.items() %}
                         <option value="{{ slug }}" {% if form_data and form_data.vertical == slug %}selected{% endif %}>{{ cfg.label }}</option>
                         {% endfor %}
                     </select>
+                    {% for slug, cfg in BUSINESS_CONFIGS.items() %}
+                    <ul class="vertical-includes small text-muted mt-2 mb-0 ps-3" data-vertical="{{ slug }}" hidden>
+                        {% for line in cfg.includes %}<li>{{ line }}</li>{% endfor %}
+                    </ul>
+                    {% endfor %}
+                    <script>
+                    (function () {
+                        const sel = document.getElementById('verticalSelect');
+                        function show() {
+                            document.querySelectorAll('.vertical-includes').forEach(function (ul) {
+                                ul.hidden = ul.dataset.vertical !== sel.value;
+                            });
+                        }
+                        sel.addEventListener('change', show); show();
+                    })();
+                    </script>
                 </div>
                 <div class="mb-2">
                     <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">

@@ -12,10 +12,16 @@ from models import (Campaign, CampaignItem, InventoryItem, Invoice, ItemVariant,
 from services import billing, stock
 from services import orders as order_service
 from tests import daraja_fakes
-from tests.conftest import on_mysql
+from tests.conftest import set_vertical, on_mysql
 from verticals.institution import service as institution
 
 D = Decimal
+
+
+@pytest.fixture(autouse=True)
+def _institution_vertical(app):
+    """acme runs as a institution here: its routes 404 for other verticals."""
+    set_vertical(app.acme_id, "institution")
 
 
 @pytest.fixture

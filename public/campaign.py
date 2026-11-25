@@ -13,7 +13,7 @@ from flask import abort, g, jsonify, render_template, request
 
 from models import Campaign, InventoryItem, ItemVariant, db
 from public.limits import limiter
-from public.routes import _error, public_bp, public_tenant
+from public.routes import _error, public_bp, public_feature, public_tenant
 from services import stock
 from services import orders as order_service
 from verticals.institution import service as institution
@@ -46,6 +46,7 @@ def _items(campaign):
 @public_bp.route("/<slug>/c/<campaign_slug>", methods=["GET"])
 @limiter.limit("60 per minute")
 @public_tenant
+@public_feature("campaigns")
 def campaign_page(slug, campaign_slug):
     campaign = _campaign(campaign_slug)
     return render_template("public/campaign.html", business=g.public_business_name, slug=slug,
@@ -55,6 +56,7 @@ def campaign_page(slug, campaign_slug):
 @public_bp.route("/<slug>/c/<campaign_slug>/lookup", methods=["POST"])
 @limiter.limit("10 per minute")
 @public_tenant
+@public_feature("campaigns")
 def campaign_lookup(slug, campaign_slug):
     campaign = _campaign(campaign_slug)
     body = request.get_json(silent=True) or {}
@@ -68,6 +70,7 @@ def campaign_lookup(slug, campaign_slug):
 @public_bp.route("/<slug>/c/<campaign_slug>/order", methods=["POST"])
 @limiter.limit("5 per minute")
 @public_tenant
+@public_feature("campaigns")
 def campaign_order(slug, campaign_slug):
     campaign = _campaign(campaign_slug)
     body = request.get_json(silent=True) or {}

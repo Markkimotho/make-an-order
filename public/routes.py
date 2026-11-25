@@ -51,7 +51,7 @@ def _business(slug):
         # MySQL compares case-insensitively; only the exact slug is this page.
         if tenant is None or tenant.slug != slug or not tenant.is_active_subscription():
             return None
-        return tenant.id, tenant.name
+        return tenant.id, tenant.name, tenant.vertical
 
 
 def public_tenant(view):
@@ -61,10 +61,25 @@ def public_tenant(view):
         found = _business(slug)
         if found is None:
             abort(404)
-        g.public_tenant_id, g.public_business_name = found
+        g.public_tenant_id, g.public_business_name, g.public_vertical = found
         with tenant_scope(found[0]):
             return view(slug, *args, **kwargs)
     return wrapped
+
+
+def public_feature(name):
+    """Inner decorator (below @public_tenant): 404 unless the business's
+    vertical has the feature, so a duka link never works for a school."""
+    from verticals.features import features_for
+
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if name not in features_for(g.get("public_vertical")):
+                abort(404)
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
 
 
 @public_bp.after_request
