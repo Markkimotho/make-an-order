@@ -287,3 +287,64 @@ def test_institution_landing_panel(app, login_as):
     page = login_as("admin", email="head@moi.ac.ke", tenant_id=school_id).get("/dashboard")
     html = page.get_data(as_text=True)
     assert "Campaigns" in html and "Hand over" in html and "Pharmacy today" not in html
+
+
+# --- review fixes (Codex, step 5) ----------------------------------------------------
+
+def test_reallocating_a_members_payment_moves_its_owner(app, school, client):
+    place(client, school)
+    amina = Member(member_ref="F1/030", name="Amina Yusuf")
+    db.session.add(amina)
+    db.session.flush()
+    other = billing.create_invoice(total=D("100"), kind="sale", member_id=amina.id)
+    db.session.commit()
+    payment = billing.record_payment(method="mpesa_c2b", amount=D("200"), receipt="SLX0000010",
+                                     bill_ref="F1023")
+    db.session.commit()
+    billing.reallocate(payment, db.session.get(Invoice, other.id))
+    db.session.commit()
+    payment = db.session.get(Payment, payment.id)
+    assert payment.member_id == amina.id
+    brian_invoice = Invoice.query.filter_by(member_id=school["member"]).one()
+    assert brian_invoice.amount_paid == 0                    # leftover is Amina's, not Brian's
+    assert payment.unallocated_amount == D("100.00")
+
+
+def test_closing_a_campaign_by_hand_settles_it(app, school, client, login_as):
+    place(client, school)
+    order_id, invoice_id = Order.query.one().id, Invoice.query.one().id
+    pay(invoice_id, "500", "SLX0000011")
+    order_service.release_expired(datetime.utcnow() + timedelta(hours=1))
+    r = login_as("admin").put(f"/institution/campaigns/{school['camp']}", json={"status": "closed"})
+    assert r.status_code == 200 and r.get_json()["status"] == "closed"
+    assert db.session.get(Order, order_id).fulfillment_status == "released"
+    assert db.session.get(ItemVariant, school["s28"]).stock == 10
+
+
+def test_failed_pickup_sms_gets_a_new_code(app, school, client, sms_outbox, login_as):
+    place(client, school)
+    sms_outbox.fail = True
+    pay(Invoice.query.one().id, "1100", "SLX0000012")
+    assert institution.issue_pickup_codes() == 1
+    first_hash = Order.query.one().pickup_code_hash
+    assert {m.status for m in SmsMessage.query} == {"failed"}
+    sms_outbox.fail = False
+    assert institution.issue_pickup_codes() == 1                  # retried with a new code
+    assert Order.query.one().pickup_code_hash != first_hash
+    code = sms_outbox.sent[-1]["message"].split("Pickup code ")[1][:6]
+    desk = login_as("cashier")
+    r = desk.post(f"/institution/orders/{Order.query.one().id}/pickup-code")
+    assert r.status_code == 200                                    # staff resend rotates again
+    newer = sms_outbox.sent[-1]["message"].split("Pickup code ")[1][:6]
+    if code != newer:                                              # the old code stops working
+        assert desk.post("/institution/pickup",
+                         json={"member_ref": "F1023", "code": code}).status_code == 404
+    assert desk.post("/institution/pickup", json={"member_ref": "F1023", "code": newer}).status_code == 200
+
+
+def test_downgrade_refuses_before_dropping_member_data(app, school):
+    from flask_migrate import downgrade
+    from sqlalchemy import inspect
+    with pytest.raises(SystemExit):              # flask_migrate reports the RuntimeError, exits 1
+        downgrade(revision="0009_distributor")
+    assert "members" in inspect(db.engine).get_table_names()

@@ -150,42 +150,88 @@ def _code_hash(order_id, code):
     return hmac.new(key, f"pickup:{order_id}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
+def _send_code(order, code):
+    """Text the code to the member's phones. The dedupe key carries the
+    code's hash, so a rotated code is a new message."""
+    member = db.session.get(Member, order.member_id) if order.member_id else None
+    if member is None:
+        return []
+    body = (f"{masked(member)}: {order.order_number} is paid. Pickup code {code}. "
+            "Show it when collecting.")
+    hidden = body.replace(code, "******")
+    return [sms_service.send(phone, body, "pickup_code",
+                             dedupe_key=f"pickup:{order.id}:{order.pickup_code_hash[:12]}:{phone}",
+                             stored_body=hidden)
+            for phone in filter(None, dict.fromkeys([member.guardian_phone,
+                                                     member.secondary_phone]))]
+
+
+def _new_code(order):
+    code = f"{secrets.randbelow(10 ** 6):06d}"
+    order.pickup_code_hash = _code_hash(order.id, code)
+    return code
+
+
+def _locked_paid(order):
+    """Lock order then invoice (billing, order, invoice: the order every
+    path uses). Returns (order, paid?)."""
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    order = order_service.lock_order(order)
+    invoice = order_service.invoice_for(order)
+    paid = invoice is not None and billing.recompute(invoice).status == "paid"
+    return order, paid
+
+
 def issue_pickup_codes(order_id=None):
     """Send a code for every campaign order (or just ``order_id``) whose
-    invoice is now fully paid and has none yet. Run by the sweep and by the
-    pay page's status poll. Commits per order. Returns how many were issued."""
+    invoice is now fully paid and has none yet, and send a new code where
+    every message carrying the current one failed. Run by the sweep and by
+    the pay page's status poll. Commits per order. Returns how many codes
+    went out."""
     issued = 0
-    q = Order.query.filter(Order.campaign_id.isnot(None), Order.pickup_code_hash.is_(None),
-                           Order.picked_up_at.is_(None),
+    q = Order.query.filter(Order.campaign_id.isnot(None), Order.picked_up_at.is_(None),
                            Order.fulfillment_status.in_(("pending", "ready")))
     if order_id is not None:
         q = q.filter(Order.id == order_id)
-    candidates = q.order_by(Order.id).all()
-    for order in candidates:
-        invoice = order_service.invoice_for(order)
-        if invoice is None or billing.recompute(invoice).status != "paid":
+    for order in q.order_by(Order.id).all():
+        if order.pickup_code_hash is not None and not _code_undelivered(order):
+            continue
+        order, paid = _locked_paid(order)
+        if not paid or order.picked_up_at is not None:
             db.session.commit()
             continue
-        order = order_service.lock_order(order)
-        if order.pickup_code_hash is not None:
+        if order.pickup_code_hash is not None and not _code_undelivered(order):
             db.session.commit()
             continue
-        code = f"{secrets.randbelow(10 ** 6):06d}"
-        order.pickup_code_hash = _code_hash(order.id, code)
+        code = _new_code(order)
         order.fulfillment_status = "ready"
         order.reserved_until = None
-        member = db.session.get(Member, order.member_id) if order.member_id else None
         db.session.commit()
+        _send_code(order, code)
         issued += 1
-        if member is None:
-            continue
-        body = (f"{masked(member)}: {order.order_number} is paid. Pickup code {code}. "
-                "Show it when collecting.")
-        hidden = body.replace(code, "******")
-        for phone in filter(None, dict.fromkeys([member.guardian_phone, member.secondary_phone])):
-            sms_service.send(phone, body, "pickup_code",
-                             dedupe_key=f"pickup:{order.id}:{phone}", stored_body=hidden)
     return issued
+
+
+def _code_undelivered(order):
+    """Every message carrying the order's current code failed or was skipped."""
+    from models import SmsMessage
+    rows = SmsMessage.query.filter(
+        SmsMessage.dedupe_key.like(f"pickup:{order.id}:{order.pickup_code_hash[:12]}:%")).all()
+    return bool(rows) and all(r.status in ("failed", "skipped") for r in rows)
+
+
+def rotate_pickup_code(order):
+    """Staff resend: a new code replaces the old one (which stops working)."""
+    order, paid = _locked_paid(order)
+    if order.picked_up_at is not None:
+        raise InstitutionError("already collected")
+    if not paid:
+        raise InstitutionError("not fully paid")
+    code = _new_code(order)
+    order.fulfillment_status = "ready"
+    db.session.commit()
+    return _send_code(order, code)
 
 
 def collect(member_ref, code, user_id):
@@ -220,22 +266,32 @@ def collect(member_ref, code, user_id):
 
 # --- closing ---------------------------------------------------------------------------
 
+def close_campaign(campaign):
+    """Close a campaign: unpaid and part-paid orders give their stock back;
+    money paid stays as the member's credit. Fully paid orders are kept.
+    Used for both a manual close and the scheduled one. Commits."""
+    released = 0
+    for order in Order.query.filter_by(campaign_id=campaign.id, fulfillment_status="pending").all():
+        order, paid = _locked_paid(order)
+        if paid or order.fulfillment_status != "pending":
+            db.session.commit()
+            continue
+        if order_service.release(order, reason="campaign_closed", force=True):
+            released += 1
+        db.session.commit()
+    campaign.status = "closed"
+    db.session.commit()
+    return released
+
+
 def close_due_campaigns(now=None):
-    """Close campaigns past closes_at: unpaid and part-paid orders give their
-    stock back; money paid stays as the member's credit. Commits."""
+    """Close campaigns past closes_at (the sweep). Returns counts."""
     now = now or datetime.utcnow()
     counts = {"closed": 0, "released": 0}
     for campaign in Campaign.query.filter(Campaign.status == "open", Campaign.closes_at.isnot(None),
                                           Campaign.closes_at <= now).all():
-        for order in Order.query.filter_by(campaign_id=campaign.id, fulfillment_status="pending"):
-            invoice = order_service.invoice_for(order)
-            if invoice is not None and billing.recompute(invoice).status == "paid":
-                continue
-            if order_service.release(order, reason="campaign_closed", force=True):
-                counts["released"] += 1
-        campaign.status = "closed"
+        counts["released"] += close_campaign(campaign)
         counts["closed"] += 1
-        db.session.commit()
     return counts
 
 

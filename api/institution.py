@@ -6,6 +6,7 @@
 * ``PUT  /institution/campaigns/<id>``              edit, open, close
 * ``GET  /institution/campaigns/<id>/report``       paid vs pending, sizes, packing list
 * ``POST /institution/pickup``                      ``{"member_ref", "code"}``: hand over
+* ``POST /institution/orders/<id>/pickup-code``     new code (old one stops working), resent
 """
 import logging
 import re
@@ -16,7 +17,7 @@ from flask import Blueprint, jsonify, request, session
 from sqlalchemy.exc import IntegrityError
 
 from auth.auth_middleware import admin_api_required, cashier_api_required
-from models import CAMPAIGN_STATUSES, Campaign, CampaignItem, InventoryItem, Member, db
+from models import CAMPAIGN_STATUSES, Campaign, CampaignItem, InventoryItem, Member, Order, db
 from services import audit_service
 from services.phone import InvalidPhone
 from verticals.institution import service as institution
@@ -185,8 +186,12 @@ def edit_campaign(campaign_id):
     if campaign is None:
         return _error("campaign not found", 404)
     old = campaign.to_dict()
+    body = request.get_json(silent=True) or {}
+    closing = body.get("status") == "closed" and campaign.status != "closed"
+    if closing:
+        body = {k: v for k, v in body.items() if k != "status"}
     try:
-        _apply_campaign(campaign, request.get_json(silent=True) or {})
+        _apply_campaign(campaign, body)
         db.session.flush()
     except ValueError as e:
         db.session.rollback()
@@ -197,6 +202,13 @@ def edit_campaign(campaign_id):
     audit_service.log(session.get("user_id"), "campaign.edit", "Campaign", campaign.id, old,
                       campaign.to_dict())
     db.session.commit()
+    if closing:
+        # The same settlement as the scheduled close: unpaid and part-paid
+        # orders give stock back, money stays as the member's credit.
+        released = institution.close_campaign(campaign)
+        audit_service.log(session.get("user_id"), "campaign.close", "Campaign", campaign.id,
+                          None, {"released_orders": released})
+        db.session.commit()
     return jsonify(campaign.to_dict()), 200
 
 
@@ -223,3 +235,20 @@ def pickup():
                       {"order_number": order.order_number})
     db.session.commit()
     return jsonify({"order": order.to_dict()}), 200
+
+
+@institution_bp.route("/orders/<int:order_id>/pickup-code", methods=["POST"])
+@cashier_api_required
+def resend_pickup_code(order_id):
+    order = db.session.get(Order, order_id)
+    if order is None or order.campaign_id is None:
+        return _error("order not found", 404)
+    try:
+        messages = institution.rotate_pickup_code(order)
+    except institution.InstitutionError as e:
+        db.session.rollback()
+        return _error(str(e), 409)
+    audit_service.log(session.get("user_id"), "order.pickup_code_rotated", "Order", order_id, None,
+                      {"sent": [m.status for m in messages]})
+    db.session.commit()
+    return jsonify({"sent": [m.to_dict() for m in messages]}), 200

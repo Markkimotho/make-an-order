@@ -94,6 +94,12 @@ def upgrade():
 
 
 def downgrade():
+    # Refuse before any schema change (MySQL DDL cannot be rolled back):
+    # dropping these tables would destroy members, campaigns and who paid.
+    bind = op.get_bind()
+    for table in ("members", "campaigns"):
+        if bind.execute(sa.select(sa.func.count()).select_from(sa.table(table))).scalar():
+            raise RuntimeError(f"{table} has rows; export them before downgrading")
     for table in ("payments", "invoices"):
         # MySQL refuses to drop an index a foreign key still uses: FK first.
         with op.batch_alter_table(table) as batch:

@@ -163,6 +163,11 @@ def update_order_status(id):
         if not order:
             return jsonify({'error': 'Order not found'}), 404
 
+        # Goods already handed over come back through a return at the
+        # counter, not by flipping the order's status.
+        if status in FINAL_STATUSES and order.fulfillment_status == 'collected':
+            return jsonify({'error': 'This order was collected; return the goods at the '
+                                     'counter instead'}), 409
         # Cancelling/refunding puts the stock back (and voids the invoice of
         # an order placed through services/orders.py).
         if status in FINAL_STATUSES and order.status not in FINAL_STATUSES:

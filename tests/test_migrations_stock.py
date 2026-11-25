@@ -86,3 +86,18 @@ def test_downgrade_restores_soonest_stocked_batch(legacy):
         ("Amoxil", "AMX-1", "2026-12-01"), ("Panadol", "LEGACY", None)]
     tables = set(db.inspect(db.engine).get_table_names())
     assert {"batches", "item_variants", "line_batches"}.isdisjoint(tables)
+
+
+def test_0007_keeps_quarantine_flags_from_an_earlier_0005(legacy):
+    """Databases built while 0005 still created batches.quarantined keep
+    the column and its values through 0007."""
+    import sqlalchemy as sa
+    from alembic import op  # noqa: F401
+    seed_items(("Amoxil", 4, "AMX-7", date(2027, 3, 1), 12))
+    upgrade(revision="0006_sms_outbox")
+    with db.engine.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE batches ADD COLUMN quarantined BOOLEAN NOT NULL DEFAULT 0")
+        conn.exec_driver_sql("UPDATE batches SET quarantined = 1")
+    upgrade()
+    assert fetch("SELECT quarantined FROM batches") in ([(1,)], [(True,)])
+    assert sa.inspect(db.engine).get_columns("batches")

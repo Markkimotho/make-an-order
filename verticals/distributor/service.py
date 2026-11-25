@@ -24,14 +24,7 @@ from services.phone import InvalidPhone, normalize_ke_phone
 AGING_BUCKETS = ("not_due", "0_7", "8_14", "15_plus")
 
 
-class CreditCeiling(order_service.OrderError):
-    def __init__(self, customer, owed, wanted):
-        self.limit = money(customer.credit_limit)
-        self.owed = money(owed)
-        self.wanted = money(wanted)
-        self.available = max(self.limit - self.owed, Decimal("0"))
-        super().__init__(f"This order (KES {self.wanted:,.2f}) is over {customer.name}'s credit: "
-                         f"KES {self.available:,.2f} of {self.limit:,.2f} left. Pay now instead.")
+CreditCeiling = order_service.CreditCeiling      # raised by services/orders.create_order
 
 
 def lock_customer(customer_id):
@@ -89,13 +82,8 @@ def place_order(customer_id, cart, *, pay_now, channel="staff", user_id=None, no
     if customer is None:
         raise order_service.OrderError("customer not found")
     lines = lines_for(customer, cart)
-    total = sum((money(l.unit_price) * l.quantity for l in lines), Decimal("0"))
-    due = None
-    if not pay_now:
-        owed = billing.customer_exposure(customer.id)
-        if owed + total > money(customer.credit_limit):
-            raise CreditCeiling(customer, owed, total)
-        due = billing.credit_due_date(customer, today_nairobi(now))
+    # create_order checks the ceiling for credit orders (same locks, held).
+    due = None if pay_now else billing.credit_due_date(customer, today_nairobi(now))
     order, invoice = order_service.create_order(
         lines, customer_id=customer.id, channel=channel, pay_now=pay_now, due_date=due,
         user_id=user_id, now=now, delivery_address=delivery_address)
@@ -122,7 +110,10 @@ def record_containers(customer_id, item_id, delta, note=None, user_id=None):
     item = db.session.get(InventoryItem, item_id)
     if item is None or not item.is_returnable_container:
         raise order_service.OrderError("not a returnable container item")
-    if db.session.get(Customer, customer_id) is None:
+    # Serialise with other returns and with orders for this duka, so two
+    # returns of its last cylinder cannot both pass the balance check.
+    lock_tenant()
+    if lock_customer(customer_id) is None:
         raise order_service.OrderError("customer not found")
     delta = int(delta)
     if delta == 0:

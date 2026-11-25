@@ -41,6 +41,18 @@ class OrderError(ValueError):
     """An order that cannot be placed or changed."""
 
 
+class CreditCeiling(OrderError):
+    """A credit order would take the customer past their credit limit."""
+
+    def __init__(self, customer, owed, wanted):
+        self.limit = money(customer.credit_limit)
+        self.owed = money(owed)
+        self.wanted = money(wanted)
+        self.available = max(self.limit - self.owed, Decimal("0"))
+        super().__init__(f"This order (KES {self.wanted:,.2f}) is over {customer.name}'s credit: "
+                         f"KES {self.available:,.2f} of {self.limit:,.2f} left. Pay now instead.")
+
+
 @dataclass
 class Line:
     item: InventoryItem
@@ -89,6 +101,18 @@ def create_order(lines, *, customer_id=None, channel="staff", pay_now, due_date=
         raise OrderError("order total must be greater than zero")
 
     lock_tenant()
+    if not pay_now:
+        # Every credit order, whatever screen it comes from, passes the
+        # ceiling: billing lock, then the customer's row, then owed + order.
+        if customer_id is None:
+            raise OrderError("a credit order needs a customer")
+        from models import Customer
+        customer = db.session.execute(select(Customer).where(Customer.id == customer_id)
+                                      .with_for_update()
+                                      .execution_options(populate_existing=True)).scalar_one()
+        owed = billing.customer_exposure(customer_id)
+        if owed + total > money(customer.credit_limit):
+            raise CreditCeiling(customer, owed, total)
     order = Order(customer_id=customer_id, item=_summary(lines), amount=total, status="pending",
                   order_number=_next_number(), channel=channel, fulfillment_status="pending",
                   delivery_address=delivery_address, prescription_id=prescription_id,
@@ -238,6 +262,28 @@ def release_expired(now=None):
             counts["released"] += 1
         else:
             counts["kept_paid"] += 1
+        db.session.commit()
+    # Orders whose money went away (a reversed payment): an unpaid pay-now
+    # order must be held again, or the sweep would never release it; a
+    # "ready" order goes back to pending and its pickup code stops working.
+    counts["re_held"] = 0
+    for order in Order.query.filter(Order.fulfillment_status.in_(("pending", "ready")),
+                                    Order.reserved_until.is_(None)).order_by(Order.id).all():
+        invoice = invoice_for(order)
+        if invoice is None or invoice.kind != "sale" or invoice.status == "paid":
+            continue                  # credit orders are not held; paid ones keep their stock
+        lock_tenant()
+        order = lock_order(order)
+        invoice = billing.recompute(invoice)
+        if invoice.status == "paid" or order.fulfillment_status not in ("pending", "ready"):
+            db.session.commit()
+            continue
+        if order.fulfillment_status == "ready":
+            order.fulfillment_status = "pending"
+            order.pickup_code_hash = None
+        if money(invoice.amount_paid) <= 0:
+            order.reserved_until = now + HOLD
+            counts["re_held"] += 1
         db.session.commit()
     for order in Order.query.filter(Order.fulfillment_status == "released").order_by(Order.id):
         invoice = invoice_for(order)

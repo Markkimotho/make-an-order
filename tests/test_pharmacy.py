@@ -374,3 +374,33 @@ def test_landing_page_shows_each_vertical_panel_to_staff(app, login_as, other_te
     assert "Pharmacy today" not in login_as("cashier").get("/dashboard").get_data(as_text=True)
     page = login_as("admin", email="boss@globex.co", tenant_id=other_tenant).get("/dashboard")
     assert "Deni and collections" in page.get_data(as_text=True)
+
+
+def test_items_with_register_entries_cannot_be_deleted(app, morphine, login_as):
+    r = login_as("superuser").delete(f"/inventory/items/{morphine}")
+    assert r.status_code == 409 and "register" in r.get_json()["error"]
+    assert len(entries(morphine)) == 2
+
+
+def test_one_refill_order_per_cycle_and_hand_over_counts_it(app, chronic, client):
+    dispense_cycle(chronic)                                  # first fill; 1 refill left
+    rx = db.session.get(Prescription, chronic["rx"])
+    url = f"/o/acme/r/{rx.refill_token}/order"
+    r = client.post(url, json={"fulfilment": "pickup"})
+    assert r.status_code == 201
+    invoice = Invoice.query.one()
+    from services import billing
+    billing.record_payment(method="mpesa_c2b", amount=invoice.total, receipt="SRF0000001",
+                           invoice=invoice)
+    db.session.commit()
+    again = client.post(url, json={"fulfilment": "pickup"})
+    assert again.status_code == 409 and "already ordered" in again.get_json()["error"]
+    stock_before = db.session.get(InventoryItem, chronic["item"]).stock
+    order_id = Order.query.one().id
+    r = chronic["client"].post(f"/pharmacy/orders/{order_id}/hand-over")
+    assert r.status_code == 200, r.get_json()
+    db.session.expire_all()
+    rx = db.session.get(Prescription, chronic["rx"])
+    assert (rx.refills_remaining, rx.refill_status) == (0, "ended")
+    assert db.session.get(InventoryItem, chronic["item"]).stock == stock_before   # not taken twice
+    assert client.post(url, json={"fulfilment": "pickup"}).status_code == 409   # none left

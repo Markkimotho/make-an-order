@@ -20,9 +20,13 @@ depends_on = None
 
 
 def upgrade():
-    with op.batch_alter_table("batches") as batch:
-        batch.add_column(sa.Column("quarantined", sa.Boolean(), nullable=False,
-                                   server_default=sa.false()))
+    # Databases built by an earlier 0005 already have the column (and
+    # quarantined batches in it): keep it, never re-add or reset it.
+    columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("batches")}
+    if "quarantined" not in columns:
+        with op.batch_alter_table("batches") as batch:
+            batch.add_column(sa.Column("quarantined", sa.Boolean(), nullable=False,
+                                       server_default=sa.false()))
     with op.batch_alter_table("orders") as batch:
         batch.alter_column("customer_id", existing_type=sa.Integer(), nullable=True)
         batch.add_column(sa.Column("order_number", sa.String(length=16), nullable=True))
@@ -61,6 +65,12 @@ def upgrade():
 
 def downgrade():
     bind = op.get_bind()
+    # Refuse before any schema change: MySQL DDL cannot be rolled back.
+    orders_t = sa.table("orders", sa.column("customer_id", sa.Integer))
+    if bind.execute(sa.select(sa.func.count()).select_from(orders_t)
+                    .where(orders_t.c.customer_id.is_(None))).scalar():
+        raise RuntimeError("orders without a customer (member orders) exist; "
+                           "they cannot go back to the old schema")
     with op.batch_alter_table("order_items") as batch:
         batch.drop_constraint("fk_order_items_variant_id_item_variants", type_="foreignkey")
         batch.drop_column("variant_id")
@@ -73,11 +83,6 @@ def downgrade():
                        "reserved_until", "delivery_address", "fulfillment_status", "channel",
                        "order_number"):
             batch.drop_column(column)
-    orders = sa.table("orders", sa.column("customer_id", sa.Integer))
-    if bind.execute(sa.select(sa.func.count()).select_from(orders)
-                    .where(orders.c.customer_id.is_(None))).scalar():
-        raise RuntimeError("orders without a customer (member orders) exist; "
-                           "they cannot go back to the old schema")
     with op.batch_alter_table("orders") as batch:
         batch.alter_column("customer_id", existing_type=sa.Integer(), nullable=False)
     with op.batch_alter_table("batches") as batch:

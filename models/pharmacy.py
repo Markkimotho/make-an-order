@@ -27,7 +27,8 @@ class ControlledDrugEntry(TenantMixin, db.Model):
     )
 
     id                 = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    inventory_item_id  = db.Column(db.Integer, db.ForeignKey("inventory_items.id", ondelete="CASCADE"),
+    # No cascade: the register outlives the item (deleting it is refused).
+    inventory_item_id  = db.Column(db.Integer, db.ForeignKey("inventory_items.id"),
                                    nullable=False, index=True)
     seq                = db.Column(db.Integer, nullable=False)
     entry_type         = db.Column(db.String(16), nullable=False)

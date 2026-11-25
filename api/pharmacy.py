@@ -13,6 +13,7 @@ Endpoints
 * ``GET  /pharmacy/dashboard``                     — expiry radar, refill schedule, call-backs
 * ``GET  /pharmacy/register``                      — controlled-drug register (JSON)
 * ``GET  /pharmacy/register.pdf``                  — the register for a PPB inspection
+* ``POST /pharmacy/orders/<id>/hand-over``         — a paid refill order collected or delivered
 
 All routes require pharmacist role or higher.
 """
@@ -26,7 +27,7 @@ from flask import Blueprint, Response, jsonify, request, session
 
 from auth.auth_middleware import pharmacist_api_required
 from models import (
-    db, Customer, InventoryItem, Prescription, PrescriptionItem, Tenant,
+    db, Customer, InventoryItem, Order, Prescription, PrescriptionItem, Tenant,
     Transaction, TransactionItem, TXN_OPEN,
 )
 from auth.tenancy import current_tenant_id
@@ -349,3 +350,22 @@ def register_pdf_view():
     db.session.commit()
     return Response(pdf, mimetype='application/pdf', headers={
         'Content-Disposition': f'attachment; filename="controlled-register-{business.slug}.pdf"'})
+
+
+@pharmacy_bp.route('/orders/<int:order_id>/hand-over', methods=['POST'])
+@pharmacist_api_required
+def hand_over_refill(order_id):
+    """A paid refill order goes to the patient: the refill is counted and the
+    next due date set, without ringing the stock up again at the till."""
+    order = db.session.get(Order, order_id)
+    if order is None:
+        return jsonify({'error': 'Order not found'}), 404
+    try:
+        rx = pharmacy.hand_over_refill(order, session.get('user_id'))
+    except pharmacy.PharmacyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    audit_service.log(session.get('user_id'), 'prescription.refill_handed_over', 'Order',
+                      order_id, None, {'prescription_id': rx.id})
+    db.session.commit()
+    return jsonify({'prescription': rx.to_dict()}), 200

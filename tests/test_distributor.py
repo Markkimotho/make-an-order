@@ -253,3 +253,31 @@ def test_wrong_duka_links_are_404(app, dist, client, other_tenant):
     with unscoped():
         globex = db.session.get(Tenant, other_tenant).slug
     assert client.get(f"/o/{globex}/d/{dist['token']}").status_code == 404
+
+
+@pytest.mark.skipif(not on_mysql(), reason="row locks need MySQL")
+def test_two_returns_of_the_last_cylinder_at_once(app, dist):
+    order(dist, 1, item="gas", pay_now=True)
+    db.session.commit()
+    results, barrier = [], threading.Barrier(2)
+
+    def worker():
+        with app.app_context(), tenant_scope(app.acme_id):
+            barrier.wait()
+            try:
+                distributor.record_containers(dist["duka"], dist["gas"], -1)
+                db.session.commit()
+                results.append("ok")
+            except order_service.OrderError:
+                db.session.rollback()
+                results.append("refused")
+            finally:
+                db.session.remove()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == ["ok", "refused"]
+    assert distributor.container_balance(dist["duka"], dist["gas"]) == 0

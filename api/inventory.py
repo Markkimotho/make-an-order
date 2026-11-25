@@ -257,11 +257,17 @@ def delete_item(id):
     if not item:
         return jsonify({'error': 'Item not found'}), 404
     name = item.name
+    if controlled.ControlledDrugEntry.query.filter_by(inventory_item_id=item.id).first():
+        return jsonify({'error': f'"{name}" has controlled-drug register entries; the '
+                                 'register must be kept, so it cannot be deleted'}), 409
     try:
         db.session.delete(item)
         db.session.commit()
         logger.info(f"Inventory item '{name}' (id={id}) deleted.")
         return jsonify({'message': f'"{name}" removed from inventory'}), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f'"{name}" has records that must be kept'}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error deleting inventory item {id}: {e}", exc_info=True)
@@ -379,6 +385,9 @@ def place_inventory_order():
              for item, qty in resolved],
             customer_id=customer.id, channel='staff', pay_now=False,
             due_date=billing.credit_due_date(customer, today_nairobi()), user_id=uid)
+    except order_service.CreditCeiling as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'available': float(e.available)}), 409
     except (order_service.OrderError, stock.StockError, billing.BillingError) as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400

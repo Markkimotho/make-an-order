@@ -77,9 +77,10 @@ def upgrade():
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"],
                                 name="fk_controlled_drug_ledger_tenant_id_tenants",
                                 ondelete="CASCADE"),
+        # No cascade: a drug with register entries cannot be deleted (the
+        # register must outlive it; database cascades skip the ORM guard).
         sa.ForeignKeyConstraint(["inventory_item_id"], ["inventory_items.id"],
-                                name="fk_controlled_drug_ledger_inventory_item_id_inventory_items",
-                                ondelete="CASCADE"),
+                                name="fk_controlled_drug_ledger_inventory_item_id_inventory_items"),
         sa.ForeignKeyConstraint(["batch_id"], ["batches.id"],
                                 name="fk_controlled_drug_ledger_batch_id_batches",
                                 ondelete="SET NULL"),

@@ -80,13 +80,22 @@ def refill_order(slug, refill_token):
     if pharmacy.has_controlled(rx):
         return _error("This prescription has a controlled medicine. Ask the pharmacist to "
                       "call you.", 409)
-    if rx.refill_status != "active":
+    # One order per cycle, decided under the prescription's lock so two
+    # taps (or two phones) cannot both order the same refill.
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    rx = pharmacy.lock_prescription(rx)
+    if not pharmacy.refills_left(rx):
+        db.session.rollback()
         return _error("This prescription has no refills left. Contact the pharmacy.", 409)
     pending = pharmacy.open_refill_order(rx)
     if pending is not None:
         invoice = order_service.invoice_for(pending)
+        db.session.rollback()
         if invoice is not None and invoice.status in ("open", "partial"):
             return jsonify({"pay_url": _pay_path(slug, invoice), "order": pending.order_number}), 200
+        return _error("This refill is already ordered and paid; the pharmacy is preparing it.",
+                      409)
     body = request.get_json(silent=True) or request.form
     fulfilment = (body.get("fulfilment") or "pickup").strip()
     address = (body.get("address") or "").strip()

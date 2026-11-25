@@ -377,7 +377,7 @@ def test_shop_order_over_stock_is_refused_whole(app, admin):
     a, b = make_item("A"), make_item("B")
     stock.receive(a, 5)
     stock.receive(b, 1)
-    cust = Customer(name="Duka", phone_number="0712000666", code="D2")
+    cust = Customer(name="Duka", phone_number="0712000666", code="D2", credit_limit=Decimal("10000"))
     db.session.add(cust)
     db.session.flush()
     a, b, cust_id = a.id, b.id, cust.id

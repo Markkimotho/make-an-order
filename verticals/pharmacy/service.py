@@ -123,12 +123,61 @@ def has_controlled(rx):
     return False
 
 
+OPEN_REFILL = ("pending", "ready", "dispatched", "restock_needed")
+
+
 def open_refill_order(rx):
-    """A refill order for this prescription still waiting for payment."""
+    """The refill order for this prescription's current cycle, if any: one
+    not yet handed over, released or cancelled. A cycle has one order."""
     return (Order.query.filter(Order.prescription_id == rx.id,
-                               Order.fulfillment_status == "pending",
-                               Order.reserved_until.isnot(None))
+                               Order.fulfillment_status.in_(OPEN_REFILL))
             .order_by(Order.id.desc()).first())
+
+
+def lock_prescription(rx):
+    from sqlalchemy import select
+    return db.session.execute(select(Prescription).where(Prescription.id == rx.id)
+                              .with_for_update().execution_options(populate_existing=True)
+                              ).scalar_one()
+
+
+def refills_left(rx):
+    """Can another cycle start? The first fill is always allowed."""
+    if not rx.is_chronic or rx.refill_status != "active":
+        return False
+    return (rx.last_dispensed_at is None or rx.refills_remaining is None
+            or rx.refills_remaining > 0)
+
+
+def hand_over_refill(order, user_id=None, now=None):
+    """A paid refill order handed to the patient (or dispatched): count the
+    cycle the way a counter dispense does, without taking stock again (the
+    order took it). Returns the prescription."""
+    from services import billing
+    from services import orders as order_service
+    from services.billing.invoices import lock_tenant
+    lock_tenant()
+    order = order_service.lock_order(order)
+    if order.prescription_id is None:
+        raise PharmacyError("not a refill order")
+    if order.fulfillment_status not in ("pending", "ready", "dispatched"):
+        raise PharmacyError(f"order is {order.fulfillment_status}")
+    invoice = order_service.invoice_for(order)
+    if invoice is None or billing.recompute(invoice).status != "paid":
+        raise PharmacyError("the refill is not paid")
+    rx = lock_prescription(db.session.get(Prescription, order.prescription_id))
+    if rx.last_dispensed_at is not None:
+        start_new_cycle(rx)              # counts the refill; refuses when none are left
+    for it in rx.items:
+        it.quantity_dispensed = it.quantity_prescribed
+        it.is_dispensed = True
+    mark_dispensed(rx, now)
+    order.fulfillment_status = "collected"
+    order.picked_up_at = now or datetime.utcnow()
+    order.picked_up_by = user_id
+    order.reserved_until = None
+    db.session.flush()
+    return rx
 
 
 def expiry_radar(today=None):

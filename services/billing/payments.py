@@ -222,6 +222,7 @@ def reallocate(payment, to_invoice, user_id=None):
     _void_allocations(payment, user_id)
     payment.unallocated_amount = money(payment.amount)
     payment.customer_id = to_invoice.customer_id
+    payment.member_id = to_invoice.member_id          # the money now belongs to that payer
     allocate(payment, to_invoice)
     audit_service.log(user_id, "payment.reallocate", "Payment", payment.id,
                       {"invoices": before}, {"invoice": to_invoice.id})

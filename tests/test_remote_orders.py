@@ -105,7 +105,7 @@ def test_paid_order_is_never_released(app, shop):
                            invoice=db.session.get(Invoice, invoice_id))
     db.session.commit()
     counts = order_service.release_expired(NOW + timedelta(minutes=30))
-    assert counts == {"released": 0, "kept_paid": 1, "restock_needed": 0}
+    assert counts == {"released": 0, "kept_paid": 1, "restock_needed": 0, "re_held": 0}
     assert db.session.get(Order, order_id).reserved_until is None
     assert batches_of(shop["item"]) == {"A": 0, "B": 8}
 
@@ -229,3 +229,43 @@ def test_two_sweeps_release_once(app, shop):
     assert sorted(results) == [0, 1]
     db.session.expire_all()
     assert batches_of(shop["item"]) == {"A": 3, "B": 10}
+
+
+# --- review fixes (Codex, step 5) ----------------------------------------------------
+
+def test_every_credit_order_passes_the_ceiling_including_the_shop_screen(app, shop, login_as):
+    broke = Customer(name="No credit", phone_number="0712000124", code="NC")
+    db.session.add(broke)
+    db.session.commit()
+    r = login_as("admin").post("/inventory/place_order", json={
+        "customer_id": broke.id, "items": [{"id": shop["item"], "quantity": 1}]})
+    assert r.status_code == 409 and "credit" in r.get_json()["error"]
+    assert Order.query.count() == 0 and batches_of(shop["item"]) == {"A": 3, "B": 10}
+
+
+def test_reversed_payment_puts_the_order_back_on_hold(app, shop):
+    order_id, invoice_id = pay_now(shop)
+    payment = billing.record_payment(method="mpesa_c2b", amount=D("500"), receipt="SLT0000009",
+                                     invoice=db.session.get(Invoice, invoice_id))
+    db.session.commit()
+    order_service.release_expired(NOW + timedelta(minutes=20))      # paid: hold cleared
+    assert db.session.get(Order, order_id).reserved_until is None
+    billing.reverse_payment(payment)
+    db.session.commit()
+    later = datetime.utcnow()
+    counts = order_service.release_expired(later)
+    assert counts["re_held"] == 1
+    assert db.session.get(Order, order_id).reserved_until > later
+    assert order_service.release_expired(later + timedelta(minutes=16))["released"] == 1
+    assert batches_of(shop["item"]) == {"A": 3, "B": 10}
+
+
+def test_collected_orders_cannot_be_cancelled_by_status(app, shop, login_as):
+    order_id, invoice_id = pay_now(shop)
+    order = db.session.get(Order, order_id)
+    order.fulfillment_status = "collected"
+    db.session.commit()
+    r = login_as("admin").put(f"/orders/{order_id}/status", json={"status": "refunded"})
+    assert r.status_code == 409
+    assert db.session.get(Order, order_id).status == "pending"
+    assert batches_of(shop["item"]) == {"A": 0, "B": 8}
