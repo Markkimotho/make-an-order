@@ -133,11 +133,17 @@
     <label class="form-label">Customer phone (Safaricom)</label>
     <input type="text" class="form-control" id="mpesaPhone" placeholder="07XXXXXXXX">
     <div id="mpesaStatus" class="small mt-2 text-muted"></div>
+    <hr>
+    <label class="form-label small">Already paid? Enter the M-Pesa code from the SMS</label>
+    <div class="input-group input-group-sm">
+      <input type="text" class="form-control text-uppercase" id="mpesaCode" placeholder="SJK82910PL" maxlength="20">
+      <button class="btn btn-outline-secondary" id="mpesaCodeSave" type="button">Record code</button>
+    </div>
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
     <button class="btn btn-success" id="mpesaSend">Send STK</button>
-    <button class="btn btn-outline-success d-none" id="mpesaComplete">Mark received &amp; complete</button>
+    <button class="btn btn-outline-success d-none" id="mpesaComplete">Complete sale</button>
   </div>
 </div></div></div>
 
@@ -452,17 +458,63 @@ const POS = (() => {
       complete('cash');
     });
 
+    // The sale completes as M-Pesa only once the money is recorded: from the
+    // STK result, a Paybill confirmation, or a typed code. Poll the push.
+    let mpesaPoll = null;
+    function stopPoll() { if (mpesaPoll) { clearTimeout(mpesaPoll); mpesaPoll = null; } }
+    function markPaid() {
+      stopPoll();
+      $('#mpesaStatus').textContent = 'Payment received.';
+      $('#mpesaComplete').classList.remove('d-none');
+    }
+    async function pollIntent(intentId, started) {
+      try {
+        const r = await api('GET', `/payments/intents/${intentId}`);
+        const st = r.intent.status;
+        if (r.invoice.status === 'paid') return markPaid();
+        if (st === 'paid_unconfirmed') {
+          // M-Pesa confirmed the payment but its receipt has not come through:
+          // ask for the code from the customer's SMS (the field below).
+          $('#mpesaStatus').textContent = r.intent.result_desc;
+          $('#mpesaCode').focus();
+          mpesaPoll = setTimeout(() => pollIntent(intentId, started), 5000);
+          return;
+        }
+        if (st === 'failed' || st === 'timeout') {
+          stopPoll();
+          $('#mpesaStatus').textContent = (st === 'timeout' ? 'No answer from M-Pesa. ' : '') +
+            (r.intent.result_desc || 'The payment did not go through.') + ' You can send it again.';
+          return;
+        }
+        $('#mpesaStatus').textContent = 'Waiting for the customer to enter their PIN… (' +
+          Math.round((Date.now() - started) / 1000) + 's)';
+      } catch (e) { $('#mpesaStatus').textContent = 'Checking… ' + e.message; }
+      mpesaPoll = setTimeout(() => pollIntent(intentId, started), 3000);
+    }
     $('#mpesaSend').addEventListener('click', async () => {
       const phone = $('#mpesaPhone').value.trim();
       if (!phone) return alert('Phone is required.');
+      stopPoll();
       $('#mpesaStatus').textContent = 'Sending STK push…';
       try {
         const r = await api('POST', '/payments/mpesa/stk_push',
-                            { transaction_id: txnId, phone_number: phone, amount: txn.total });
-        $('#mpesaStatus').textContent = 'STK sent (id ' + r.checkout_request_id + '). Waiting for customer…';
-        $('#mpesaComplete').classList.remove('d-none');
+                            { transaction_id: txnId, phone_number: phone });
+        $('#mpesaStatus').textContent = 'Prompt sent for KES ' + fmt(r.intent.amount) +
+          ' (invoice ' + r.invoice.invoice_number + '). Waiting for the customer…';
+        pollIntent(r.intent.id, Date.now());
       } catch (e) { $('#mpesaStatus').textContent = 'Failed: ' + e.message; }
     });
+    $('#mpesaCodeSave').addEventListener('click', async () => {
+      const code = $('#mpesaCode').value.trim().toUpperCase();
+      if (!code) return;
+      try {
+        const r = await api('POST', '/payments/manual',
+                            { transaction_id: txnId, receipt: code, amount: txn.total });
+        if (r.invoice.status === 'paid') markPaid();
+        else $('#mpesaStatus').textContent = 'Code recorded. Balance still due: KES ' + fmt(r.invoice.balance);
+      } catch (e) { $('#mpesaStatus').textContent = 'Failed: ' + e.message; }
+    });
+    $('#mpesaModal').addEventListener('hidden.bs.modal', stopPoll);
     $('#mpesaComplete').addEventListener('click', () => {
       bootstrap.Modal.getInstance($('#mpesaModal')).hide();
       complete('mpesa');

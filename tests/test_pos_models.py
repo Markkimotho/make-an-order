@@ -1,13 +1,13 @@
 """Tests for new POS models (Transaction, Shift, PurchaseOrder, etc.).
 
-Uses an in-memory SQLite DB by overriding the SQLAlchemy URI before
-``db.create_all()``. Tests are isolated via the ``client`` fixture.
+Each test gets a fresh SQLite database from the shared ``client`` fixture
+in ``tests/conftest.py``.
 """
 import pytest
 from decimal import Decimal
 
-from app import app, db
 from models import (
+    db,
     Customer, InventoryItem, Supplier, Category, Shift, CashMovement,
     Transaction, TransactionItem, PurchaseOrder, PurchaseOrderItem,
     Prescription, PrescriptionItem, LoyaltyTransaction,
@@ -15,17 +15,6 @@ from models import (
     PAY_CASH, PAY_MPESA, PO_DRAFT, PO_RECEIVED,
 )
 
-
-@pytest.fixture
-def client():
-    app.config['TESTING'] = True
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
-    app.config['SECRET_KEY'] = 'test'
-    with app.app_context():
-        db.create_all()
-        yield app.test_client()
-        db.session.remove()
-        db.drop_all()
 
 
 # --------------------------------------------------------------------------
@@ -150,12 +139,11 @@ class TestPurchaseOrder:
         db.session.add_all([sup, item]); db.session.commit()
 
         po = PurchaseOrder(po_number='PO-20260502-0001', supplier_id=sup.id,
-                           total=Decimal('100'), status=PO_DRAFT)
+                           status=PO_DRAFT)
         db.session.add(po); db.session.flush()
         db.session.add(PurchaseOrderItem(
-            purchase_order_id=po.id, inventory_item_id=item.id,
-            quantity_ordered=Decimal('20'), unit_cost=Decimal('5'),
-            line_total=Decimal('100')))
+            po_id=po.id, inventory_item_id=item.id,
+            quantity_ordered=Decimal('20'), unit_cost=Decimal('5')))
         db.session.commit()
 
         assert po.status == PO_DRAFT
@@ -232,16 +220,15 @@ class TestCustomerPosFields:
         c = Customer(name='New', phone_number='+254712345678', code='Z')
         db.session.add(c); db.session.commit()
         assert c.loyalty_points == 0
-        assert float(c.credit_balance) == 0.0
+        assert c.credit_term_days == 30
         assert c.customer_type == 'retail'
 
-    def test_credit_limit_balance(self, client):
+    def test_credit_limit_and_term(self, client):
         c = Customer(name='Credit', phone_number='+254712345678', code='CR',
-                     credit_limit=Decimal('10000'),
-                     credit_balance=Decimal('2500'))
+                     credit_limit=Decimal('10000'), credit_term_days=14)
         db.session.add(c); db.session.commit()
         assert float(c.credit_limit) == 10000.0
-        assert float(c.credit_balance) == 2500.0
+        assert c.credit_term_days == 14
 
 
 # --------------------------------------------------------------------------
@@ -264,3 +251,42 @@ class TestInventoryItemPosFields:
         assert item.requires_prescription is True
         assert float(item.cost_price) == 30.0
         assert item.reorder_level == 10
+
+
+# --------------------------------------------------------------------------
+# Supplier API (found by the isolation sweep: create always raised TypeError)
+# --------------------------------------------------------------------------
+
+def test_supplier_create_and_update_api(login_as):
+    client = login_as('admin')
+    r = client.post('/inventory/suppliers', json={
+        'name': 'Phillips Pharma', 'contact_person': 'Wambui', 'phone': '0722000000',
+        'payment_terms': 'Net 30'})
+    assert r.status_code == 201, r.get_json()
+    sup = r.get_json()['supplier']
+    assert (sup['contact_name'], sup['payment_terms']) == ('Wambui', 'Net 30')
+    r = client.put(f"/inventory/suppliers/{sup['id']}", json={'contact_name': 'Otieno'})
+    assert r.status_code == 200
+    assert r.get_json()['supplier']['contact_name'] == 'Otieno'
+    assert client.put(f"/inventory/suppliers/{sup['id']}", json={'name': ''}).status_code == 400
+
+
+def test_item_references_must_belong_to_the_business(login_as, other_tenant):
+    """Found by the isolation sweep: another business's category id made
+    the item update fail with a 500 instead of a clear 400."""
+    from auth.tenancy import tenant_scope
+    with tenant_scope(other_tenant):
+        foreign = Category(name='Theirs')
+        db.session.add(foreign)
+        db.session.commit()
+        foreign_id = foreign.id
+    client = login_as('admin')
+    r = client.post('/inventory/items', json={'name': 'Gauze', 'price': 10,
+                                              'category': 'Dressings',
+                                              'category_id': foreign_id})
+    assert r.status_code == 400 and r.get_json() == {'error': 'Unknown category'}
+    item = InventoryItem(name='Gauze', price=Decimal('10'))
+    db.session.add(item); db.session.commit()
+    r = client.put(f'/inventory/items/{item.id}', json={'category_id': foreign_id})
+    assert r.status_code == 400
+    assert client.put(f'/inventory/items/{item.id}', json={'supplier_id': 'x'}).status_code == 400

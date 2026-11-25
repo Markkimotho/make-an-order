@@ -13,6 +13,18 @@ class Config:
     # Base URL for generating absolute URLs (e.g., for OAuth redirects)
     APP_URL = os.environ.get("APP_URL", "http://localhost:5001")
 
+    # Number of reverse-proxy hops to trust for X-Forwarded-For / -Proto.
+    # Heroku's router is 1. Add one per CDN/WAF placed in front of it.
+    PROXY_FIX_X_FOR   = int(os.environ.get("PROXY_FIX_X_FOR", "1"))
+    PROXY_FIX_X_PROTO = int(os.environ.get("PROXY_FIX_X_PROTO", "1"))
+
+    # Multi-tenancy
+    # Fernet key for tenant secrets (Daraja keys, eTIMS token). Generate with
+    # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    TENANT_SECRETS_KEY = os.environ.get("TENANT_SECRETS_KEY")
+    # Comma-separated emails that get platform-admin rights at login.
+    PLATFORM_ADMIN_EMAILS = os.environ.get("PLATFORM_ADMIN_EMAILS", "")
+
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
@@ -20,6 +32,8 @@ class Config:
     AT_USERNAME = os.environ.get("AT_USERNAME")
     AT_API_KEY = os.environ.get("AT_API_KEY")
     AT_SENDER_ID = os.environ.get("AT_SENDER_ID")
+    # Optional secret on the delivery-report URL: /delivery-reports?token=...
+    AT_DELIVERY_TOKEN = os.environ.get("AT_DELIVERY_TOKEN")
 
     # DB Credentials (for local, non-Prod setup)
     MYSQL_HOST=os.environ.get("MYSQL_HOST")
@@ -36,10 +50,15 @@ class Config:
     MPESA_CONSUMER_SECRET     = os.environ.get("MPESA_CONSUMER_SECRET")
     MPESA_BUSINESS_SHORT_CODE = os.environ.get("MPESA_BUSINESS_SHORT_CODE")
     MPESA_PASSKEY             = os.environ.get("MPESA_PASSKEY")
-    MPESA_CALLBACK_URL        = os.environ.get("MPESA_CALLBACK_URL")
     MPESA_ENV                 = os.environ.get("MPESA_ENV", "sandbox")  # 'sandbox' | 'production'
 
-    # Flutterwave
+    # Flutterwave (cards). Off by default: card money settles to the platform's
+    # account, not the business's. Set CARD_PAYMENTS_ENABLED=1 to turn on.
+    CARD_PAYMENTS_ENABLED = os.environ.get("CARD_PAYMENTS_ENABLED", "") in ("1", "true", "yes")
+
+    # Optional: only accept Daraja webhooks from these IPs (comma-separated).
+    # Needs PROXY_FIX_X_FOR set right behind a proxy, or every webhook is refused.
+    DARAJA_ALLOWED_IPS = os.environ.get("DARAJA_ALLOWED_IPS", "")
     FLW_SECRET_KEY    = os.environ.get("FLW_SECRET_KEY")
     FLW_PUBLIC_KEY    = os.environ.get("FLW_PUBLIC_KEY")
     FLW_WEBHOOK_SECRET = os.environ.get("FLW_WEBHOOK_SECRET")
@@ -53,3 +72,9 @@ class Config:
 
     # Redis (for OTPs / future caching). Falls back to in-memory if unreachable.
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    # Rate limits on the public pages: Redis when configured (shared by all
+    # workers), else per-process memory.
+    RATELIMIT_STORAGE_URI = (os.environ.get("RATELIMIT_STORAGE_URI")
+                             or os.environ.get("REDIS_URL") or "memory://")
+    # Absolute base for links sent by SMS (pay links), e.g. https://app.example.co.ke
+    PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL")

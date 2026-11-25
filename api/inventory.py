@@ -1,9 +1,12 @@
 from flask import Blueprint, jsonify, request, session, Response
 from models import (
-    db, InventoryItem, Order, OrderItem, StockMovement, User, Customer,
+    db, Batch, InventoryItem, Order, OrderItem, StockMovement, User, Customer,
     Category, Supplier, PurchaseOrder, PurchaseOrderItem,
     PO_DRAFT, PO_SENT, PO_PARTIAL, PO_RECEIVED, PO_CANCELLED, PO_STATUSES,
 )
+from services import billing, controlled, stock
+from services import orders as order_service
+from services.clock import today_nairobi
 from services.sms_service import SendSMS
 from services import audit_service
 from auth.auth_middleware import (
@@ -11,7 +14,7 @@ from auth.auth_middleware import (
     stock_clerk_api_required,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func
+from sqlalchemy import func, select
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import logging
@@ -39,6 +42,23 @@ def _parse_date(value):
 # Read-only (all logged-in users)
 # ---------------------------------------------------------------------------
 
+def _reference_error(data):
+    """400 response if supplier_id/category_id name a row this business does
+    not have (another business's id, or a made-up one); else None."""
+    for key, model, label in (('supplier_id', Supplier, 'supplier'),
+                              ('category_id', Category, 'category')):
+        value = data.get(key)
+        if value in (None, ''):
+            continue
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return jsonify({'error': f'{key} must be a number'}), 400
+        if db.session.get(model, value) is None:
+            return jsonify({'error': f'Unknown {label}'}), 400
+    return None
+
+
 @inventory_bp.route('/items', methods=['GET'])
 @login_required
 def get_items():
@@ -47,7 +67,8 @@ def get_items():
     if category:
         q = q.filter_by(category=category)
     items = q.order_by(InventoryItem.category, InventoryItem.name).all()
-    return jsonify([i.to_dict() for i in items])
+    soonest = InventoryItem.soonest_batches(i.id for i in items)
+    return jsonify([i.to_dict(soonest) for i in items])
 
 
 @inventory_bp.route('/categories', methods=['GET'])
@@ -76,15 +97,35 @@ def get_item_by_sku(sku):
 
 # ---------------------------------------------------------------------------
 
+def _receipt_register(data, item, supplier_name=None, reference=None):
+    """Register details for stock arriving (used only for controlled drugs)."""
+    supplier = supplier_name
+    if not supplier and item.supplier_id:
+        found = db.session.get(Supplier, item.supplier_id)
+        supplier = found.name if found else None
+    return controlled.Register.from_request(
+        data, supplier_name=(data.get('supplier_name') or supplier),
+        reference_doc_no=(data.get('reference_doc_no') or reference),
+    ).with_pharmacist(db.session.get(User, session.get('user_id')))
+
+
+def _witness_register(data):
+    return controlled.Register.from_request(data).with_pharmacist(
+        db.session.get(User, session.get('user_id')))
+
+
 @inventory_bp.route('/items', methods=['POST'])
 @admin_api_required
 def create_item():
     data        = request.get_json(silent=True) or {}
+    bad_ref = _reference_error(data)
+    if bad_ref:
+        return bad_ref
     name        = data.get('name', '').strip()
     category    = data.get('category', '').strip()
     price       = data.get('price')
     description = (data.get('description') or '').strip() or None
-    stock       = max(0, int(data.get('stock', 0)))
+    initial_stock = max(0, int(data.get('stock', 0) or 0))
     icon        = (data.get('icon') or 'fa-box').strip()
     sku         = (data.get('sku') or '').strip() or None
 
@@ -94,30 +135,37 @@ def create_item():
     try:
         item = InventoryItem(
             name=name, price=price, category=category,
-            description=description, stock=stock, icon=icon, sku=sku,
+            description=description, icon=icon, sku=sku,
             barcode=(data.get('barcode') or '').strip() or None,
             cost_price=data.get('cost_price'),
             reorder_level=int(data.get('reorder_level', 5) or 5),
-            expiry_date=_parse_date(data.get('expiry_date')),
-            batch_number=(data.get('batch_number') or '').strip() or None,
             supplier_id=data.get('supplier_id'),
             category_id=data.get('category_id'),
             unit=(data.get('unit') or 'pcs').strip() or 'pcs',
             is_drug=bool(data.get('is_drug', False)),
             requires_prescription=bool(data.get('requires_prescription', False)),
+            is_controlled=bool(data.get('is_controlled', False)),
+            drug_schedule=(data.get('drug_schedule') or '').strip() or None,
         )
         db.session.add(item)
         db.session.flush()
 
-        if stock > 0:
-            db.session.add(StockMovement(
-                item_id=item.id, item_name=name, delta=stock,
-                reason='initial_stock', user_id=session.get('user_id'),
-            ))
+        if initial_stock > 0:
+            item = stock.receive(item, initial_stock,
+                                 batch_number=(data.get('batch_number') or '').strip() or None,
+                                 expiry_date=_parse_date(data.get('expiry_date')),
+                                 unit_cost=data.get('cost_price'), reason='initial_stock',
+                                 user_id=session.get('user_id'),
+                                 register=_receipt_register(data, item))
+        elif item.is_controlled:
+            controlled.open_register(item, db.session.get(User, session.get('user_id')))
 
         db.session.commit()
         logger.info(f"Inventory item '{name}' created (id={item.id}, sku={sku}).")
         return jsonify({'message': f'"{name}" added to inventory', 'item': item.to_dict()}), 201
+    except stock.StockError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except IntegrityError:
         db.session.rollback()
         return jsonify({'error': 'SKU/barcode must be unique' if (sku or data.get('barcode'))
@@ -136,6 +184,9 @@ def update_item(id):
         return jsonify({'error': 'Item not found'}), 404
 
     data = request.get_json(silent=True) or {}
+    bad_ref = _reference_error(data)
+    if bad_ref:
+        return bad_ref
     item.name        = data.get('name',        item.name)
     item.price       = data.get('price',       item.price)
     item.category    = data.get('category',    item.category)
@@ -143,20 +194,42 @@ def update_item(id):
     item.icon        = data.get('icon',        item.icon)
     if 'sku' in data:
         item.sku = (data.get('sku') or '').strip() or None
+    if 'drug_schedule' in data:
+        item.drug_schedule = (data.get('drug_schedule') or '').strip() or None
+    if 'is_controlled' in data:
+        wanted = bool(data.get('is_controlled'))
+        if wanted and not item.is_controlled:
+            item.is_controlled = True
+            db.session.flush()
+            # The register starts at the stock on hand.
+            controlled.open_register(item, db.session.get(User, session.get('user_id')))
+        elif not wanted and item.is_controlled:
+            if controlled.ControlledDrugEntry.query.filter_by(inventory_item_id=item.id).first():
+                db.session.rollback()
+                return jsonify({'error': 'A drug with register entries stays controlled'}), 409
+            item.is_controlled = False
     if 'barcode' in data:
         item.barcode = (data.get('barcode') or '').strip() or None
     if 'cost_price' in data:
         item.cost_price = data.get('cost_price')
     if 'reorder_level' in data:
         item.reorder_level = int(data.get('reorder_level') or 0)
-    if 'expiry_date' in data:
-        item.expiry_date = _parse_date(data.get('expiry_date'))
-    if 'batch_number' in data:
-        item.batch_number = (data.get('batch_number') or '').strip() or None
+    if 'expiry_date' in data or 'batch_number' in data:
+        # Old edit form: these describe the item's only batch. With several
+        # batches, each is edited on its own (PUT /inventory/batches/<id>).
+        batches = Batch.query.filter_by(inventory_item_id=item.id).all()
+        if len(batches) > 1:
+            return jsonify({'error': 'This item has several batches; edit them one by one'}), 409
+        if batches:
+            if 'expiry_date' in data:
+                batches[0].expiry_date = _parse_date(data.get('expiry_date'))
+            number = (data.get('batch_number') or '').strip()
+            if number:
+                batches[0].batch_number = number
     if 'supplier_id' in data:
-        item.supplier_id = data.get('supplier_id')
+        item.supplier_id = data.get('supplier_id') or None
     if 'category_id' in data:
-        item.category_id = data.get('category_id')
+        item.category_id = data.get('category_id') or None
     if 'unit' in data:
         item.unit = (data.get('unit') or 'pcs').strip() or 'pcs'
     if 'is_drug' in data:
@@ -184,11 +257,17 @@ def delete_item(id):
     if not item:
         return jsonify({'error': 'Item not found'}), 404
     name = item.name
+    if controlled.ControlledDrugEntry.query.filter_by(inventory_item_id=item.id).first():
+        return jsonify({'error': f'"{name}" has controlled-drug register entries; the '
+                                 'register must be kept, so it cannot be deleted'}), 409
     try:
         db.session.delete(item)
         db.session.commit()
         logger.info(f"Inventory item '{name}' (id={id}) deleted.")
         return jsonify({'message': f'"{name}" removed from inventory'}), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': f'"{name}" has records that must be kept'}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error deleting inventory item {id}: {e}", exc_info=True)
@@ -210,17 +289,20 @@ def restock_item(id):
         return jsonify({'error': 'Quantity must be a positive integer'}), 400
 
     try:
-        item.stock += quantity
-        db.session.add(StockMovement(
-            item_id=item.id, item_name=item.name, delta=quantity,
-            reason='restock', user_id=session.get('user_id'), note=note,
-        ))
+        item = stock.receive(item, quantity,
+                             batch_number=(data.get('batch_number') or '').strip() or None,
+                             expiry_date=_parse_date(data.get('expiry_date')),
+                             reason='restock', user_id=session.get('user_id'), note=note,
+                             register=_receipt_register(data, item))
         db.session.commit()
         logger.info(f"Restocked {quantity}× '{item.name}' → stock={item.stock}.")
         return jsonify({
             'message':   f'Restocked {quantity} units of "{item.name}"',
             'new_stock': item.stock,
         }), 200
+    except stock.StockError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error restocking item {id}: {e}", exc_info=True)
@@ -239,10 +321,11 @@ def low_stock():
              .filter(InventoryItem.stock < threshold)
              .order_by(InventoryItem.stock)
              .all())
+    soonest = InventoryItem.soonest_batches(i.id for i in items)
     return jsonify({
         'threshold': threshold,
         'count':     len(items),
-        'items':     [i.to_dict() for i in items],
+        'items':     [i.to_dict(soonest) for i in items],
     }), 200
 
 
@@ -288,54 +371,36 @@ def place_inventory_order():
         qty = int(entry['quantity'])
         if qty <= 0:
             continue
-        if item.stock < qty:
-            return jsonify({'error': f'Only {item.stock} units of "{item.name}" available'}), 400
         resolved.append((item, qty))
 
     if not resolved:
         return jsonify({'error': 'No valid items in cart'}), 400
 
-    # Build summary and total
-    summary_parts = []
-    total = Decimal('0')
-    for item, qty in resolved:
-        label    = item.name if qty == 1 else f"{item.name} ×{qty}"
-        subtotal = Decimal(str(item.price)) * qty
-        summary_parts.append(label)
-        total += subtotal
-
-    # Create Order header
-    order = Order(
-        customer_id=customer_id,
-        item=', '.join(summary_parts),
-        amount=total,
-        status='pending',
-    )
-    db.session.add(order)
-    db.session.flush()
-
-    # Create OrderItems, decrement stock, log movements
+    # One order, one invoice on the customer's credit terms, stock taken
+    # (soonest expiry first) through services/orders.py: all or nothing.
     uid = session.get('user_id')
-    for item, qty in resolved:
-        subtotal = Decimal(str(item.price)) * qty
-        db.session.add(OrderItem(
-            order_id=order.id, inventory_item_id=item.id,
-            item_name=item.name, quantity=qty,
-            unit_price=item.price, subtotal=subtotal,
-        ))
-        item.stock -= qty
-        db.session.add(StockMovement(
-            item_id=item.id, item_name=item.name, delta=-qty,
-            reason='sale', user_id=uid,
-        ))
-
+    try:
+        order, invoice = order_service.create_order(
+            [order_service.Line(item=item, quantity=qty, unit_price=item.price)
+             for item, qty in resolved],
+            customer_id=customer.id, channel='staff', pay_now=False,
+            due_date=billing.credit_due_date(customer, today_nairobi()), user_id=uid)
+    except order_service.CreditCeiling as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'available': float(e.available)}), 409
+    except (order_service.OrderError, stock.StockError, billing.BillingError) as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+    summary_parts = [item.name if qty == 1 else f"{item.name} ×{qty}" for item, qty in resolved]
+    total = invoice.total
     db.session.commit()
 
     # SMS confirmation
     try:
         if customer and customer.phone_number:
             SendSMS.send_order_confirmation(
-                customer.phone_number, customer.name, ', '.join(summary_parts)
+                customer.phone_number, customer.name, ', '.join(summary_parts),
+                order_id=order.id,
             )
     except Exception:
         logger.warning("SMS send failed after order commit.", exc_info=True)
@@ -343,6 +408,8 @@ def place_inventory_order():
     return jsonify({
         'message':  f"Order placed — {len(resolved)} item type(s), total {float(total):.2f}",
         'order_id': order.id,
+        'order_number': order.order_number,
+        'invoice': invoice.to_dict(),
         'items':    summary_parts,
     }), 201
 
@@ -405,19 +472,18 @@ def stock_adjustment():
         return jsonify({'error': 'delta must be non-zero'}), 400
     reason = (data.get('reason') or 'adjustment').strip() or 'adjustment'
     note   = (data.get('note') or '').strip() or None
-    new_stock = int(item.stock or 0) + delta
-    if new_stock < 0:
-        return jsonify({'error': 'adjustment would make stock negative'}), 400
-
     old = item.stock
-    item.stock = new_stock
-    db.session.add(StockMovement(
-        item_id=item.id, item_name=item.name, delta=delta,
-        reason=reason, user_id=session.get('user_id'), note=note,
-    ))
+    try:
+        item = stock.adjust(item, delta, batch_number=data.get('batch_number'),
+                            expiry_date=_parse_date(data.get('expiry_date')),
+                            reason=reason, note=note, user_id=session.get('user_id'),
+                            register=_witness_register(data))
+    except stock.StockError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     audit_service.log(session.get('user_id'), 'inventory.stock_adjustment',
                       'InventoryItem', item.id,
-                      {'stock': old}, {'stock': new_stock, 'reason': reason})
+                      {'stock': old}, {'stock': item.stock, 'reason': reason})
     db.session.commit()
     return jsonify({'message': 'Stock adjusted', 'item': item.to_dict()}), 200
 
@@ -430,7 +496,8 @@ def low_stock_reorder():
             .filter(InventoryItem.stock <= InventoryItem.reorder_level)
             .order_by(InventoryItem.stock.asc())
             .all())
-    return jsonify([i.to_dict() for i in rows]), 200
+    soonest = InventoryItem.soonest_batches(i.id for i in rows)
+    return jsonify([i.to_dict(soonest) for i in rows]), 200
 
 
 @inventory_bp.route('/expiring', methods=['GET'])
@@ -441,13 +508,62 @@ def expiring_items():
         days = int(request.args.get('days', 30))
     except ValueError:
         return jsonify({'error': 'days must be an integer'}), 400
-    cutoff = date.today() + timedelta(days=max(days, 0))
-    rows = (InventoryItem.query
-            .filter(InventoryItem.expiry_date.isnot(None),
-                    InventoryItem.expiry_date <= cutoff)
-            .order_by(InventoryItem.expiry_date.asc())
-            .all())
-    return jsonify([i.to_dict() for i in rows]), 200
+    today = today_nairobi()
+    cutoff = today + timedelta(days=max(days, 0))
+    rows = (db.session.query(Batch, InventoryItem)
+            .join(InventoryItem, InventoryItem.id == Batch.inventory_item_id)
+            .filter(Batch.quantity_on_hand > 0, Batch.expiry_date.isnot(None),
+                    Batch.expiry_date <= cutoff)
+            .order_by(Batch.expiry_date.asc(), Batch.id.asc()).all())
+    return jsonify([{**item.to_dict(), 'batch': batch.to_dict(),
+                     'batch_number': batch.batch_number,
+                     'expiry_date': batch.expiry_date.isoformat(),
+                     'quantity_on_hand': batch.quantity_on_hand,
+                     'days_to_expiry': (batch.expiry_date - today).days,
+                     'expired': batch.expiry_date < today}
+                    for batch, item in rows]), 200
+
+
+@inventory_bp.route('/items/<int:id>/batches', methods=['GET'])
+@login_required
+def item_batches(id):
+    item = db.session.get(InventoryItem, id)
+    if not item:
+        return jsonify({'error': 'Item not found'}), 404
+    batches = (Batch.query.filter_by(inventory_item_id=id)
+               .order_by(Batch.expiry_date.is_(None), Batch.expiry_date, Batch.id).all())
+    return jsonify([b.to_dict() for b in batches]), 200
+
+
+@inventory_bp.route('/batches/<int:id>', methods=['PUT'])
+@admin_api_required
+def update_batch(id):
+    """Correct a batch's number or expiry, or release a quarantined batch
+    (``"quarantined": false``) once its goods are checked. Quantities change
+    only through adjustments."""
+    batch = db.session.get(Batch, id)
+    if not batch:
+        return jsonify({'error': 'Batch not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if 'batch_number' in data:
+        number = (data.get('batch_number') or '').strip()
+        if not number:
+            return jsonify({'error': 'batch_number cannot be empty'}), 400
+        batch.batch_number = number
+    if 'expiry_date' in data:
+        batch.expiry_date = _parse_date(data.get('expiry_date'))
+    if data.get('quarantined') is False and batch.quarantined:
+        if batch.batch_number.upper().startswith(stock.QUARANTINE_BATCH):
+            return jsonify({'error': 'Give the checked goods their batch number to release them'}), 400
+        batch.quarantined = False
+        audit_service.log(session.get('user_id'), 'inventory.batch_release', 'Batch', batch.id,
+                          None, batch.to_dict())
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'That batch number already exists for this item'}), 400
+    return jsonify({'batch': batch.to_dict()}), 200
 
 
 @inventory_bp.route('/items/<int:id>/movement', methods=['GET'])
@@ -477,6 +593,18 @@ def list_suppliers():
     return jsonify([s.to_dict() for s in rows]), 200
 
 
+SUPPLIER_FIELDS = ('name', 'contact_name', 'phone', 'email', 'address', 'payment_terms')
+
+
+def _supplier_field(data, field):
+    """Trimmed value or None. 'contact_person' is accepted for contact_name
+    (what the purchase-orders page has always sent)."""
+    raw = data.get(field)
+    if raw is None and field == 'contact_name':
+        raw = data.get('contact_person')
+    return (raw or '').strip() or None
+
+
 @inventory_bp.route('/suppliers', methods=['POST'])
 @admin_api_required
 def create_supplier():
@@ -486,11 +614,11 @@ def create_supplier():
         return jsonify({'error': 'name is required'}), 400
     s = Supplier(
         name=name,
-        contact_person=(data.get('contact_person') or '').strip() or None,
-        phone=(data.get('phone') or '').strip() or None,
-        email=(data.get('email') or '').strip() or None,
-        address=(data.get('address') or '').strip() or None,
-        notes=(data.get('notes') or '').strip() or None,
+        contact_name=_supplier_field(data, 'contact_name'),
+        phone=_supplier_field(data, 'phone'),
+        email=_supplier_field(data, 'email'),
+        address=_supplier_field(data, 'address'),
+        payment_terms=_supplier_field(data, 'payment_terms'),
     )
     db.session.add(s)
     try:
@@ -508,12 +636,11 @@ def update_supplier(id):
     if not s:
         return jsonify({'error': 'Supplier not found'}), 404
     data = request.get_json(silent=True) or {}
-    for f in ('name', 'contact_person', 'phone', 'email', 'address', 'notes'):
-        if f in data:
-            v = (data.get(f) or '').strip() or None
-            setattr(s, f, v if v or f == 'name' else None)
-            if f == 'name' and not v:
-                return jsonify({'error': 'name cannot be empty'}), 400
+    if 'name' in data and not (data.get('name') or '').strip():
+        return jsonify({'error': 'name cannot be empty'}), 400
+    for f in SUPPLIER_FIELDS:
+        if f in data or (f == 'contact_name' and 'contact_person' in data):
+            setattr(s, f, _supplier_field(data, f))
     try:
         db.session.commit()
     except IntegrityError:
@@ -603,16 +730,14 @@ def create_purchase_order():
     po = PurchaseOrder(
         po_number=_next_po_number(),
         supplier_id=supplier_id,
-        created_by=session.get('user_id'),
+        ordered_by=session.get('user_id'),
         status=PO_DRAFT,
-        expected_delivery_date=_parse_date(data.get('expected_delivery_date')),
+        expected_date=_parse_date(data.get('expected_delivery_date') or data.get('expected_date')),
         notes=(data.get('notes') or '').strip() or None,
-        total=Decimal('0'),
     )
     db.session.add(po)
     db.session.flush()
 
-    total = Decimal('0')
     for entry in items:
         iid = entry.get('inventory_item_id')
         if not iid or db.session.get(InventoryItem, iid) is None:
@@ -624,17 +749,16 @@ def create_purchase_order():
             return jsonify({'error': 'quantity_ordered/unit_cost invalid'}), 400
         if qty <= 0 or cost < 0:
             return jsonify({'error': 'quantity_ordered must be > 0, unit_cost >= 0'}), 400
-        line_total = (Decimal(qty) * cost)
         db.session.add(PurchaseOrderItem(
-            purchase_order_id=po.id,
+            po_id=po.id,
             inventory_item_id=iid,
             quantity_ordered=qty,
             quantity_received=0,
             unit_cost=cost,
-            line_total=line_total,
+            batch_number=(entry.get('batch_number') or '').strip() or None,
+            expiry_date=_parse_date(entry.get('expiry_date')),
         ))
-        total += line_total
-    po.total = total
+    db.session.flush()
 
     audit_service.log(session.get('user_id'), 'po.create',
                       'PurchaseOrder', po.id, None, po.to_dict())
@@ -666,9 +790,9 @@ def set_po_status(id):
 @inventory_bp.route('/purchase_orders/<int:id>/receive', methods=['POST'])
 @stock_clerk_api_required
 def receive_purchase_order(id):
-    """Receive (some or all) of a PO. Increments stock, writes
-    StockMovement('restock'), updates batch_number / expiry_date on the
-    InventoryItem when this is its first received batch.
+    """Receive (some or all) of a PO. Each delivery goes into its own batch
+    (the batch number given, else the PO line's, else ``PO-<po_number>``)
+    at the line's unit cost, through services/stock.py.
 
     Body::
 
@@ -685,7 +809,18 @@ def receive_purchase_order(id):
     if not payload_items:
         return jsonify({'error': 'items list is required'}), 400
 
-    po_items_by_id = {pi.id: pi for pi in po.items}
+    # Two receipts of one PO at once must not both read the same received
+    # quantities: lock the PO, then its lines, before checking anything.
+    po = db.session.execute(select(PurchaseOrder).where(PurchaseOrder.id == po.id)
+                            .with_for_update()
+                            .execution_options(populate_existing=True)).scalar_one()
+    if po.status in (PO_RECEIVED, PO_CANCELLED):
+        db.session.rollback()
+        return jsonify({'error': f'PO is {po.status}'}), 400
+    lines = db.session.execute(select(PurchaseOrderItem).where(PurchaseOrderItem.po_id == po.id)
+                               .order_by(PurchaseOrderItem.id).with_for_update()
+                               .execution_options(populate_existing=True)).scalars().all()
+    po_items_by_id = {pi.id: pi for pi in lines}
     for entry in payload_items:
         pid = entry.get('po_item_id')
         po_item = po_items_by_id.get(pid)
@@ -705,31 +840,29 @@ def receive_purchase_order(id):
         item = db.session.get(InventoryItem, po_item.inventory_item_id)
         if not item:
             continue
-        item.stock = int(item.stock or 0) + qty
-        # Capture batch / expiry on first receipt of this item if blank.
-        batch  = (entry.get('batch_number') or '').strip() or None
-        expiry = _parse_date(entry.get('expiry_date'))
-        if batch and not item.batch_number:
-            item.batch_number = batch
-        elif batch:
-            item.batch_number = batch  # always update to most recent batch
-        if expiry:
-            item.expiry_date = expiry
+        # Each delivery is its own batch, with its own expiry.
         if not item.supplier_id:
             item.supplier_id = po.supplier_id
-
-        db.session.add(StockMovement(
-            item_id=item.id, item_name=item.name, delta=qty,
-            reason='restock', user_id=session.get('user_id'),
-            note=f'PO {po.po_number}',
-        ))
+        try:
+            stock.receive(item, qty,
+                          batch_number=(entry.get('batch_number') or '').strip()
+                          or (po_item.batch_number or None) or f'PO-{po.po_number}',
+                          expiry_date=_parse_date(entry.get('expiry_date')) or po_item.expiry_date,
+                          unit_cost=po_item.unit_cost, reason='restock',
+                          user_id=session.get('user_id'), note=f'PO {po.po_number}',
+                          register=_receipt_register(
+                              entry, item,
+                              supplier_name=(db.session.get(Supplier, po.supplier_id).name
+                                             if po.supplier_id else None),
+                              reference=po.po_number))
+        except stock.StockError as e:
+            db.session.rollback()
+            return jsonify({'error': str(e)}), 400
 
     # Update PO status based on received vs ordered totals.
     fully = all((pi.quantity_received or 0) >= pi.quantity_ordered for pi in po.items)
     partly = any((pi.quantity_received or 0) > 0 for pi in po.items)
     po.status = PO_RECEIVED if fully else (PO_PARTIAL if partly else po.status)
-    if fully:
-        po.received_date = date.today()
 
     audit_service.log(session.get('user_id'), 'po.receive',
                       'PurchaseOrder', po.id, None,

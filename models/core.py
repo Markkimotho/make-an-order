@@ -1,9 +1,11 @@
-from flask_sqlalchemy import SQLAlchemy # type: ignore
+"""Tenant-owned models: every class here carries TenantMixin."""
+from decimal import Decimal
+
+from sqlalchemy.orm import validates
 from werkzeug.security import generate_password_hash, check_password_hash
 
-db = SQLAlchemy()
-
-SUPERUSER_EMAIL = 'kimothomark93@gmail.com'
+from models.base import TenantMixin, db
+from services.phone import normalize_ke_phone
 
 # ---- Role constants ---------------------------------------------------------
 ROLE_SUPERUSER   = 'superuser'
@@ -24,8 +26,14 @@ PHARMACY_ROLES   = (ROLE_PHARMACIST, ROLE_ADMIN, ROLE_SUPERUSER)
 STOCK_ROLES      = (ROLE_STOCK_CLERK, ROLE_ADMIN, ROLE_SUPERUSER)
 
 
-class User(db.Model):
+class User(TenantMixin, db.Model):
     __tablename__ = 'users'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'phone_number', name='uq_users_tenant_phone_number'),
+    )
+    # NULL only for platform admins (enforced in auth/tenancy.py before_flush).
+    tenant_id     = db.Column(db.Integer, db.ForeignKey('tenants.id', ondelete='CASCADE'),
+                              nullable=True, index=True)
     id            = db.Column(db.Integer, primary_key=True, autoincrement=True)
     email         = db.Column(db.String(255), unique=True, nullable=False)
     name          = db.Column(db.String(255), nullable=True)
@@ -34,11 +42,20 @@ class User(db.Model):
     # 'superuser' | 'admin' | 'user' | 'cashier' | 'pharmacist' | 'stock_clerk'
     status        = db.Column(db.String(20), default='pending', nullable=False) # 'pending'|'approved'|'rejected'
     password_hash = db.Column(db.String(255), nullable=True)                   # null for OAuth-only users
+    ppb_reg_no    = db.Column(db.String(64), nullable=True)   # pharmacists' PPB registration
+    is_platform_admin = db.Column(db.Boolean, nullable=False, default=False,
+                                  server_default=db.false())
     created_at    = db.Column(db.DateTime, server_default=db.func.now())
 
     # POS relationships
     shifts        = db.relationship('Shift', backref='cashier', lazy=True,
                                     foreign_keys='Shift.cashier_id')
+
+    @validates('phone_number')
+    def _normalize_phone(self, key, value):
+        if value is None or str(value).strip() == '':
+            return None
+        return normalize_ke_phone(value)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -55,16 +72,22 @@ class User(db.Model):
             'name':         self.name,
             'phone_number': self.phone_number,
             'role':         self.role,
+            'ppb_reg_no':   self.ppb_reg_no,
             'status':       self.status,
+            'tenant_id':    self.tenant_id,
+            'is_platform_admin': bool(self.is_platform_admin),
             'created_at':   self.created_at.isoformat() if self.created_at else None,
         }
 
 
-class Category(db.Model):
+class Category(TenantMixin, db.Model):
     """Inventory category lookup. Replaces the legacy free-text `category` field."""
     __tablename__ = 'categories'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'name', name='uq_categories_tenant_name'),
+    )
     id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    name        = db.Column(db.String(100), unique=True, nullable=False)
+    name        = db.Column(db.String(100), nullable=False)
     description = db.Column(db.String(255), nullable=True)
     created_at  = db.Column(db.DateTime, server_default=db.func.now())
 
@@ -74,7 +97,7 @@ class Category(db.Model):
         return {'id': self.id, 'name': self.name, 'description': self.description}
 
 
-class Supplier(db.Model):
+class Supplier(TenantMixin, db.Model):
     __tablename__ = 'suppliers'
     id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name           = db.Column(db.String(255), nullable=False)
@@ -101,8 +124,12 @@ class Supplier(db.Model):
         }
 
 
-class InventoryItem(db.Model):
+class InventoryItem(TenantMixin, db.Model):
     __tablename__ = 'inventory_items'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'sku', name='uq_inventory_items_tenant_sku'),
+        db.UniqueConstraint('tenant_id', 'barcode', name='uq_inventory_items_tenant_barcode'),
+    )
     id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name        = db.Column(db.String(255), nullable=False)
     description = db.Column(db.String(500), nullable=True)
@@ -113,17 +140,60 @@ class InventoryItem(db.Model):
     category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
     stock       = db.Column(db.Integer, default=0, nullable=False)
     icon        = db.Column(db.String(80), nullable=True)   # FA icon class
-    sku         = db.Column(db.String(50), unique=True, nullable=True)
-    barcode     = db.Column(db.String(64), unique=True, nullable=True)
+    sku         = db.Column(db.String(50), nullable=True)
+    barcode     = db.Column(db.String(64), nullable=True)
     reorder_level         = db.Column(db.Integer, default=5, nullable=False)
-    expiry_date           = db.Column(db.Date, nullable=True)
-    batch_number          = db.Column(db.String(64), nullable=True)
+    # Stock is held in batches (each with its own expiry) or, for sized
+    # goods, in variants; ``stock`` is their total, kept by services/stock.py.
+    has_variants          = db.Column(db.Boolean, default=False, nullable=False,
+                                      server_default=db.false())
     supplier_id           = db.Column(db.Integer, db.ForeignKey('suppliers.id', ondelete='SET NULL'), nullable=True)
     unit                  = db.Column(db.String(20), nullable=True, default='pcs')
     is_drug               = db.Column(db.Boolean, default=False, nullable=False)
     requires_prescription = db.Column(db.Boolean, default=False, nullable=False)
+    # Controlled drugs (narcotics, psychotropics): every movement goes in
+    # the register (models/pharmacy.py) and only a pharmacist dispenses them.
+    is_controlled         = db.Column(db.Boolean, default=False, nullable=False,
+                                      server_default=db.false())
+    # Gas cylinders, crates: issuing one adds to the duka's container balance.
+    is_returnable_container = db.Column(db.Boolean, default=False, nullable=False,
+                                        server_default=db.false())
+    drug_schedule         = db.Column(db.String(16), nullable=True)
 
-    def to_dict(self):
+    @staticmethod
+    def soonest_batches(item_ids):
+        """{item_id: the stocked batch sold next} in one query, for lists."""
+        from models.stock import Batch
+        ids = list(item_ids)
+        if not ids:
+            return {}
+        rows = (Batch.query.filter(Batch.inventory_item_id.in_(ids), Batch.quantity_on_hand > 0)
+                .order_by(Batch.inventory_item_id, Batch.expiry_date.is_(None),
+                          Batch.expiry_date.asc(), Batch.id.asc()).all())
+        out = {}
+        for batch in rows:
+            out.setdefault(batch.inventory_item_id, batch)
+        return out
+
+    def _soonest_batch(self):
+        return self.soonest_batches([self.id]).get(self.id)
+
+    @property
+    def expiry_date(self):
+        """Expiry of the batch that will be sold next (read-only)."""
+        batch = self._soonest_batch()
+        return batch.expiry_date if batch else None
+
+    @property
+    def batch_number(self):
+        """Number of the batch that will be sold next (read-only)."""
+        batch = self._soonest_batch()
+        return batch.batch_number if batch else None
+
+    def to_dict(self, soonest=None):
+        """``soonest``: a map from :meth:`soonest_batches`, so a list of
+        items costs one batch query instead of one per item."""
+        batch = soonest.get(self.id) if soonest is not None else self._soonest_batch()
         return {
             'id':          self.id,
             'name':        self.name,
@@ -137,35 +207,79 @@ class InventoryItem(db.Model):
             'sku':         self.sku,
             'barcode':     self.barcode,
             'reorder_level': self.reorder_level,
-            'expiry_date': self.expiry_date.isoformat() if self.expiry_date else None,
-            'batch_number': self.batch_number,
+            'expiry_date': batch.expiry_date.isoformat() if batch and batch.expiry_date else None,
+            'batch_number': batch.batch_number if batch else None,
             'supplier_id': self.supplier_id,
             'unit':        self.unit,
+            'has_variants': bool(self.has_variants),
+            'is_controlled': bool(self.is_controlled),
+            'is_returnable_container': bool(self.is_returnable_container),
+            'drug_schedule': self.drug_schedule,
             'is_drug':     self.is_drug,
             'requires_prescription': self.requires_prescription,
         }
 
 
-class Customer(db.Model):
+class Customer(TenantMixin, db.Model):
     __tablename__ = 'customers'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'phone_number', name='uq_customers_tenant_phone_number'),
+        db.UniqueConstraint('tenant_id', 'code', name='uq_customers_tenant_code'),
+        db.UniqueConstraint('tenant_id', 'account_ref', name='uq_customers_tenant_account_ref'),
+        db.UniqueConstraint('tenant_id', 'public_token', name='uq_customers_tenant_public_token'),
+    )
     id           = db.Column(db.Integer, primary_key=True, autoincrement=True)
     name         = db.Column(db.String(255), nullable=False)
     email        = db.Column(db.String(255), nullable=True)
-    phone_number = db.Column(db.String(15), unique=True, nullable=False)
-    code         = db.Column(db.String(50), unique=True, nullable=False)
+    phone_number = db.Column(db.String(15), nullable=False)
+    code         = db.Column(db.String(50), nullable=False)
 
     # POS extensions
     loyalty_points = db.Column(db.Integer, default=0, nullable=False)
     credit_limit   = db.Column(db.Numeric(12, 2), default=0, nullable=False)
-    credit_balance = db.Column(db.Numeric(12, 2), default=0, nullable=False)
+    # What the customer owes is the sum of their open invoices (services/
+    # billing), not a stored running balance, so it cannot drift.
+    credit_term_days = db.Column(db.Integer, default=30, nullable=False,
+                                 server_default='30')
     customer_type  = db.Column(db.String(20), default='retail', nullable=False)
     # 'retail' | 'wholesale' | 'vip'
     created_at     = db.Column(db.DateTime, server_default=db.func.now())
+    # Distributor: the Paybill account code a duka pays with, its order
+    # link token, KYC and route details, its price tier.
+    account_ref      = db.Column(db.String(20), nullable=True)
+    public_token     = db.Column(db.String(32), nullable=True,
+                                 default=lambda: __import__('secrets').token_urlsafe(16)[:22])
+    national_id      = db.Column(db.String(32), nullable=True)
+    physical_address = db.Column(db.String(255), nullable=True)
+    kra_pin          = db.Column(db.String(20), nullable=True)
+    route_zone       = db.Column(db.String(64), nullable=True)
+    gps_lat          = db.Column(db.Numeric(9, 6), nullable=True)
+    gps_lng          = db.Column(db.Numeric(9, 6), nullable=True)
+    price_tier_id    = db.Column(db.Integer, db.ForeignKey('price_tiers.id', ondelete='SET NULL'),
+                                 nullable=True)
 
     orders        = db.relationship('Order', backref='customer', lazy=True, cascade='all, delete')
     transactions  = db.relationship('Transaction', backref='customer', lazy=True)
     prescriptions = db.relationship('Prescription', backref='customer', lazy=True)
     loyalty_log   = db.relationship('LoyaltyTransaction', backref='customer', lazy=True)
+
+    @validates('phone_number')
+    def _normalize_phone(self, key, value):
+        return normalize_ke_phone(value)
+
+    @validates('code')
+    def _default_account_ref(self, key, value):
+        # A new duka pays with its customer code unless given another.
+        if self.account_ref is None and value:
+            self.account_ref = value
+        return value
+
+    @validates('account_ref')
+    def _normalize_account_ref(self, key, value):
+        # Same form as Paybill references are matched in (services/billing/matching.py).
+        import re
+        value = re.sub(r'[^A-Z0-9]', '', (value or '').upper())
+        return value or None
 
     def __repr__(self):
         return f"<Customer(id={self.id}, name={self.name}, phone_number={self.phone_number}, code={self.code})>"
@@ -179,15 +293,34 @@ class Customer(db.Model):
             'code':         self.code,
             'loyalty_points': self.loyalty_points,
             'credit_limit':   float(self.credit_limit or 0),
-            'credit_balance': float(self.credit_balance or 0),
+            'credit_term_days': self.credit_term_days,
             'customer_type':  self.customer_type,
+            'account_ref':    self.account_ref,
+            'national_id':    self.national_id,
+            'physical_address': self.physical_address,
+            'kra_pin':        self.kra_pin,
+            'route_zone':     self.route_zone,
+            'gps_lat':        float(self.gps_lat) if self.gps_lat is not None else None,
+            'gps_lng':        float(self.gps_lng) if self.gps_lng is not None else None,
+            'price_tier_id':  self.price_tier_id,
         }
 
 
-class Order(db.Model):
+ORDER_CHANNELS = ('staff', 'public_link')
+FULFILLMENT_STATUSES = ('pending', 'ready', 'dispatched', 'collected', 'released',
+                        'restock_needed', 'cancelled')
+
+
+class Order(TenantMixin, db.Model):
+    """A remote order (public link or staff). Created with its invoice by
+    services/orders.py; walk-in counter sales are Transactions."""
     __tablename__ = 'orders'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'order_number', name='uq_orders_tenant_order_number'),
+    )
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
+    # NULL for campaign orders placed for a member (student, house).
+    customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=True)
     # item/amount kept for backward compat and as a human-readable summary
     item              = db.Column(db.String(255), nullable=False)
     amount            = db.Column(db.Numeric(10, 2), nullable=False)
@@ -196,6 +329,27 @@ class Order(db.Model):
     payment_method    = db.Column(db.String(20), nullable=True)   # 'cash' | 'mpesa' | 'card'
     payment_reference = db.Column(db.String(100), nullable=True)  # e.g. M-Pesa transaction code
     time              = db.Column(db.DateTime, server_default=db.func.now())
+    # Assigned by services/orders.py (ORD000123, per business). NULL only on
+    # rows written by the old order screens before they move onto it.
+    order_number       = db.Column(db.String(16), nullable=True)
+    channel            = db.Column(db.String(16), nullable=False, default='staff',
+                                   server_default='staff')
+    fulfillment_status = db.Column(db.String(16), nullable=False, default='pending',
+                                   server_default='pending')
+    delivery_address   = db.Column(db.String(255), nullable=True)
+    # Pay-now orders hold their stock until this time; the sweep releases
+    # unpaid holds. NULL: not held (paid, credit, or released).
+    reserved_until     = db.Column(db.DateTime, nullable=True, index=True)
+    prescription_id    = db.Column(db.Integer, db.ForeignKey('prescriptions.id', ondelete='SET NULL'),
+                                   nullable=True)
+    campaign_id        = db.Column(db.Integer, db.ForeignKey('campaigns.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
+    member_id          = db.Column(db.Integer, db.ForeignKey('members.id', ondelete='SET NULL'),
+                                   nullable=True, index=True)
+    pickup_code_hash   = db.Column(db.String(64), nullable=True)
+    picked_up_at       = db.Column(db.DateTime, nullable=True)
+    picked_up_by       = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+                                   nullable=True)
 
     order_items = db.relationship('OrderItem', backref='order', lazy=True, cascade='all, delete-orphan')
 
@@ -212,11 +366,19 @@ class Order(db.Model):
             'payment_method':    self.payment_method,
             'payment_reference': self.payment_reference,
             'time':              self.time.isoformat() if self.time else None,
+            'order_number':      self.order_number,
+            'campaign_id':       self.campaign_id,
+            'member_id':         self.member_id,
+            'channel':           self.channel,
+            'fulfillment_status': self.fulfillment_status,
+            'delivery_address':  self.delivery_address,
+            'reserved_until':    self.reserved_until.isoformat() if self.reserved_until else None,
+            'picked_up_at':      self.picked_up_at.isoformat() if self.picked_up_at else None,
             'items':             [oi.to_dict() for oi in self.order_items],
         }
 
 
-class StockMovement(db.Model):
+class StockMovement(TenantMixin, db.Model):
     """Audit log for every stock level change."""
     __tablename__ = 'stock_movements'
     id         = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -242,7 +404,7 @@ class StockMovement(db.Model):
         }
 
 
-class OrderItem(db.Model):
+class OrderItem(TenantMixin, db.Model):
     __tablename__ = 'order_items'
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
     order_id          = db.Column(db.Integer, db.ForeignKey('orders.id', ondelete='CASCADE'), nullable=False)
@@ -251,11 +413,14 @@ class OrderItem(db.Model):
     quantity          = db.Column(db.Integer, nullable=False, default=1)
     unit_price        = db.Column(db.Numeric(10, 2), nullable=False)
     subtotal          = db.Column(db.Numeric(10, 2), nullable=False)
+    variant_id        = db.Column(db.Integer, db.ForeignKey('item_variants.id', ondelete='SET NULL'),
+                                  nullable=True)
 
     def to_dict(self):
         return {
             'id':                self.id,
             'inventory_item_id': self.inventory_item_id,
+            'variant_id':        self.variant_id,
             'item_name':         self.item_name,
             'quantity':          self.quantity,
             'unit_price':        float(self.unit_price),
@@ -292,7 +457,7 @@ PO_CANCELLED = 'cancelled'
 PO_STATUSES  = (PO_DRAFT, PO_SENT, PO_PARTIAL, PO_RECEIVED, PO_CANCELLED)
 
 
-class Shift(db.Model):
+class Shift(TenantMixin, db.Model):
     __tablename__ = 'shifts'
     id             = db.Column(db.Integer, primary_key=True, autoincrement=True)
     cashier_id     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
@@ -324,7 +489,7 @@ class Shift(db.Model):
         }
 
 
-class CashMovement(db.Model):
+class CashMovement(TenantMixin, db.Model):
     __tablename__ = 'cash_movements'
     id            = db.Column(db.Integer, primary_key=True, autoincrement=True)
     shift_id      = db.Column(db.Integer, db.ForeignKey('shifts.id', ondelete='CASCADE'), nullable=False)
@@ -346,11 +511,14 @@ class CashMovement(db.Model):
         }
 
 
-class Transaction(db.Model):
+class Transaction(TenantMixin, db.Model):
     """POS sale. Distinct from the legacy `Order` model which is preserved for back-compat."""
     __tablename__ = 'transactions'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'transaction_ref', name='uq_transactions_tenant_transaction_ref'),
+    )
     id              = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    transaction_ref = db.Column(db.String(40), unique=True, nullable=False)
+    transaction_ref = db.Column(db.String(40), nullable=False)
     customer_id     = db.Column(db.Integer, db.ForeignKey('customers.id', ondelete='SET NULL'), nullable=True)
     cashier_id      = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     shift_id        = db.Column(db.Integer, db.ForeignKey('shifts.id', ondelete='SET NULL'), nullable=True)
@@ -398,7 +566,7 @@ class Transaction(db.Model):
         }
 
 
-class TransactionItem(db.Model):
+class TransactionItem(TenantMixin, db.Model):
     __tablename__ = 'transaction_items'
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
     transaction_id    = db.Column(db.Integer, db.ForeignKey('transactions.id', ondelete='CASCADE'), nullable=False)
@@ -409,6 +577,9 @@ class TransactionItem(db.Model):
     discount          = db.Column(db.Numeric(12, 2), default=0, nullable=False)
     line_total        = db.Column(db.Numeric(12, 2), nullable=False)
     batch_number      = db.Column(db.String(64), nullable=True)
+    # Units already returned; refunds cannot return more than were sold.
+    refunded_quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0,
+                                  server_default='0')
 
     def to_dict(self):
         return {
@@ -420,14 +591,18 @@ class TransactionItem(db.Model):
             'unit_price':        float(self.unit_price),
             'discount':          float(self.discount or 0),
             'line_total':        float(self.line_total),
+            'refunded_quantity': float(self.refunded_quantity or 0),
             'batch_number':      self.batch_number,
         }
 
 
-class PurchaseOrder(db.Model):
+class PurchaseOrder(TenantMixin, db.Model):
     __tablename__ = 'purchase_orders'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'po_number', name='uq_purchase_orders_tenant_po_number'),
+    )
     id            = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    po_number     = db.Column(db.String(40), unique=True, nullable=False)
+    po_number     = db.Column(db.String(40), nullable=False)
     supplier_id   = db.Column(db.Integer, db.ForeignKey('suppliers.id', ondelete='SET NULL'), nullable=True)
     status        = db.Column(db.String(20), default=PO_DRAFT, nullable=False)
     ordered_by    = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
@@ -448,6 +623,10 @@ class PurchaseOrder(db.Model):
             'status':        self.status,
             'ordered_by':    self.ordered_by,
             'expected_date': self.expected_date.isoformat() if self.expected_date else None,
+            'expected_delivery_date': self.expected_date.isoformat() if self.expected_date else None,
+            'supplier_name': self.supplier.name if self.supplier_id and self.supplier else None,
+            'total':         float(sum((Decimal(str(i.quantity_ordered)) * Decimal(str(i.unit_cost))
+                                        for i in self.items), Decimal('0'))),
             'notes':         self.notes,
             'created_at':    self.created_at.isoformat() if self.created_at else None,
             'updated_at':    self.updated_at.isoformat() if self.updated_at else None,
@@ -455,7 +634,7 @@ class PurchaseOrder(db.Model):
         }
 
 
-class PurchaseOrderItem(db.Model):
+class PurchaseOrderItem(TenantMixin, db.Model):
     __tablename__ = 'purchase_order_items'
     id                 = db.Column(db.Integer, primary_key=True, autoincrement=True)
     po_id              = db.Column(db.Integer, db.ForeignKey('purchase_orders.id', ondelete='CASCADE'), nullable=False)
@@ -479,8 +658,11 @@ class PurchaseOrderItem(db.Model):
         }
 
 
-class Prescription(db.Model):
+class Prescription(TenantMixin, db.Model):
     __tablename__ = 'prescriptions'
+    __table_args__ = (
+        db.UniqueConstraint('tenant_id', 'refill_token', name='uq_prescriptions_tenant_refill_token'),
+    )
     id                = db.Column(db.Integer, primary_key=True, autoincrement=True)
     customer_id       = db.Column(db.Integer, db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=False)
     pharmacist_id     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
@@ -490,6 +672,18 @@ class Prescription(db.Model):
     notes             = db.Column(db.Text, nullable=True)
     transaction_id    = db.Column(db.Integer, db.ForeignKey('transactions.id', ondelete='SET NULL'), nullable=True)
     created_at        = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
+    # Chronic refills: due date drives the reminder and the refill link.
+    prescriber_reg_no = db.Column(db.String(64), nullable=True)
+    is_chronic        = db.Column(db.Boolean, nullable=False, default=False,
+                                  server_default=db.false())
+    duration_days     = db.Column(db.Integer, nullable=True)            # 14 / 30 / 90
+    last_dispensed_at = db.Column(db.DateTime, nullable=True)
+    refill_due_date   = db.Column(db.Date, nullable=True, index=True)
+    refills_remaining = db.Column(db.Integer, nullable=True)
+    refill_status     = db.Column(db.String(16), nullable=False, default='active',
+                                  server_default='active')             # active|paused|ended
+    refill_token      = db.Column(db.String(32), nullable=True)
+    callback_requested_at = db.Column(db.DateTime, nullable=True)
 
     items = db.relationship('PrescriptionItem', backref='prescription',
                             lazy=True, cascade='all, delete-orphan')
@@ -505,11 +699,20 @@ class Prescription(db.Model):
             'notes':             self.notes,
             'transaction_id':    self.transaction_id,
             'created_at':        self.created_at.isoformat() if self.created_at else None,
+            'prescriber_reg_no': self.prescriber_reg_no,
+            'is_chronic':        bool(self.is_chronic),
+            'duration_days':     self.duration_days,
+            'last_dispensed_at': self.last_dispensed_at.isoformat() if self.last_dispensed_at else None,
+            'refill_due_date':   self.refill_due_date.isoformat() if self.refill_due_date else None,
+            'refills_remaining': self.refills_remaining,
+            'refill_status':     self.refill_status,
+            'callback_requested_at': (self.callback_requested_at.isoformat()
+                                      if self.callback_requested_at else None),
             'items':             [i.to_dict() for i in self.items],
         }
 
 
-class PrescriptionItem(db.Model):
+class PrescriptionItem(TenantMixin, db.Model):
     __tablename__ = 'prescription_items'
     id                  = db.Column(db.Integer, primary_key=True, autoincrement=True)
     prescription_id     = db.Column(db.Integer, db.ForeignKey('prescriptions.id', ondelete='CASCADE'), nullable=False)
@@ -531,7 +734,7 @@ class PrescriptionItem(db.Model):
         }
 
 
-class LoyaltyTransaction(db.Model):
+class LoyaltyTransaction(TenantMixin, db.Model):
     __tablename__ = 'loyalty_transactions'
     id              = db.Column(db.Integer, primary_key=True, autoincrement=True)
     customer_id     = db.Column(db.Integer, db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=False)
@@ -555,9 +758,12 @@ class LoyaltyTransaction(db.Model):
         }
 
 
-class AuditLog(db.Model):
+class AuditLog(TenantMixin, db.Model):
     """Append-only log of destructive / sensitive actions."""
     __tablename__ = 'audit_logs'
+    # NULL only for platform events written inside unscoped().
+    tenant_id   = db.Column(db.Integer, db.ForeignKey('tenants.id', ondelete='CASCADE'),
+                            nullable=True, index=True)
     id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id     = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     action      = db.Column(db.String(64), nullable=False)
@@ -580,41 +786,3 @@ class AuditLog(db.Model):
             'ip_address':  self.ip_address,
             'created_at':  self.created_at.isoformat() if self.created_at else None,
         }
-
-
-# =============================================================================
-# System configuration (onboarding / business type)
-# =============================================================================
-
-class SystemConfig(db.Model):
-    """Persistent key/value store for system-wide settings.
-
-    Key rows used by the app:
-      ``business_type``  — one of pharmacy / supermarket / hardware / salon /
-                           restaurant / general  (set during onboarding)
-      ``business_name``  — display name set during onboarding
-    """
-    __tablename__ = 'system_config'
-    id         = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    key        = db.Column(db.String(80), unique=True, nullable=False)
-    value      = db.Column(db.Text, nullable=True)
-    updated_at = db.Column(db.DateTime, server_default=db.func.now(),
-                           onupdate=db.func.now(), nullable=False)
-
-    @classmethod
-    def get(cls, key, default=None):
-        """Return the value for *key*, or *default* if absent."""
-        row = cls.query.filter_by(key=key).first()
-        return row.value if row else default
-
-    @classmethod
-    def set_value(cls, key, value):
-        """Upsert *key* with *value*. Caller must commit."""
-        row = cls.query.filter_by(key=key).first()
-        val = str(value) if value is not None else None
-        if row:
-            row.value = val
-        else:
-            db.session.add(cls(key=key, value=val))
-        db.session.flush()
-

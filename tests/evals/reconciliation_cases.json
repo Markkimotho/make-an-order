@@ -1,0 +1,88 @@
+{
+  "about": "Payment reconciliation regression set. Each case creates invoices, applies steps in order and checks the end state. Steps: pay {amount, receipt, method?, ref? (invoice key or raw text), customer?}; adjust {invoice, amount, reason}; void {invoice}; reverse {receipt}; reassign {receipt, invoice}. Amounts are KES.",
+  "customers": ["duka", "kiosk"],
+  "cases": [
+    {
+      "name": "exact payment by invoice number",
+      "invoices": {"A": {"total": 1000, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 1000, "receipt": "R1", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}, "payments": {"R1": ["matched", 0]}}
+    },
+    {
+      "name": "two installments",
+      "invoices": {"A": {"total": 1000, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 300, "receipt": "R1", "ref": "A"}},
+                {"pay": {"amount": 700, "receipt": "R2", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}}
+    },
+    {
+      "name": "overpayment rolls to the next invoice and the rest is credit",
+      "invoices": {"A": {"total": 1000, "customer": "duka"}, "B": {"total": 500, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 1800, "receipt": "R1", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0], "B": ["paid", 0]}, "payments": {"R1": ["partial", 300]}}
+    },
+    {
+      "name": "overpayment never reaches another customer's invoice",
+      "invoices": {"A": {"total": 100, "customer": "duka"}, "B": {"total": 100, "customer": "kiosk"}},
+      "steps": [{"pay": {"amount": 150, "receipt": "R1", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0], "B": ["open", 100]}, "payments": {"R1": ["partial", 50]}}
+    },
+    {
+      "name": "same receipt from STK callback and Paybill confirmation",
+      "invoices": {"A": {"total": 500, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 500, "receipt": "R1", "method": "mpesa_stk", "ref": "A"}},
+                {"pay": {"amount": 500, "receipt": "R1", "method": "mpesa_c2b", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}, "payments": {"R1": ["matched", 0]}, "payment_count": 1}
+    },
+    {
+      "name": "unknown account reference waits for review",
+      "invoices": {"A": {"total": 500, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 500, "receipt": "R1", "ref": "NOT-AN-INVOICE"}}],
+      "expect": {"invoices": {"A": ["open", 500]}, "payments": {"R1": ["unmatched", 500]}}
+    },
+    {
+      "name": "unknown reference then staff assign it",
+      "invoices": {"A": {"total": 500, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 500, "receipt": "R1", "ref": "TYPO123"}},
+                {"reassign": {"receipt": "R1", "invoice": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}, "payments": {"R1": ["matched", 0]}}
+    },
+    {
+      "name": "returned goods after full payment become credit for the next invoice",
+      "invoices": {"A": {"total": 1000, "customer": "duka"}, "B": {"total": 150, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 1000, "receipt": "R1", "ref": "A"}},
+                {"adjust": {"invoice": "A", "amount": 200, "reason": "return"}}],
+      "expect": {"invoices": {"A": ["paid", 0], "B": ["paid", 0]}, "payments": {"R1": ["partial", 50]}}
+    },
+    {
+      "name": "credit note on an unpaid invoice lowers the balance",
+      "invoices": {"A": {"total": 1000, "customer": "duka"}},
+      "steps": [{"adjust": {"invoice": "A", "amount": 250, "reason": "rejected_delivery"}}],
+      "expect": {"invoices": {"A": ["open", 750]}}
+    },
+    {
+      "name": "voided paid sale leaves the money as credit",
+      "invoices": {"A": {"total": 400, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 400, "receipt": "R1", "ref": "A"}}, {"void": {"invoice": "A"}}],
+      "expect": {"invoices": {"A": ["void", 0]}, "payments": {"R1": ["unmatched", 400]}}
+    },
+    {
+      "name": "reversed payment reopens the invoice",
+      "invoices": {"A": {"total": 500, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 500, "receipt": "R1", "ref": "A"}}, {"reverse": {"receipt": "R1"}}],
+      "expect": {"invoices": {"A": ["open", 500]}}
+    },
+    {
+      "name": "cash on a walk-in sale with no customer",
+      "invoices": {"A": {"total": 250}},
+      "steps": [{"pay": {"amount": 250, "method": "cash", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}}
+    },
+    {
+      "name": "cents: KES 100.50 paid with a rounded-up STK of 101",
+      "invoices": {"A": {"total": 100.50, "customer": "duka"}},
+      "steps": [{"pay": {"amount": 101, "receipt": "R1", "method": "mpesa_stk", "ref": "A"}}],
+      "expect": {"invoices": {"A": ["paid", 0]}, "payments": {"R1": ["partial", 0.50]}}
+    }
+  ]
+}

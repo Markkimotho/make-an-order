@@ -5,6 +5,7 @@ inserted when the inventory table is empty, so the function is safe to
 call on every boot.
 """
 from models import db, InventoryItem
+from services import stock
 
 # ---------------------------------------------------------------------------
 # Seed catalogues — one list per business type
@@ -346,5 +347,11 @@ def seed_inventory(business_type: str = 'general') -> None:
 
     catalogue = _SEEDS.get(business_type, _GENERAL)
     for data in catalogue:
-        db.session.add(InventoryItem(**data))
+        data = dict(data)
+        qty = int(data.pop('stock', 0) or 0)
+        item = InventoryItem(**data)
+        db.session.add(item)
+        db.session.flush()
+        if qty > 0:
+            stock.receive(item, qty, unit_cost=data.get('cost_price'), reason='initial_stock')
     db.session.commit()

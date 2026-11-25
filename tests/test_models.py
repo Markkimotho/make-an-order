@@ -1,32 +1,9 @@
-import pytest # type: ignore
-from app import app, db
-from models import Customer, Order
+from models import db, Customer, Order
 
-# This will set up a test client with a temporary database
-@pytest.fixture
-def client():
-    test_app = app  # Using the existing app instance
-
-    # Set up the app context
-    with test_app.app_context():
-        # Configure the app for testing
-        test_app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'  # Use an in-memory database for tests
-        test_app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-        test_app.config['SECRET_KEY'] = 'test_secret_key' # Needed for session/login_required in some tests
-
-        # Create the tables before each test
-        db.create_all()
-
-        # Yield the test client for making requests
-        yield test_app.test_client()
-
-        # Clean up after tests
-        db.session.remove()
-        db.drop_all()
 
 # Test customer creation
 def test_create_customer(client):
-    customer = Customer(name='John Doe', phone_number='1234567890', code='CUST001')
+    customer = Customer(name='John Doe', phone_number='0711000001', code='CUST001')
     db.session.add(customer)
     db.session.commit()
 
@@ -34,12 +11,12 @@ def test_create_customer(client):
     fetched_customer = db.session.get(Customer, customer.id)  # Use db.session.get instead of query.get
     assert fetched_customer is not None
     assert fetched_customer.name == 'John Doe'
-    assert fetched_customer.phone_number == '1234567890'
+    assert fetched_customer.phone_number == '254711000001'
     assert fetched_customer.code == 'CUST001'
 
 # Test order creation linked to a customer
 def test_create_order(client):
-    customer = Customer(name='Jane Doe', phone_number='9876543210', code='CUST002')
+    customer = Customer(name='Jane Doe', phone_number='0711000002', code='CUST002')
     db.session.add(customer)
     db.session.commit()
 
@@ -57,7 +34,7 @@ def test_create_order(client):
 
 # Test to_dict method of Customer
 def test_customer_to_dict(client):
-    customer = Customer(name='Alice', phone_number='1112223333', code='CUST003')
+    customer = Customer(name='Alice', phone_number='0711000003', code='CUST003')
     db.session.add(customer)
     db.session.commit()
 
@@ -65,13 +42,24 @@ def test_customer_to_dict(client):
     assert customer_dict == {
         "id": customer.id,
         "name": "Alice",
-        "phone_number": "1112223333",
-        "code": "CUST003"
+        "email": None,
+        "phone_number": "254711000003",
+        "code": "CUST003",
+        "loyalty_points": 0,
+        "credit_limit": 0.0,
+        "credit_term_days": 30,
+        "customer_type": "retail",
+        # The account code defaults to the customer code; no KYC or tier yet.
+        "account_ref": "CUST003",
+        "national_id": None, "physical_address": None, "kra_pin": None,
+        "route_zone": None, "gps_lat": None, "gps_lng": None, "price_tier_id": None,
     }
+    assert "public_token" not in customer_dict           # the duka's link is not echoed
+    assert len(customer.public_token) >= 20
 
 # Test to_dict method of Order
 def test_order_to_dict(client):
-    customer = Customer(name='Bob', phone_number='4445556666', code='CUST004')
+    customer = Customer(name='Bob', phone_number='0711000004', code='CUST004')
     db.session.add(customer)
     db.session.commit()
 
@@ -89,7 +77,7 @@ def test_order_to_dict(client):
 
 # Test that customer and order delete works
 def test_delete_customer_and_order(client):
-    customer = Customer(name='Charlie', phone_number='7778889999', code='CUST005')
+    customer = Customer(name='Charlie', phone_number='0711000005', code='CUST005')
     db.session.add(customer)
     db.session.commit()
 

@@ -1,90 +1,128 @@
-import pytest # type: ignore
-from app import app, db
-from models import Customer # Import Customer model
+"""Customer API. Register/view need admin; update/delete need superuser."""
+import pytest
+
+JANE = {"name": "Jane Doe", "phone_number": "0722000388", "code": "DEF456"}
+
 
 @pytest.fixture
-def client():
-    app.config["TESTING"] = True
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
-    # This secret key is needed for session handling in tests, especially with login_required
-    app.config['SECRET_KEY'] = 'test_secret_key'
-    with app.test_client() as client:
-        with app.app_context():
-            db.create_all()
-        yield client
-        with app.app_context():
-            db.drop_all()
+def admin(login_as):
+    return login_as("admin")
 
-# Helper to simulate a logged-in session for protected routes
+
 @pytest.fixture
-def logged_in_client(client):
-    with client.session_transaction() as sess:
-        sess['profile'] = {'email': 'testuser@example.com'}
-        sess['access_token'] = 'fake-token'
-    return client
+def superuser(login_as):
+    return login_as("superuser")
 
-def test_register_customer(logged_in_client):
-    data = {"name": "John Doe", "phone_number": "+25756098389", "code": "ABC123"}
-    response = logged_in_client.post("/customers/register", json=data)
+
+def _register(c, data=JANE):
+    response = c.post("/customers/register", json=data)
+    assert response.status_code == 201
+    return response.get_json()["customer_id"]
+
+
+def test_register_customer(admin):
+    data = {"name": "John Doe", "phone_number": "0722000389", "code": "ABC123"}
+    response = admin.post("/customers/register", json=data)
     assert response.status_code == 201
     assert response.get_json()["message"] == "Customer registered successfully"
 
-def test_register_customer_unauthorized(client):
-    data = {"name": "John Doe", "phone_number": "+25756098389", "code": "ABC123"}
-    response = client.post("/customers/register", json=data)
-    assert response.status_code == 302 # Redirect to login
 
-def test_register_duplicate_customer(logged_in_client):
-    data = {"name": "John Doe", "phone_number": "+25756098389", "code": "ABC123"}
-    logged_in_client.post("/customers/register", json=data)
-    response = logged_in_client.post("/customers/register", json=data)
+def test_register_customer_unauthorized(client):
+    response = client.post("/customers/register", json=JANE)
+    assert response.status_code == 401
+
+
+def test_register_customer_forbidden_for_cashier(login_as):
+    response = login_as("cashier").post("/customers/register", json=JANE)
+    assert response.status_code == 403
+
+
+def test_register_customer_missing_fields(admin):
+    response = admin.post("/customers/register", json={"name": "No Phone"})
+    assert response.status_code == 400
+
+
+def test_register_duplicate_customer(admin):
+    _register(admin)
+    response = admin.post("/customers/register", json=JANE)
     assert response.status_code == 400
     assert response.get_json()["error"] == "Phone number or code already exists"
 
-def test_view_customers(logged_in_client):
-    logged_in_client.post("/customers/register", json={"name": "Jane Doe", "phone_number": "+25756098388", "code": "DEF456"})
-    response = logged_in_client.get("/customers/view_customers")
+
+def test_view_customers(admin):
+    _register(admin)
+    response = admin.get("/customers/view_customers")
     assert response.status_code == 200
-    assert len(response.get_json()) == 1
+    body = response.get_json()
+    assert len(body["customers"]) == 1
+    assert body["pagination"]["total"] == 1
+
 
 def test_view_customers_unauthorized(client):
     response = client.get("/customers/view_customers")
-    assert response.status_code == 302 # Redirect to login
+    assert response.status_code == 401
 
-def test_view_single_customer(logged_in_client):
-    response = logged_in_client.post("/customers/register", json={"name": "Jane Doe", "phone_number": "+25756098388", "code": "DEF456"})
-    customer_id = response.get_json()["customer_id"]
-    response = logged_in_client.get(f"/customers/view_customers/{customer_id}")
+
+def test_view_single_customer(admin):
+    customer_id = _register(admin)
+    response = admin.get(f"/customers/view_customers/{customer_id}")
     assert response.status_code == 200
-    assert response.get_json()["name"] == "Jane Doe"
+    body = response.get_json()
+    assert body["customer"]["name"] == "Jane Doe"
+    assert body["stats"]["total_orders"] == 0
 
-def test_view_nonexistent_customer(logged_in_client):
-    response = logged_in_client.get("/customers/view_customers/999")
+
+def test_view_nonexistent_customer(admin):
+    response = admin.get("/customers/view_customers/999")
     assert response.status_code == 404
     assert response.get_json()["error"] == "Customer not found"
 
-def test_update_customer(logged_in_client):
-    response = logged_in_client.post("/customers/register", json={"name": "Jane Doe", "phone_number": "+25756098388", "code": "DEF456"})
-    customer_id = response.get_json()["customer_id"]
-    update_data = {"name": "Jane Smith"}
-    response = logged_in_client.put(f"/customers/update_customers/{customer_id}", json=update_data)
+
+def test_update_customer(admin, superuser):
+    customer_id = _register(admin)
+    response = superuser.put(f"/customers/update_customers/{customer_id}",
+                             json={"name": "Jane Smith"})
     assert response.status_code == 200
     assert response.get_json()["message"] == "Customer updated successfully"
 
-def test_update_nonexistent_customer(logged_in_client):
-    update_data = {"name": "Jane Smith"}
-    response = logged_in_client.put("/customers/update_customers/999", json=update_data)
+
+def test_update_customer_forbidden_for_admin(admin):
+    customer_id = _register(admin)
+    response = admin.put(f"/customers/update_customers/{customer_id}",
+                         json={"name": "Jane Smith"})
+    assert response.status_code == 403
+
+
+def test_update_nonexistent_customer(superuser):
+    response = superuser.put("/customers/update_customers/999", json={"name": "Jane Smith"})
     assert response.status_code == 404
     assert response.get_json()["error"] == "Customer not found"
 
-def test_delete_customer(logged_in_client):
-    response = logged_in_client.post("/customers/register", json={"name": "Jane Doe", "phone_number": "+25756098388", "code": "DEF456"})
-    customer_id = response.get_json()["customer_id"]
-    response = logged_in_client.delete(f"/customers/delete_customers/{customer_id}")
+
+def test_delete_customer(admin, superuser):
+    customer_id = _register(admin)
+    response = superuser.delete(f"/customers/delete_customers/{customer_id}")
     assert response.status_code == 200
     assert response.get_json()["message"] == "Customer deleted successfully"
 
-def test_delete_nonexistent_customer(logged_in_client):
-    response = logged_in_client.delete("/customers/delete_customers/999")
+
+def test_delete_nonexistent_customer(superuser):
+    response = superuser.delete("/customers/delete_customers/999")
     assert response.status_code == 404
     assert response.get_json()["error"] == "Customer not found"
+
+
+def test_customer_with_history_is_kept_not_deleted(admin, superuser, app):
+    """Found by the isolation sweep: deleting a customer with loyalty
+    history failed with a database error (500)."""
+    from auth.tenancy import tenant_scope
+    from models import Customer, LoyaltyTransaction, db
+    customer_id = _register(admin)
+    with tenant_scope(app.acme_id):
+        db.session.add(LoyaltyTransaction(customer_id=customer_id, points_earned=5,
+                                          balance_after=5))
+        db.session.commit()
+    r = superuser.delete(f"/customers/delete_customers/{customer_id}")
+    assert r.status_code == 409
+    with tenant_scope(app.acme_id):
+        assert db.session.get(Customer, customer_id) is not None

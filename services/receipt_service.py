@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from config import Config
-from models import Customer, Transaction, User
+from models import Customer, Transaction, User, db
 
 
 # --------------------------------------------------------------------------
@@ -24,12 +24,12 @@ from models import Customer, Transaction, User
 
 def build_receipt(transaction_id: int) -> dict[str, Any]:
     """Return a fully-resolved receipt dict for the given transaction."""
-    txn = Transaction.query.get(transaction_id)
+    txn = db.session.get(Transaction, transaction_id)
     if txn is None:
         raise ValueError(f"transaction {transaction_id} not found")
 
-    customer = Customer.query.get(txn.customer_id) if txn.customer_id else None
-    cashier  = User.query.get(txn.cashier_id) if txn.cashier_id else None
+    customer = db.session.get(Customer, txn.customer_id) if txn.customer_id else None
+    cashier  = db.session.get(User, txn.cashier_id) if txn.cashier_id else None
 
     return {
         "business": {

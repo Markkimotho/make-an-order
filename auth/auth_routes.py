@@ -1,94 +1,191 @@
-from flask import Blueprint, redirect, url_for, session, request, render_template
-from auth.auth_middleware import login_required
+"""Login, business signup and logout.
+
+Login looks the user up across all tenants (emails are globally unique),
+then the session carries that user's tenant. Google login only signs in
+existing users; a new business starts at /register, which creates the
+tenant and its owner (role 'superuser') together.
+"""
 import logging
 import os
+
+from flask import Blueprint, redirect, render_template, request, session, url_for
+from sqlalchemy.exc import IntegrityError
+
+from auth.tenancy import unscoped
+from config import Config
+from services.phone import InvalidPhone, normalize_ke_phone
 
 logger = logging.getLogger(__name__)
 
 
+def _platform_admin_emails():
+    raw = Config.PLATFORM_ADMIN_EMAILS or ''
+    return {e.strip().lower() for e in raw.split(',') if e.strip()}
+
+
+def _session_for(user_fields):
+    session.clear()
+    session['profile'] = {'email': user_fields['email'],
+                          'name': user_fields['name'] or user_fields['email']}
+    session['role'] = user_fields['role']
+    session['user_id'] = user_fields['id']
+    session['tenant_id'] = user_fields['tenant_id']
+    session.permanent = True
+    logger.info(f"Session set: {user_fields['email']} role={user_fields['role']} "
+                f"tenant={user_fields['tenant_id']}")
+
+
+def _login_user(email):
+    """Find an approved user by email in any tenant and start their session.
+
+    Returns None on success, else the message to show. Removes the
+    platform-admin flag if the email is no longer in PLATFORM_ADMIN_EMAILS.
+    """
+    from models import User, db
+    with unscoped():
+        user = User.query.filter_by(email=email).first()
+        if user is None:
+            return 'not_found'
+        if user.status == 'pending':
+            return "Your account is awaiting approval by your business owner."
+        if user.status == 'rejected':
+            return "Your account access has been denied. Contact your business owner."
+        # Platform-admin rights need both the database flag (set only by
+        # `flask create-platform-admin` / `grant-platform-admin`) and the
+        # email in PLATFORM_ADMIN_EMAILS. Login can only remove the flag,
+        # never grant it: anyone can sign up with any email address.
+        if user.is_platform_admin and email not in _platform_admin_emails():
+            user.is_platform_admin = False
+            db.session.commit()
+        if user.tenant_id is None and not user.is_platform_admin:
+            return "This account is not linked to a business."
+        fields = {'id': user.id, 'email': user.email, 'name': user.name,
+                  'role': user.role, 'tenant_id': user.tenant_id}
+    _session_for(fields)
+    return None
+
+
 def create_auth_blueprint(oauth):
     auth_bp = Blueprint('auth', __name__)
-
-    # Get the registered Google client
     google_client = oauth.google
 
     # ── Google OAuth ────────────────────────────────────────────────────
 
     @auth_bp.route('/login')
     def login():
-        logger.info("OAuth login initiated")
         if 'profile' in session:
-            logger.info("User already in session, redirecting to dashboard")
             return redirect(url_for('dashboard'))
         try:
             app_url = os.getenv("APP_URL", "http://127.0.0.1:5001").rstrip('/')
-            redirect_uri = f"{app_url}/auth/authorize"
-            logger.info(f"Redirecting to Google OAuth, callback={redirect_uri}")
-            return google_client.authorize_redirect(redirect_uri, prompt='select_account')
+            return google_client.authorize_redirect(f"{app_url}/auth/authorize",
+                                                    prompt='select_account')
         except Exception as e:
-            logger.error(f"Failed to initiate Google login: {type(e).__name__}: {str(e)}", exc_info=True)
-            return redirect(url_for('index', message=f"Could not connect to Google: {str(e)}"))
+            logger.error(f"Failed to initiate Google login: {type(e).__name__}: {e}", exc_info=True)
+            return redirect(url_for('login_page', message="Could not connect to Google."))
 
     @auth_bp.route('/authorize')
     def authorize():
         try:
-            logger.info("OAuth authorize callback initiated")
-            token     = google_client.authorize_access_token()
-            logger.info("Got access token")
+            google_client.authorize_access_token()
             user_info = google_client.get('userinfo').json()
-            logger.info(f"Got user info: {user_info.get('email')}")
-            email     = user_info.get('email', '')
-            name      = user_info.get('name', '')
-            _sync_oauth_user(email, name)
-            logger.info(f"User synced: {email}")
-            return redirect(url_for('dashboard'))
         except Exception as e:
-            logger.error(f"OAuth authorization failed: {type(e).__name__}: {str(e)}", exc_info=True)
-            return redirect(url_for('index', message=f"Login failed: {str(e)}"))
+            logger.error(f"OAuth authorization failed: {type(e).__name__}: {e}", exc_info=True)
+            return redirect(url_for('login_page', message="Google sign-in failed."))
+        email = (user_info.get('email') or '').strip().lower()
+        problem = _login_user(email)
+        if problem == 'not_found':
+            return redirect(url_for('register_page',
+                                    message="No account for that Google address. "
+                                            "Set up your business, or ask your owner to add you."))
+        if problem:
+            return redirect(url_for('login_page', message=problem))
+        return redirect(url_for('dashboard'))
 
     # ── Local email/password login ──────────────────────────────────────
 
     @auth_bp.route('/login/local', methods=['POST'])
     def login_local():
-        email    = request.form.get('email', '').strip().lower()
-        password = request.form.get('password', '')
         from models import User
-        user = User.query.filter_by(email=email).first()
-        if not user or not user.check_password(password):
-            return redirect(url_for('index', message="Invalid email or password."))
-        if user.status == 'pending':
-            return redirect(url_for('index', message="Your account is awaiting approval by an administrator."))
-        if user.status == 'rejected':
-            return redirect(url_for('index', message="Your account access has been denied. Contact an administrator."))
-        _populate_session(user)
-        logger.info(f"Local login: {email} ({user.role})")
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        with unscoped():
+            user = User.query.filter_by(email=email).first()
+            ok = user is not None and user.check_password(password)
+        if not ok:
+            return redirect(url_for('login_page', message="Invalid email or password."))
+        problem = _login_user(email)
+        if problem:
+            return redirect(url_for('login_page', message=problem))
         return redirect(url_for('dashboard'))
 
-    # ── Registration ────────────────────────────────────────────────────
+    # ── Business signup ─────────────────────────────────────────────────
 
     @auth_bp.route('/register', methods=['GET', 'POST'])
     def register():
+        from app import BUSINESS_CONFIGS
+        from migrations.helpers import slugify
+        from models import Tenant, User, db
+
         if 'profile' in session:
             return redirect(url_for('dashboard'))
-        if request.method == 'POST':
-            email    = request.form.get('email', '').strip().lower()
-            name     = request.form.get('name', '').strip()
-            password = request.form.get('password', '')
-            phone    = request.form.get('phone_number', '').strip()
-            from models import db, User
-            if not email or not password or not name or not phone:
-                return render_template('register.html', error="All fields are required.")
-            if len(password) < 8:
-                return render_template('register.html', error="Password must be at least 8 characters.", form_data=request.form)
-            if User.query.filter_by(email=email).first():
-                return render_template('register.html', error="An account with this email already exists.", form_data=request.form)
-            user = User(email=email, name=name, phone_number=phone, role='user', status='pending')
-            user.set_password(password)
-            db.session.add(user)
-            db.session.commit()
-            logger.info(f"New registration: {email}, awaiting approval.")
-            return render_template('register.html', success=True)
-        return render_template('register.html')
+        if request.method == 'GET':
+            return redirect(url_for('register_page'))
+
+        form = request.form
+        business_name = form.get('business_name', '').strip()
+        vertical = form.get('vertical', '').strip()
+        name = form.get('name', '').strip()
+        email = form.get('email', '').strip().lower()
+        password = form.get('password', '')
+        phone_raw = form.get('phone_number', '').strip()
+
+        def fail(message):
+            return render_template('register.html', error=message, form_data=form,
+                                   BUSINESS_CONFIGS=BUSINESS_CONFIGS), 400
+
+        if not all((business_name, vertical, name, email, password, phone_raw)):
+            return fail("All fields are required.")
+        if vertical not in BUSINESS_CONFIGS:
+            return fail("Choose a type of business.")
+        if len(password) < 8:
+            return fail("Password must be at least 8 characters.")
+        try:
+            phone = normalize_ke_phone(phone_raw)
+        except InvalidPhone:
+            return fail("Enter a Kenyan mobile number, for example 0712 345 678.")
+
+        slug = None
+        with unscoped():
+            if User.query.filter_by(email=email).first() is not None:
+                return fail("An account with this email already exists.")
+            # Two signups with the same business name can race for one slug;
+            # the loser retries with the next free one.
+            for _ in range(5):
+                taken = {s for (s,) in db.session.query(Tenant.slug).all()}
+                tenant = Tenant(name=business_name, slug=slugify(business_name, taken),
+                                vertical=vertical)
+                owner = User(email=email, name=name, phone_number=phone,
+                             role='superuser', status='approved')
+                owner.set_password(password)
+                try:
+                    db.session.add(tenant)
+                    db.session.flush()
+                    owner.tenant_id = tenant.id
+                    db.session.add(owner)
+                    db.session.commit()
+                    slug = tenant.slug
+                    break
+                except IntegrityError:
+                    db.session.rollback()
+                    if User.query.filter_by(email=email).first() is not None:
+                        return fail("An account with this email already exists.")
+            if slug is None:
+                return fail("Could not create the business right now. Please try again.")
+        logger.info(f"New business signup: {slug} ({vertical}) owner {email}")
+        problem = _login_user(email)
+        if problem:
+            return redirect(url_for('login_page', message=problem))
+        return redirect(url_for('dashboard'))
 
     # ── Logout ──────────────────────────────────────────────────────────
 
@@ -98,35 +195,5 @@ def create_auth_blueprint(oauth):
         session.clear()
         logger.info(f"User {identifier} logged out.")
         return redirect(url_for('index'))
-
-    # ── Shared helpers ──────────────────────────────────────────────────
-
-    def _sync_oauth_user(email, name):
-        """Look up or create User for Google OAuth login, always approve."""
-        from models import db, User, SUPERUSER_EMAIL
-        user = User.query.filter_by(email=email).first()
-        if not user:
-            role = 'superuser' if email == SUPERUSER_EMAIL else 'user'
-            user = User(email=email, name=name or None, role=role, status='approved')
-            db.session.add(user)
-            db.session.commit()
-        else:
-            changed = False
-            if email == SUPERUSER_EMAIL and user.role != 'superuser':
-                user.role = 'superuser'; changed = True
-            if user.status != 'approved':
-                user.status = 'approved'; changed = True
-            if name and user.name != name:
-                user.name = name; changed = True
-            if changed:
-                db.session.commit()
-        _populate_session(user)
-
-    def _populate_session(user):
-        session['profile'] = {'email': user.email, 'name': user.name or user.email}
-        session['role']    = user.role
-        session['user_id'] = user.id
-        session.permanent  = True
-        logger.info(f"Session set: {user.email} role={user.role} status={user.status}")
 
     return auth_bp
