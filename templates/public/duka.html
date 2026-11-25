@@ -75,7 +75,9 @@
       .then(({status, body}) => {
         if (status === 201 && !body.on_credit) { window.location.href = body.pay_url; return; }
         if (status === 201) { msg.className = 'mt-3 small text-success';
-          msg.textContent = 'Order ' + body.order + ' placed on credit (invoice ' + body.invoice + ').'; return; }
+          msg.textContent = 'Order ' + body.order + ' placed on credit (invoice ' + body.invoice + '). Updating...';
+          setTimeout(() => window.location.reload(), 1500);           // fresh owed / credit left
+          return; }
         msg.className = 'mt-3 small text-danger';
         msg.textContent = status === 429 ? 'Too many tries. Wait a minute.' : (body.error || 'Something went wrong.');
       }).catch(() => { msg.className = 'mt-3 small text-danger'; msg.textContent = 'No connection. Try again.'; });

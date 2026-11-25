@@ -33,7 +33,16 @@ dash.get('/distributor/dashboard').then(d => {
     const id = e.target.dataset.remind; if (!id) return;
     e.target.disabled = true;
     fetch('/distributor/invoices/' + id + '/remind', {method: 'POST'})
-      .then(r => { e.target.textContent = r.ok ? 'Sent' : 'Failed'; });
+      .then(r => r.json().then(b => ({ok: r.ok, b})))
+      .then(({ok, b}) => {
+        // The route answers 200 with the outbox row even when the SMS could
+        // not go out; show what actually happened to the message.
+        const status = ok && b.sms ? b.sms.status : null;
+        e.target.textContent = status === 'sent' ? 'Sent' : status === 'skipped' ? 'No valid phone'
+          : status ? 'SMS failed' : (b.error || 'Failed');
+        if (status !== 'sent') { e.target.disabled = false; e.target.classList.replace('btn-outline-primary', 'btn-outline-danger'); }
+      })
+      .catch(() => { e.target.textContent = 'Failed'; e.target.disabled = false; });
   });
 }).catch(() => { document.getElementById('ds-overdue').innerHTML = '<li class="list-group-item small text-danger">Could not load.</li>'; });
 </script>

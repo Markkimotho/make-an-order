@@ -384,7 +384,7 @@ def campaign_report(campaign):
                 sizes[oi.item_name] += oi.quantity
         if status == "paid" and order.fulfillment_status != "collected":
             member = db.session.get(Member, order.member_id) if order.member_id else None
-            packing.append({"order_number": order.order_number,
+            packing.append({"order_id": order.id, "order_number": order.order_number,
                             "member_ref": member.member_ref if member else None,
                             "member": member.name if member else None,
                             "group": member.group_label if member else None,

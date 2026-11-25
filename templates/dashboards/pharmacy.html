@@ -15,9 +15,13 @@
 dash.get('/pharmacy/dashboard').then(d => {
   const {esc, rows} = dash;
   const labels = {expired: 'Expired', '30': 'Within 30 days', '60': '31 to 60 days', '90': '61 to 90 days'};
-  document.getElementById('ph-expiry').innerHTML = Object.keys(labels).map(k =>
-    `<li class="list-group-item d-flex justify-content-between"><span>${labels[k]}</span>
-       <span class="badge ${k === 'expired' ? 'bg-danger' : 'bg-secondary'}">${d.expiry[k].length} batches · ${dash.kes(d.expiry[k].reduce((s, b) => s + b.cost_at_risk, 0))}</span></li>`).join('');
+  document.getElementById('ph-expiry').innerHTML = Object.keys(labels).map(k => {
+    const batches = d.expiry[k];
+    const cost = batches.reduce((s, b) => s + b.cost_at_risk, 0);
+    const value = batches.length && !cost ? 'cost not set' : dash.kes(cost);
+    return `<li class="list-group-item d-flex justify-content-between"><span>${labels[k]}</span>
+       <span class="badge ${k === 'expired' ? 'bg-danger' : 'bg-secondary'}">${batches.length} batch${batches.length === 1 ? '' : 'es'} · ${value}</span></li>`;
+  }).join('');
   const refills = [...d.refills.overdue.map(r => ({...r, tag: 'Overdue'})), ...d.refills.today.map(r => ({...r, tag: 'Today'})),
                    ...d.refills.next_7_days.map(r => ({...r, tag: 'In ' + r.days + ' days'}))];
   document.getElementById('ph-refills').innerHTML = rows(refills, r =>

@@ -25,8 +25,24 @@ dash.get('/institution/campaigns').then(list => {
       <p class="small mb-1">Paid ${kes(r.paid)} of ${kes(r.billed)} · outstanding ${kes(r.outstanding)}</p>
       <p class="small mb-1">Orders: ${r.orders.paid || 0} paid, ${r.orders.partial || 0} part paid, ${r.orders.open || 0} unpaid, ${r.orders.collected || 0} collected</p>
       <p class="small mb-1">Sizes: ${sizes}</p>
-      <p class="small mb-0">${r.packing_list.length} to pack</p></div></div></div>`);
+      <p class="small mb-1">${r.packing_list.length} to pack</p>
+      <ul class="list-group list-group-flush small">${r.packing_list.map(p =>
+        `<li class="list-group-item px-0 d-flex justify-content-between align-items-center gap-2">
+           <span>${esc(p.member_ref)} ${esc(p.member)} · ${esc(p.group)}<br><span class="text-muted">${p.items.map(esc).join(', ')}</span></span>
+           <button class="btn btn-sm btn-outline-secondary" data-resend="${p.order_id}">Resend code</button></li>`).join('')}</ul>
+      </div></div></div>`);
   }));
+});
+document.getElementById('in-campaigns').addEventListener('click', e => {
+  const id = e.target.dataset.resend; if (!id) return;
+  e.target.disabled = true;
+  fetch('/institution/orders/' + id + '/pickup-code', {method: 'POST'})
+    .then(r => r.json().then(b => ({ok: r.ok, b})))
+    .then(({ok, b}) => {
+      const sent = ok && (b.sent || []).some(m => m.status === 'sent');
+      e.target.textContent = sent ? 'New code sent' : (ok ? 'SMS failed' : (b.error || 'Failed'));
+      e.target.disabled = sent;
+    });
 });
 document.getElementById('in-pickup').addEventListener('submit', e => {
   e.preventDefault();
