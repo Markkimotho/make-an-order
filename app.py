@@ -687,6 +687,8 @@ def _register_core_routes(app):
     def purchase_orders_page():
         return _safe_render('purchase_orders.html', **get_user_context())
 
+    __import__('pages.pricing', fromlist=['register']).register(app)
+
     @app.route('/reports-dashboard')
     @finance_required
     @feature_required('finance')

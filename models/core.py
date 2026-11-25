@@ -206,7 +206,10 @@ class InventoryItem(TenantMixin, db.Model):
     def to_dict(self, soonest=None):
         """``soonest``: a map from :meth:`soonest_batches`, so a list of
         items costs one batch query instead of one per item."""
+        from services import pricing
         batch = soonest.get(self.id) if soonest is not None else self._soonest_batch()
+        suggested = pricing.suggested_price(self)
+        margin = pricing.margin_pct(self.cost_price, self.price)
         return {
             'id':          self.id,
             'name':        self.name,
@@ -220,6 +223,11 @@ class InventoryItem(TenantMixin, db.Model):
             'sku':         self.sku,
             'barcode':     self.barcode,
             'reorder_level': self.reorder_level,
+            'reorder_quantity': self.reorder_quantity,
+            'markup_pct':  float(self.markup_pct) if self.markup_pct is not None else None,
+            'price_mode':  self.price_mode,
+            'suggested_price': float(suggested) if suggested is not None else None,
+            'margin_pct':  float(margin) if margin is not None else None,
             'expiry_date': batch.expiry_date.isoformat() if batch and batch.expiry_date else None,
             'batch_number': batch.batch_number if batch else None,
             'supplier_id': self.supplier_id,
@@ -662,11 +670,18 @@ class PurchaseOrderItem(TenantMixin, db.Model):
     batch_number       = db.Column(db.String(64), nullable=True)
     expiry_date        = db.Column(db.Date, nullable=True)
 
+    @property
+    def item_name(self):
+        item = (db.session.get(InventoryItem, self.inventory_item_id)
+                if self.inventory_item_id else None)
+        return item.name if item else None
+
     def to_dict(self):
         return {
             'id':                self.id,
             'po_id':             self.po_id,
             'inventory_item_id': self.inventory_item_id,
+            'item_name':         self.item_name,
             'quantity_ordered':  float(self.quantity_ordered),
             'quantity_received': float(self.quantity_received or 0),
             'unit_cost':         float(self.unit_cost),
