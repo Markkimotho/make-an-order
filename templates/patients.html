@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Patients{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-user-injured me-2"></i>Patients</h2>
+    <p class="text-muted mb-0 small">Open a patient to see what they received each month, their current
+      medicines and when the next refill is due.</p>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('pharmacy_page') }}">
+    <i class="fas fa-prescription-bottle-medical me-1"></i>Prescriptions & refills</a>
+</div>
+<div class="mb-3">
+  <input type="search" class="form-control" id="ptSearch" autocomplete="off"
+         placeholder="Search by name, phone (07..., 254... or +254...) or code"
+         aria-label="Search patients">
+  <div class="form-text" id="ptHint">Most recently served first.</div>
+</div>
+<div class="card"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead><tr><th>Patient</th><th>Phone</th><th>Code</th><th>Last visit</th>
+      <th class="text-center">Chronic</th><th>Next refill</th></tr></thead>
+    <tbody id="ptRows"><tr><td colspan="6" class="text-muted p-3">Loading…</td></tr></tbody>
+  </table>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const rowsEl = document.getElementById('ptRows');
+  const hint = document.getElementById('ptHint');
+  function refill(p) {
+    if (!p.next_refill_due) return '<span class="text-muted">-</span>';
+    const d = p.days_to_refill;
+    const tag = d < 0 ? `<span class="badge bg-danger">${esc(-d)} days overdue</span>`
+      : d === 0 ? '<span class="badge bg-warning text-dark">Today</span>'
+      : `<span class="badge bg-light text-dark">In ${esc(d)} days</span>`;
+    return `${esc(p.next_refill_due)} ${tag}`;
+  }
+  let seq = 0;
+  async function load(q) {
+    const mine = ++seq;
+    const r = await fetch('/pharmacy/patients?q=' + encodeURIComponent(q || ''));
+    if (mine !== seq) return;
+    if (!r.ok) { rowsEl.innerHTML = '<tr><td colspan="6" class="text-danger p-3">Could not load patients.</td></tr>'; return; }
+    const data = await r.json();
+    hint.textContent = q ? `${data.patients.length} match${data.patients.length === 1 ? '' : 'es'}.` : 'Most recently served first.';
+    if (!data.patients.length) {
+      rowsEl.innerHTML = `<tr><td colspan="6" class="text-muted p-3">${q ? 'No patient matches that.' : 'No patients yet.'}</td></tr>`;
+      return;
+    }
+    rowsEl.innerHTML = data.patients.map(p => `<tr>
+      <td><a href="/patients-ui/${encodeURIComponent(p.id)}" class="fw-semibold">${esc(p.name)}</a></td>
+      <td class="font-monospace small">${esc(p.phone_number)}</td>
+      <td class="small">${esc(p.code)}</td>
+      <td class="small">${p.last_visit ? esc(p.last_visit) : '<span class="text-muted">Never</span>'}</td>
+      <td class="text-center">${p.chronic_count ? `<span class="badge bg-primary">${esc(p.chronic_count)}</span>` : '<span class="text-muted">0</span>'}</td>
+      <td class="small">${refill(p)}</td></tr>`).join('');
+  }
+  let timer;
+  document.getElementById('ptSearch').addEventListener('input', e => {
+    clearTimeout(timer);
+    timer = setTimeout(() => load(e.target.value.trim()), 250);
+  });
+  load('');
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}{{ patient.name }}: medication history{% endblock %}
+{% block content %}
+<style>
+  .mh-month { break-inside: avoid-page; }
+  .mh-month tr { break-inside: avoid; }
+  @media print {
+    nav.navbar, .d-print-none { display: none !important; }
+    body { background: #fff !important; }
+    .content-wrapper { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
+    .card { border: 1px solid #999 !important; box-shadow: none !important; }
+    .table { font-size: 11px; }
+    a { color: inherit !important; text-decoration: none !important; }
+    .badge { border: 1px solid #666; color: #000 !important; background: #fff !important; }
+  }
+</style>
+
+<div class="d-none d-print-block mb-2">
+  <div class="fw-bold fs-5">{{ biz_name }}</div>
+  <div class="small">Medication history printed <span id="mhPrinted"></span></div>
+</div>
+
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-1"><i class="fas fa-user-injured me-2 d-print-none"></i>{{ patient.name }}</h2>
+    <div class="small text-muted">
+      <i class="fas fa-phone me-1"></i><span class="font-monospace">{{ patient.phone_number }}</span>
+      {% if patient.email %}<span class="ms-3"><i class="fas fa-envelope me-1"></i>{{ patient.email }}</span>{% endif %}
+      <span class="ms-3">Code {{ patient.code }}</span>
+      {% if patient.physical_address %}<span class="ms-3"><i class="fas fa-location-dot me-1"></i>{{ patient.physical_address }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap d-print-none">
+    <select class="form-select form-select-sm w-auto" id="mhMonths" aria-label="Months to show">
+      <option value="3">Last 3 months</option>
+      <option value="6">Last 6 months</option>
+      <option value="12" selected>Last 12 months</option>
+      <option value="24">Last 24 months</option>
+      <option value="36">Last 36 months</option>
+    </select>
+    <button class="btn btn-sm btn-primary" type="button" onclick="window.print()">
+      <i class="fas fa-print me-1"></i>Print</button>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('pharmacy_page') }}">
+      <i class="fas fa-prescription-bottle-medical me-1"></i>Prescriptions & refills</a>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('patients_page') }}">All patients</a>
+  </div>
+</div>
+
+<div class="card mb-3">
+  <div class="card-header fw-semibold">Current medicines</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Medicine</th><th>Dosage</th><th>Prescriber</th><th>Supply</th>
+        <th>Refills left</th><th>Last given</th><th>Next refill due</th></tr></thead>
+      <tbody id="mhCurrent"><tr><td colspan="7" class="text-muted p-3">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="d-flex align-items-center justify-content-between mb-2">
+  <h3 class="h5 mb-0">Medication history</h3>
+  <div class="small text-muted" id="mhWindow"></div>
+</div>
+<div id="mhMonthsOut"><div class="text-muted">Loading…</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const qty = n => Number(n || 0).toLocaleString('en-KE', {maximumFractionDigits: 3});
+  const patientId = {{ patient.id | tojson }};
+  const sourceClass = {counter: 'bg-secondary', prescription: 'bg-primary', refill: 'bg-info text-dark'};
+  document.getElementById('mhPrinted').textContent = new Date().toLocaleString('en-KE', {timeZone: 'Africa/Nairobi'});
+
+  function due(m) {
+    if (!m.next_refill_due) return '<span class="text-muted">-</span>';
+    const d = m.days_to_refill;
+    const tag = d < 0 ? `<span class="badge bg-danger">${esc(-d)} days overdue</span>`
+      : d === 0 ? '<span class="badge bg-warning text-dark">Today</span>'
+      : `<span class="badge bg-light text-dark">In ${esc(d)} days</span>`;
+    return `${esc(m.next_refill_due)} ${tag}`;
+  }
+  function current(list) {
+    const el = document.getElementById('mhCurrent');
+    if (!list.length) {
+      el.innerHTML = '<tr><td colspan="7" class="text-muted p-3">No active chronic prescriptions.</td></tr>';
+      return;
+    }
+    el.innerHTML = list.map(m => m.items.map((it, i) => `<tr>
+      <td class="fw-semibold">${esc(it.name)} <span class="text-muted small">x ${esc(qty(it.quantity))}</span></td>
+      <td class="small">${esc(it.dosage || '')}</td>
+      ${i === 0 ? `<td class="small" rowspan="${m.items.length}">${esc(m.prescriber || '')}</td>
+      <td class="small" rowspan="${m.items.length}">${m.duration_days ? esc(m.duration_days) + ' days' : ''}</td>
+      <td class="small" rowspan="${m.items.length}">${m.refills_remaining == null ? 'No limit' : esc(m.refills_remaining)}</td>
+      <td class="small" rowspan="${m.items.length}">${esc(m.last_dispensed || '-')}</td>
+      <td class="small" rowspan="${m.items.length}">${due(m)}</td>` : ''}</tr>`).join('')).join('');
+  }
+  function batches(list) {
+    if (!list.length) return '<span class="text-muted">-</span>';
+    return list.map(b => `<span class="font-monospace">${esc(b.batch_number)}</span>` +
+      (b.expiry_date ? ` <span class="text-muted">exp ${esc(b.expiry_date)}</span>` : '')).join('<br>');
+  }
+  function row(r) {
+    const q = r.refunded
+      ? `${esc(qty(r.quantity))} <span class="badge bg-warning text-dark">${esc(qty(r.refunded_quantity))} of ${esc(qty(r.quantity_sold))} returned</span>`
+      : esc(qty(r.quantity));
+    return `<tr${r.quantity <= 0 ? ' class="text-muted"' : ''}>
+      <td class="small text-nowrap">${esc(r.date)} <span class="text-muted">${esc(r.time)}</span></td>
+      <td><span class="fw-semibold">${esc(r.item_name)}</span>${r.dosage ? `<div class="small text-muted">${esc(r.dosage)}</div>` : ''}</td>
+      <td class="text-end">${q}</td>
+      <td class="small">${batches(r.batches)}</td>
+      <td class="small">${esc(r.prescriber || '')}</td>
+      <td class="small">${esc(r.served_by || '')}</td>
+      <td class="small"><span class="badge ${sourceClass[r.source] || 'bg-secondary'}">${esc(r.source_label)}</span>
+        <div class="text-muted font-monospace">${esc(r.reference || '')}</div></td>
+      <td class="text-end small">${kes(r.amount)}</td></tr>`;
+  }
+  async function load() {
+    const months = document.getElementById('mhMonths').value;
+    const out = document.getElementById('mhMonthsOut');
+    const r = await fetch(`/pharmacy/patients/${encodeURIComponent(patientId)}/medications?months=${encodeURIComponent(months)}`);
+    if (!r.ok) { out.innerHTML = '<div class="text-danger">Could not load the history.</div>'; return; }
+    const data = await r.json();
+    current(data.current_medicines);
+    document.getElementById('mhWindow').textContent =
+      `${data.window.from} to ${data.window.to} · ${kes(data.total_spent)}`;
+    if (!data.months.length) {
+      out.innerHTML = '<div class="card"><div class="card-body text-muted">Nothing given in this period.</div></div>';
+      return;
+    }
+    out.innerHTML = data.months.map(m => `<div class="card mb-3 mh-month">
+      <div class="card-header d-flex justify-content-between flex-wrap gap-2">
+        <span class="fw-semibold">${esc(m.label)}</span>
+        <span class="small">${esc(m.items)} item${m.items === 1 ? '' : 's'} · ${kes(m.total_spent)}</span></div>
+      <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Date</th><th>Medicine</th><th class="text-end">Qty</th><th>Batch / expiry</th>
+          <th>Prescriber</th><th>Served by</th><th>Source</th><th class="text-end">Amount</th></tr></thead>
+        <tbody>${m.rows.map(row).join('')}</tbody></table></div></div>`).join('');
+  }
+  document.getElementById('mhMonths').addEventListener('change', load);
+  load();
+})();
+</script>
+{% endblock %}
