@@ -81,6 +81,20 @@ class Tenant(db.Model):
     manual_mpesa_enabled = db.Column(db.Boolean, nullable=False, default=True,
                                      server_default=db.true())
 
+    # Till and pricing rules (migration 0012).
+    # A cashier's discount above this percent needs a manager's code.
+    max_discount_pct     = db.Column(db.Numeric(5, 2), nullable=False, default=10,
+                                     server_default="10")
+    # Markup used for items without their own; selling prices round up to
+    # a multiple of price_rounding shillings.
+    default_markup_pct   = db.Column(db.Numeric(6, 2), nullable=False, default=30,
+                                     server_default="30")
+    price_rounding       = db.Column(db.Integer, nullable=False, default=5, server_default="5")
+    # A shift whose counted cash is off by more than this texts the admins.
+    cash_variance_alert  = db.Column(db.Numeric(12, 2), nullable=False, default=500,
+                                     server_default="500")
+    session_idle_minutes = db.Column(db.Integer, nullable=False, default=30, server_default="30")
+
     created_at          = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
 
     @validates("vertical")
@@ -126,6 +140,11 @@ class Tenant(db.Model):
             "ppb_premises_license": self.ppb_premises_license,
             "superintendent_reg_no": self.superintendent_reg_no,
             "manual_mpesa_enabled": bool(self.manual_mpesa_enabled),
+            "max_discount_pct": float(self.max_discount_pct or 0),
+            "default_markup_pct": float(self.default_markup_pct or 0),
+            "price_rounding": self.price_rounding,
+            "cash_variance_alert": float(self.cash_variance_alert or 0),
+            "session_idle_minutes": self.session_idle_minutes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

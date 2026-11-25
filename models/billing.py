@@ -25,7 +25,9 @@ INVOICE_KINDS = ("sale", "credit", "opening_balance")
 INVOICE_STATUSES = ("open", "partial", "paid", "void", "expired")
 INTENT_STATUSES = ("initiating", "pending", "unknown", "callback_received", "completed",
                    "paid_unconfirmed", "failed", "timeout")
-PAYMENT_METHODS = ("mpesa_stk", "mpesa_c2b", "mpesa_manual", "cash", "card")
+PAYMENT_METHODS = ("mpesa_stk", "mpesa_c2b", "mpesa_manual", "cash", "card", "bank")
+# Typed by staff, so unverified until an admin checks the statement.
+UNVERIFIED_METHODS = ("mpesa_manual", "bank")
 MPESA_METHODS = ("mpesa_stk", "mpesa_c2b", "mpesa_manual")
 PAYMENT_STATUSES = ("confirmed", "reversed")
 MATCH_STATUSES = ("matched", "partial", "unmatched")
@@ -152,6 +154,7 @@ class Payment(TenantMixin, db.Model):
     __tablename__ = "payments"
     __table_args__ = (
         db.UniqueConstraint("tenant_id", "mpesa_receipt", name="uq_payments_tenant_mpesa_receipt"),
+        db.UniqueConstraint("tenant_id", "bank_reference", name="uq_payments_tenant_bank_reference"),
     )
 
     id                  = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -175,12 +178,23 @@ class Payment(TenantMixin, db.Model):
                                     nullable=True)
     raw_payload         = db.Column(db.JSON, nullable=True)
     received_at         = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    # Bank transfer or deposit typed at the till (migration 0012).
+    bank_name           = db.Column(db.String(64), nullable=True)
+    bank_reference      = db.Column(db.String(64), nullable=True)
+    verified_by         = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"),
+                                    nullable=True)
+    verified_at         = db.Column(db.DateTime, nullable=True)
 
     allocations = db.relationship("PaymentAllocation", backref="payment", lazy=True)
 
     @validates("mpesa_receipt")
     def _normalize_receipt(self, key, value):
         value = (value or "").strip().upper()
+        return value or None
+
+    @validates("bank_reference")
+    def _normalize_bank_reference(self, key, value):
+        value = "".join((value or "").split()).upper()
         return value or None
 
     def to_dict(self):
@@ -194,6 +208,10 @@ class Payment(TenantMixin, db.Model):
             "verified": bool(self.verified),
             "claimed_amount": float(self.claimed_amount) if self.claimed_amount is not None else None,
             "mpesa_receipt": self.mpesa_receipt,
+            "bank_name": self.bank_name,
+            "bank_reference": self.bank_reference,
+            "verified_by": self.verified_by,
+            "verified_at": self.verified_at.isoformat() if self.verified_at else None,
             "bill_ref": self.bill_ref_raw,
             "payer_name": self.payer_name,
             "customer_id": self.customer_id,

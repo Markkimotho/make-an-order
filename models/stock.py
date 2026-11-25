@@ -25,6 +25,10 @@ class Batch(TenantMixin, db.Model):
     # admin checks them and releases the batch (PUT /inventory/batches/<id>).
     quarantined       = db.Column(db.Boolean, nullable=False, default=False,
                                   server_default=db.false())
+    # A recalled batch is quarantined for good: it leaves only by write-off.
+    recalled_at       = db.Column(db.DateTime, nullable=True)
+    recall_reason     = db.Column(db.String(255), nullable=True)
+    recall_ref        = db.Column(db.String(64), nullable=True)
 
     def to_dict(self):
         return {"id": self.id, "inventory_item_id": self.inventory_item_id,
@@ -33,6 +37,8 @@ class Batch(TenantMixin, db.Model):
                 "quantity_on_hand": self.quantity_on_hand,
                 "unit_cost": float(self.unit_cost) if self.unit_cost is not None else None,
                 "quarantined": bool(self.quarantined),
+                "recalled_at": self.recalled_at.isoformat() if self.recalled_at else None,
+                "recall_reason": self.recall_reason, "recall_ref": self.recall_ref,
                 "received_at": self.received_at.isoformat() if self.received_at else None}
 
 

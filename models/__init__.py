@@ -13,7 +13,7 @@ from models.base import (  # noqa: F401
     TRIAL_DAYS, VERTICALS, Tenant, TenantMixin, db,
 )
 from models.core import (  # noqa: F401
-    ALL_ROLES, PAY_CARD, PAY_CASH, PAY_CREDIT, PAY_MPESA, PAY_SPLIT,
+    ALL_ROLES, ROLE_ACCOUNTANT, PAY_CARD, PAY_CASH, PAY_CREDIT, PAY_MPESA, PAY_SPLIT,
     PAYMENT_METHODS, PHARMACY_ROLES, PO_CANCELLED, PO_DRAFT, PO_PARTIAL,
     PO_RECEIVED, PO_SENT, PO_STATUSES, POS_ROLES, ROLE_ADMIN, ROLE_CASHIER,
     ROLE_PHARMACIST, ROLE_STOCK_CLERK, ROLE_SUPERUSER, ROLE_USER, SHIFT_CLOSED,
@@ -26,10 +26,11 @@ from models.core import (  # noqa: F401
 )
 from models.billing import (  # noqa: F401
     ADJUSTMENT_REASONS, INTENT_STATUSES, INVOICE_KINDS, INVOICE_STATUSES,
-    MATCH_STATUSES, MPESA_METHODS, PAYMENT_STATUSES, Invoice, InvoiceAdjustment,
+    MATCH_STATUSES, MPESA_METHODS, PAYMENT_STATUSES, UNVERIFIED_METHODS, Invoice, InvoiceAdjustment,
     Payment, PaymentAllocation, PaymentIntent,
 )
 from models.billing import PAYMENT_METHODS as BILLING_PAYMENT_METHODS  # noqa: F401
+from models.finance import EXPENSE_CATEGORIES, EXPENSE_METHODS, Expense  # noqa: F401
 from models.distributor import ContainerMovement, CustomerPhone, PriceTier, TierPrice  # noqa: F401
 from models.institution import CAMPAIGN_STATUSES, Campaign, CampaignItem, Member  # noqa: F401
 from models.pharmacy import ENTRY_TYPES, ControlledDrugEntry, RegisterIsAppendOnly  # noqa: F401

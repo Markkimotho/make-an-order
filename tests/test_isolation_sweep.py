@@ -84,7 +84,7 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             ContainerMovement(customer_id=cust.id, inventory_item_id=item.id, delta=2, note=mark),
         ])
         db.session.flush()
-        from models import Campaign, CampaignItem, Member
+        from models import Campaign, CampaignItem, Expense, Member
         member = Member(member_ref=f"{tag}-M1", name=f"{mark} member", group_label=mark)
         campaign = Campaign(name=f"{mark} campaign", slug=f"{tag.lower()}-camp", status="open")
         db.session.add_all([member, campaign])
@@ -121,6 +121,8 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
             LoyaltyTransaction(customer_id=cust.id, transaction_id=txn.id, points_earned=1,
                                balance_after=1, note=mark),
             AuditLog(user_id=user.id, action="seed", entity_type=mark),
+            Expense(category="rent", amount=Decimal("7"), note=mark, created_by=user.id,
+                    shift_id=shift.id),
             SmsMessage(to_phone=f"254{phone_base[1:]}01", body=mark, kind="seed",
                        status="sent", provider_message_id=f"ATXid_{tag}",
                        dedupe_key=f"seed:{tag}"),

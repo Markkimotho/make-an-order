@@ -14,10 +14,11 @@ ROLE_USER        = 'user'
 ROLE_CASHIER     = 'cashier'
 ROLE_PHARMACIST  = 'pharmacist'
 ROLE_STOCK_CLERK = 'stock_clerk'
+ROLE_ACCOUNTANT  = 'accountant'      # reads money reports; cannot sell or change stock
 
 ALL_ROLES = (
     ROLE_SUPERUSER, ROLE_ADMIN, ROLE_USER,
-    ROLE_CASHIER, ROLE_PHARMACIST, ROLE_STOCK_CLERK,
+    ROLE_CASHIER, ROLE_PHARMACIST, ROLE_STOCK_CLERK, ROLE_ACCOUNTANT,
 )
 
 # Roles that may operate the POS checkout
@@ -46,6 +47,10 @@ class User(TenantMixin, db.Model):
     ppb_reg_no    = db.Column(db.String(64), nullable=True)   # pharmacists' PPB registration
     is_platform_admin = db.Column(db.Boolean, nullable=False, default=False,
                                   server_default=db.false())
+    # Login security (migration 0012): failed attempts lock the account.
+    failed_logins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    locked_until  = db.Column(db.DateTime, nullable=True)
+    last_login_at = db.Column(db.DateTime, nullable=True)
     created_at    = db.Column(db.DateTime, server_default=db.func.now())
 
     # POS relationships
@@ -144,6 +149,13 @@ class InventoryItem(TenantMixin, db.Model):
     sku         = db.Column(db.String(50), nullable=True)
     barcode     = db.Column(db.String(64), nullable=True)
     reorder_level         = db.Column(db.Integer, default=5, nullable=False)
+    # How many to order when it runs low (purchase order drafts).
+    reorder_quantity      = db.Column(db.Integer, nullable=True)
+    # Selling price from cost: 'auto' re-prices on every delivery at
+    # markup_pct (or the business default); 'manual' only suggests.
+    markup_pct            = db.Column(db.Numeric(6, 2), nullable=True)
+    price_mode            = db.Column(db.String(10), nullable=False, default='manual',
+                                      server_default='manual')
     # Stock is held in batches (each with its own expiry) or, for sized
     # goods, in variants; ``stock`` is their total, kept by services/stock.py.
     has_variants          = db.Column(db.Boolean, default=False, nullable=False,
@@ -522,6 +534,8 @@ class Transaction(TenantMixin, db.Model):
     transaction_ref = db.Column(db.String(40), nullable=False)
     customer_id     = db.Column(db.Integer, db.ForeignKey('customers.id', ondelete='SET NULL'), nullable=True)
     cashier_id      = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    # Who served the customer (salesperson); the cashier took the money.
+    served_by_id    = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     shift_id        = db.Column(db.Integer, db.ForeignKey('shifts.id', ondelete='SET NULL'), nullable=True)
     status          = db.Column(db.String(20), default=TXN_OPEN, nullable=False)
 
