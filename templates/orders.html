@@ -1,271 +1,246 @@
 {% extends "base.html" %}
 
-{% block title %}Orders{% endblock %}
+{% block title %}Online orders{% endblock %}
 
 {% block content %}
-<h2 class="mb-4">Order Management</h2>
+<style>
+  .oo-card { border: 1px solid var(--bs-border-color); border-radius: .8rem; background: var(--bs-body-bg); }
+  .oo-card.waiting { border-color: #198754; box-shadow: 0 0 0 2px rgba(25,135,84,.15); }
+  .oo-items { font-size: .875rem; }
+  .oo-meta { font-size: .8rem; color: var(--bs-secondary-color); }
+  .amount { font-variant-numeric: tabular-nums; }
+  .oo-filters .form-select { min-width: 0; }
+</style>
 
-<div class="row g-4 mb-4">
-    <!-- Place Order via Inventory -->
-    <div class="col-lg-6">
-        <div class="card h-100">
-            <div class="card-header bg-success">
-                <i class="fas fa-plus-circle me-2"></i>Place New Order
-            </div>
-            <div class="card-body d-flex flex-column">
-                <p class="card-text mb-4" style="color: var(--mac-text-sub);">
-                    Browse live stock, build a cart, and place orders with automatic inventory tracking and SMS confirmation.
-                </p>
-                <a href="{{ url_for('inventory_page') }}" class="btn btn-success mt-auto">
-                    <i class="fas fa-store me-2"></i>Go to Inventory &amp; Place Order
-                </a>
-            </div>
-        </div>
-    </div>
-
-    <!-- Filter Orders -->
-    <div class="col-lg-6">
-        <div class="card h-100">
-            <div class="card-header bg-secondary">
-                <i class="fas fa-filter me-2"></i>Filter Orders
-            </div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label for="filterCustomerId" class="form-label">Filter by Customer</label>
-                    <select class="form-select" id="filterCustomerId">
-                        <option value="">View All Orders</option>
-                    </select>
-                    <div class="form-text">Select a customer to show only their orders.</div>
-                </div>
-                <button id="filterOrdersBtn" class="btn btn-secondary">
-                    <i class="fas fa-magnifying-glass me-2"></i>Apply Filter
-                </button>
-            </div>
-        </div>
-    </div>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h2 class="mb-0"><i class="fas fa-receipt me-2"></i>Online orders</h2>
+  <div class="d-flex flex-wrap gap-2">
+    {% if 'online_shop' in features and tenant %}
+    <a class="btn btn-sm btn-outline-success" href="/o/{{ tenant.slug }}/shop" target="_blank" rel="noopener">
+      <i class="fas fa-store me-1"></i>Open the shop</a>
+    {% endif %}
+    {% if user_role in ('admin', 'superuser') %}
+    <a id="exportCsvBtn" href="/orders/export" class="btn btn-sm btn-outline-secondary"><i class="fas fa-file-csv me-1"></i>Export CSV</a>
+    {% endif %}
+  </div>
 </div>
 
-<!-- Orders Table -->
-<div class="card">
-    <div class="card-header bg-info d-flex justify-content-between align-items-center">
-        <span><i class="fas fa-receipt me-2"></i>Orders</span>
-        <a id="exportCsvBtn" href="/orders/export" class="btn btn-sm btn-light">
-            <i class="fas fa-file-csv me-1"></i>Export CSV
-        </a>
-    </div>
-    <div class="card-body" style="padding: 0 !important;">
-        <div class="table-responsive">
-            <table class="table table-hover table-striped mb-0">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Customer</th>
-                        <th>Items</th>
-                        <th>Total</th>
-                        <th>Status</th>
-                        <th>Payment</th>
-                        <th>Time</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="orderTableBody"></tbody>
-            </table>
-        </div>
-        <div id="orderListMessage" class="p-3"></div>
-    </div>
+<div id="waitingBanner" class="alert alert-success py-2 d-none" role="status"></div>
+
+<div class="row g-2 mb-3 oo-filters">
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="fStatus">Status</label>
+    <select id="fStatus" class="form-select form-select-sm">
+      <option value="open" selected>Open (to do)</option>
+      <option value="">All</option>
+      <option value="pending">New</option>
+      <option value="ready">Ready</option>
+      <option value="dispatched">Out for delivery</option>
+      <option value="collected">Collected / delivered</option>
+      <option value="cancelled">Cancelled</option>
+      <option value="released">Not paid in time</option>
+      <option value="restock_needed">Paid after release</option>
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="fChannel">From</label>
+    <select id="fChannel" class="form-select form-select-sm">
+      <option value="">Everywhere</option>
+      <option value="shop">Online shop</option>
+      <option value="whatsapp">WhatsApp</option>
+      <option value="public_link">Links (refills, dukas)</option>
+      <option value="staff">Staff</option>
+    </select>
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label small mb-1" for="fPaid">Payment</label>
+    <select id="fPaid" class="form-select form-select-sm">
+      <option value="">Paid and unpaid</option>
+      <option value="paid">Paid</option>
+      <option value="unpaid">Not paid</option>
+    </select>
+  </div>
+  <div class="col-6 col-md-3 d-flex align-items-end">
+    <button id="refreshBtn" class="btn btn-sm btn-outline-primary w-100"><i class="fas fa-rotate me-1"></i>Refresh</button>
+  </div>
+</div>
+<div id="customerFilter" class="small mb-2 d-none"></div>
+
+<div id="orderList" class="d-grid gap-2"></div>
+<div id="orderListMessage" class="text-muted small p-3 text-center d-none"></div>
+<div class="d-flex justify-content-center gap-2 my-3">
+  <button id="prevBtn" class="btn btn-sm btn-outline-secondary d-none">Newer</button>
+  <button id="nextBtn" class="btn btn-sm btn-outline-secondary d-none">Older</button>
 </div>
 
 <div class="toast-container position-fixed top-0 end-0 p-3">
-    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-        <div class="toast-header">
-            <strong class="me-auto" id="toastHeader">Notification</strong>
-            <small>Just now</small>
-            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-        </div>
-        <div class="toast-body" id="toastBody"></div>
-    </div>
+  <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="toast-header"><strong class="me-auto" id="toastHeader">Notice</strong>
+      <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button></div>
+    <div class="toast-body" id="toastBody"></div>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const orderTableBody         = document.getElementById('orderTableBody');
-        const filterCustomerIdSelect = document.getElementById('filterCustomerId');
-        const filterOrdersBtn        = document.getElementById('filterOrdersBtn');
-        const toastElement           = document.getElementById('liveToast');
-        const toastBody              = document.getElementById('toastBody');
-        const toastHeader            = document.getElementById('toastHeader');
-        const liveToast              = new bootstrap.Toast(toastElement);
+window.ONLINE_ORDERS_PAGE = true;
+document.addEventListener('DOMContentLoaded', function () {
+  'use strict';
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const money = n => Number(n).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const list = document.getElementById('orderList'), empty = document.getElementById('orderListMessage');
+  const toastEl = document.getElementById('liveToast'), toast = new bootstrap.Toast(toastEl);
+  const params = new URLSearchParams(window.location.search);
+  const customerId = params.get('customer_id');
+  let page = 1, lastSeen = null;
 
-        const STATUS_BADGES = {
-            pending:   'bg-warning text-dark',
-            confirmed: 'bg-primary',
-            completed: 'bg-success',
-            cancelled: 'bg-danger',
-            refunded:  'bg-secondary',
-        };
-        const PAYMENT_ICONS = {
-            cash:  '<i class="fas fa-money-bill-wave me-1"></i>Cash',
-            mpesa: '<i class="fas fa-mobile-alt me-1"></i>M-Pesa',
-            card:  '<i class="fas fa-credit-card me-1"></i>Card',
-        };
+  const CHANNEL = {shop: ['Shop', 'bg-success'], whatsapp: ['WhatsApp', 'text-bg-success'],
+                   public_link: ['Link', 'bg-info text-dark'], staff: ['Staff', 'bg-secondary']};
+  const STATUS = {pending: ['New', 'bg-warning text-dark'], ready: ['Ready', 'bg-primary'],
+                  dispatched: ['Out for delivery', 'bg-primary'], collected: ['Done', 'bg-success'],
+                  released: ['Not paid in time', 'bg-secondary'], restock_needed: ['Paid after release', 'bg-danger'],
+                  cancelled: ['Cancelled', 'bg-secondary']};
+  const ACTION = {ready: ['Mark ready', 'btn-primary', 'fa-box'],
+                  dispatched: ['Out for delivery', 'btn-primary', 'fa-motorcycle'],
+                  collected: ['Collected', 'btn-success', 'fa-check'],
+                  delivered: ['Delivered', 'btn-success', 'fa-check'],
+                  cancelled: ['Cancel', 'btn-outline-danger', 'fa-xmark']};
 
-        function initializeTooltips() {
-            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
-                const t = bootstrap.Tooltip.getInstance(el);
-                if (t) t.dispose();
-            });
-            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => new bootstrap.Tooltip(el));
-        }
+  if (customerId) {
+    const box = document.getElementById('customerFilter');
+    box.innerHTML = 'Showing one customer\'s orders. <a href="/orders-ui">Show all</a>';
+    box.classList.remove('d-none');
+    document.getElementById('fStatus').value = '';
+    const csv = document.getElementById('exportCsvBtn');
+    if (csv) csv.href = '/orders/export?customer_id=' + encodeURIComponent(customerId);
+  }
 
-        function showToast(message, isSuccess = true) {
-            toastBody.textContent = message;
-            toastHeader.textContent = isSuccess ? 'Success' : 'Error';
-            toastElement.classList.remove('text-bg-success', 'text-bg-danger');
-            toastElement.classList.add(isSuccess ? 'text-bg-success' : 'text-bg-danger');
-            liveToast.show();
-        }
+  function showToast(text, ok) {
+    document.getElementById('toastBody').textContent = text;
+    document.getElementById('toastHeader').textContent = ok ? 'Done' : 'Could not do that';
+    toastEl.classList.remove('text-bg-success', 'text-bg-danger');
+    toastEl.classList.add(ok ? 'text-bg-success' : 'text-bg-danger');
+    toast.show();
+  }
+  function age(min) {
+    if (min == null) return '';
+    if (min < 1) return 'just now';
+    if (min < 60) return min + ' min ago';
+    if (min < 1440) return Math.floor(min / 60) + ' h ago';
+    return Math.floor(min / 1440) + ' d ago';
+  }
+  function chime() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.18].forEach((t, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = i ? 1175 : 880; o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.15, ctx.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.3);
+        o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.3);
+      });
+    } catch (e) {}
+  }
+  function showWaiting(w) {
+    const badge = document.getElementById('navOrdersBadge');
+    if (badge) { badge.textContent = w.count; badge.classList.toggle('d-none', !w.count); }
+    const banner = document.getElementById('waitingBanner');
+    banner.classList.toggle('d-none', !w.count);
+    banner.textContent = w.count === 1 ? '1 paid order is waiting to be packed.'
+                                       : w.count + ' paid orders are waiting to be packed.';
+    if (lastSeen !== null && w.latest_id && w.latest_id > lastSeen) {
+      chime();
+      showToast('New paid order received.', true);
+    }
+    if (w.latest_id && (lastSeen === null || w.latest_id > lastSeen)) lastSeen = w.latest_id;
+    if (lastSeen === null) lastSeen = 0;
+  }
 
-        async function fetchCustomersForFilter() {
-            try {
-                const response = await fetch('/customers/view_customers');
-                if (!response.ok) {
-                    if (response.status === 401) { window.location.href = '/login'; return; }
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                const data = await response.json();
-                const customers = data.customers || data;  // Support both old and new format
-                filterCustomerIdSelect.innerHTML = '<option value="">View All Orders</option>';
-                customers.forEach(c => {
-                    filterCustomerIdSelect.appendChild(new Option(c.name, c.id));
-                });
-                const urlParams = new URLSearchParams(window.location.search);
-                const cid = urlParams.get('customer_id');
-                if (cid && customers.some(c => c.id == cid)) {
-                    filterCustomerIdSelect.value = cid;
-                    fetchOrders(cid);
-                } else {
-                    fetchOrders();
-                }
-            } catch (error) {
-                showToast(`Failed to load customers: ${error.message}`, false);
-                fetchOrders();
-            }
-        }
+  function card(o) {
+    const ch = CHANNEL[o.channel] || [o.channel, 'bg-secondary'];
+    const st = STATUS[o.fulfillment_status] || [o.fulfillment_status, 'bg-secondary'];
+    const waiting = o.paid && o.fulfillment_status === 'pending';
+    const pay = o.paid ? '<span class="badge bg-success">Paid</span>'
+      : (o.invoice_kind === 'credit' ? '<span class="badge bg-info text-dark">On credit</span>'
+                                     : '<span class="badge bg-light text-dark border">Not paid</span>');
+    const items = o.items.map(i => `<div class="d-flex justify-content-between gap-2"><span>${esc(i.name)}${i.quantity > 1 ? ' &times;' + i.quantity : ''}</span>
+      <span class="amount">${money(i.subtotal)}</span></div>`).join('');
+    const where = o.fulfilment === 'delivery'
+      ? `<i class="fas fa-motorcycle me-1"></i>Delivery: ${esc(o.delivery_address)}`
+      : '<i class="fas fa-store me-1"></i>Pickup';
+    const phone = o.customer_phone ? ` &middot; <a href="tel:+${esc(o.customer_phone)}">+${esc(o.customer_phone)}</a>` : '';
+    const actions = o.actions.map(a => `<button class="btn btn-sm ${ACTION[a][1]}" data-id="${o.id}" data-act="${a}">
+      <i class="fas ${ACTION[a][2]} me-1"></i>${ACTION[a][0]}</button>`).join('');
+    return `<div class="oo-card p-3${waiting ? ' waiting' : ''}">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+        <div class="fw-bold">${esc(o.order_number)} <span class="badge ${ch[1]}">${esc(ch[0])}</span>
+          <span class="badge ${st[1]}">${esc(st[0])}</span></div>
+        <div class="oo-meta">${esc(age(o.age_minutes))}</div>
+      </div>
+      <div class="small mb-2">${esc(o.customer_name || 'No customer')}${phone}</div>
+      <div class="oo-items mb-2">${items}</div>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="small">${where}</span>
+        <span class="fw-bold amount">KES ${money(o.total)} ${pay}</span>
+      </div>
+      ${o.notes ? `<div class="oo-meta mb-2">${esc(o.notes)}</div>` : ''}
+      ${actions ? `<div class="d-flex flex-wrap gap-2">${actions}</div>` : ''}
+    </div>`;
+  }
 
-        async function fetchOrders(customerId = null) {
-            let url = '/orders/view_orders';
-            if (customerId) url += `/${customerId}`;
+  let loading = false;
+  async function load(quiet) {
+    if (loading) return;
+    loading = true;
+    const q = new URLSearchParams({page});
+    const status = document.getElementById('fStatus').value, channel = document.getElementById('fChannel').value,
+          paid = document.getElementById('fPaid').value;
+    if (status) q.set('status', status);
+    if (channel) q.set('channel', channel);
+    if (paid) q.set('paid', paid);
+    if (customerId) q.set('customer_id', customerId);
+    try {
+      const r = await fetch('/orders/online?' + q, {headers: {'Accept': 'application/json'}});
+      if (r.status === 401) { window.location.href = '/login'; return; }
+      const data = await r.json();
+      if (!r.ok) { if (!quiet) showToast(data.error || 'Could not load orders', false); return; }
+      list.innerHTML = data.orders.map(card).join('');
+      empty.classList.toggle('d-none', data.orders.length > 0);
+      empty.textContent = 'No orders here.';
+      document.getElementById('prevBtn').classList.toggle('d-none', page <= 1);
+      document.getElementById('nextBtn').classList.toggle('d-none', page >= data.pagination.pages);
+      showWaiting(data.waiting);
+    } catch (e) {
+      if (!quiet) showToast('Could not load orders. Check the connection.', false);
+    } finally { loading = false; }
+  }
 
-            // Keep export link in sync with active filter
-            const exportBtn = document.getElementById('exportCsvBtn');
-            exportBtn.href = customerId ? `/orders/export?customer_id=${customerId}` : '/orders/export';
-            try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    if (response.status === 401) { window.location.href = '/login'; return; }
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                const data = await response.json();
-                const orders = data.orders || data;  // Support both old and new format
-                const pagination = data.pagination;
-                orderTableBody.innerHTML = '';
-                if (orders.length === 0) {
-                    orderTableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--mac-text-muted);">No orders found.</td></tr>';
-                    return;
-                }
-                orders.forEach(o => {
-                    const statusCls = STATUS_BADGES[o.status] || 'bg-secondary';
-                    const payHtml   = o.payment_method
-                        ? `<span class="badge bg-dark">${PAYMENT_ICONS[o.payment_method] || o.payment_method}</span>${o.payment_reference ? `<br><small class="text-muted">${o.payment_reference}</small>` : ''}`
-                        : '<span class="text-muted" style="font-size:12px;">—</span>';
+  list.addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'cancelled' && !confirm('Cancel this order? Stock goes back on the shelf, and money paid becomes the customer\'s credit.')) return;
+    b.disabled = true;
+    try {
+      const r = await fetch(`/orders/${b.dataset.id}/fulfilment`, {method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'}, body: JSON.stringify({status: act})});
+      const res = await r.json();
+      if (r.ok) {
+        const sent = res.order.sms === 'sent' ? ' Customer texted.' : '';
+        showToast(res.order.order_number + ': ' + (ACTION[act] ? ACTION[act][0] : act) + '.' + sent, true);
+        load(true);
+      } else { showToast(res.error || 'Failed', false); b.disabled = false; }
+    } catch (err) { showToast('No connection.', false); b.disabled = false; }
+  });
+  ['fStatus', 'fChannel', 'fPaid'].forEach(id => document.getElementById(id).addEventListener('change', () => { page = 1; load(); }));
+  document.getElementById('refreshBtn').addEventListener('click', () => load());
+  document.getElementById('prevBtn').addEventListener('click', () => { page = Math.max(1, page - 1); load(); });
+  document.getElementById('nextBtn').addEventListener('click', () => { page += 1; load(); });
 
-                    // Build items display
-                    let itemsHtml;
-                    if (o.items && o.items.length > 0) {
-                        itemsHtml = o.items.map(i =>
-                            `<div style="font-size:12px;">${i.item_name}${i.quantity > 1 ? ` ×${i.quantity}` : ''} <span class="text-muted">@ ${parseFloat(i.unit_price).toFixed(2)}</span></div>`
-                        ).join('');
-                    } else {
-                        itemsHtml = `<span style="font-size:12px;">${o.item}</span>`;
-                    }
-
-                    const row = orderTableBody.insertRow();
-                    row.insertCell(0).textContent = o.id;
-                    row.insertCell(1).textContent = o.customer_name || '—';
-                    row.insertCell(2).innerHTML   = itemsHtml;
-                    row.insertCell(3).textContent = parseFloat(o.amount).toFixed(2);
-                    row.insertCell(4).innerHTML   = `<span class="badge ${statusCls}">${o.status || 'pending'}</span>`;
-                    row.insertCell(5).innerHTML   = payHtml;
-                    row.insertCell(6).textContent = o.time ? new Date(o.time).toLocaleString() : '—';
-                    row.insertCell(7).innerHTML   = `
-                        <div class="d-flex flex-wrap gap-1 align-items-center">
-                            <select class="form-select form-select-sm status-select" data-id="${o.id}" style="width:120px;">
-                                ${['pending','confirmed','completed','cancelled','refunded'].map(s =>
-                                    `<option value="${s}"${s === o.status ? ' selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
-                                ).join('')}
-                            </select>
-                            <a href="/orders/${o.id}/receipt" class="btn btn-sm btn-info"
-                               data-bs-toggle="tooltip" title="Receipt"><i class="fas fa-file-invoice"></i></a>
-                            <a href="/orders/${o.id}/edit" class="btn btn-sm btn-warning"
-                               data-bs-toggle="tooltip" title="Edit"><i class="fas fa-pencil"></i></a>
-                            <button class="btn btn-sm btn-danger delete-btn" data-id="${o.id}"
-                               data-bs-toggle="tooltip" title="Delete"><i class="fas fa-trash"></i></button>
-                        </div>
-                    `;
-                });
-                attachListeners();
-                initializeTooltips();
-            } catch (error) {
-                showToast(`Failed to load orders: ${error.message}`, false);
-            }
-        }
-
-        function attachListeners() {
-            orderTableBody.querySelectorAll('.status-select').forEach(sel => {
-                sel.addEventListener('change', async function() {
-                    const id     = this.dataset.id;
-                    const status = this.value;
-                    try {
-                        const r = await fetch(`/orders/${id}/status`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ status }),
-                        });
-                        const res = await r.json();
-                        if (r.ok) {
-                            showToast(res.message, true);
-                            fetchOrders(filterCustomerIdSelect.value || null);
-                        } else {
-                            showToast(res.error || 'Failed to update status', false);
-                        }
-                    } catch { showToast('Error updating status', false); }
-                });
-            });
-
-            orderTableBody.removeEventListener('click', handleDelete);
-            orderTableBody.addEventListener('click', handleDelete);
-        }
-
-        async function handleDelete(event) {
-            const btn = event.target.closest('.delete-btn');
-            if (!btn) return;
-            if (!confirm('Delete this order? Inventory stock will be restored.')) return;
-            try {
-                const r = await fetch(`/orders/delete_orders/${btn.dataset.id}`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                const res = await r.json();
-                if (r.ok) { showToast(res.message, true); fetchOrders(filterCustomerIdSelect.value || null); }
-                else { showToast(res.error || 'Failed to delete order', false); }
-            } catch { showToast('An error occurred during deletion.', false); }
-        }
-
-        filterOrdersBtn.addEventListener('click', () => fetchOrders(filterCustomerIdSelect.value || null));
-
-        fetchCustomersForFilter();
-    });
+  load();
+  setInterval(() => { if (!document.hidden) load(true); }, 20000);
+});
 </script>
 {% endblock %}

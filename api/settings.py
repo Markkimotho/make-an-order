@@ -1,4 +1,5 @@
-"""Business settings (owner only): M-Pesa, SMS sender, KRA and PPB details.
+"""Business settings (owner only): M-Pesa, SMS sender, KRA and PPB details,
+and the online shop (open or closed, delivery, WhatsApp number, share link).
 
 Secrets (Daraja consumer key, secret, passkey) are write-only: the page
 shows whether each is set, never its value; a blank field keeps what is
@@ -16,6 +17,7 @@ from models import DARAJA_ENVS, SHORTCODE_TYPES, SecretsKeyMissing, Tenant, db
 from models.types import secrets_key_configured
 from services import audit_service
 from services.daraja import DarajaClient, DarajaError, callback_url, tokens
+from services.phone import InvalidPhone, normalize_ke_phone
 
 settings_bp = Blueprint("settings", __name__)
 logger = logging.getLogger(__name__)
@@ -49,7 +51,21 @@ def _context(tenant, errors=None, form=None):
         "form": form or {},
         "shortcode_types": SHORTCODE_TYPES,
         "daraja_envs": DARAJA_ENVS,
+        **_shop_context(tenant),
     }
+
+
+def _shop_context(tenant):
+    """The shop link, its QR code and the share links, for businesses with
+    the online shop."""
+    from services import online_shop
+    from verticals.features import features_for
+    if "online_shop" not in features_for(tenant.vertical):
+        return {"shop": None}
+    url = online_shop.shop_url(tenant)
+    return {"shop": {"url": url, "qr_svg": online_shop.qr_svg(url),
+                     "share_url": online_shop.wa_link(
+                         None, f"Order from {tenant.name} online and pay with M-Pesa: {url}")}}
 
 
 @settings_bp.route("/", methods=["GET"])
@@ -100,6 +116,12 @@ def save():
             expiry = datetime.strptime(ppb_expiry, "%Y-%m-%d").date()
         except ValueError:
             errors.append("PPB licence expiry must be a date.")
+    whatsapp = _clean(form, "whatsapp_number")
+    if whatsapp:
+        try:
+            whatsapp = normalize_ke_phone(whatsapp)
+        except InvalidPhone:
+            errors.append("WhatsApp number must be a Kenyan mobile number, like 0712 345 678.")
     if errors:
         return render_template("settings.html", **_context(tenant, errors, form)), 400
 
@@ -116,6 +138,10 @@ def save():
     tenant.ppb_premises_license_expiry = expiry
     tenant.superintendent_reg_no = _clean(form, "superintendent_reg_no", max_len=64)
     tenant.manual_mpesa_enabled = form.get("manual_mpesa_enabled") == "on"
+    if form.get("shop_settings") == "1":         # the shop section was on the form
+        tenant.whatsapp_number = whatsapp
+        tenant.shop_open = form.get("shop_open") == "on"
+        tenant.shop_delivery = form.get("shop_delivery") == "on"
 
     new_secrets = {field: (form.get(field) or "").strip() for field, _ in SECRET_FIELDS}
     new_secrets = {k: v for k, v in new_secrets.items() if v}   # blank keeps the stored value
@@ -130,7 +156,10 @@ def save():
 
     audit_service.log(session.get("user_id"), "tenant.settings", "Tenant", tenant.id, before,
                       {"daraja_shortcode": shortcode, "daraja_shortcode_type": kind,
-                       "daraja_env": env, "secrets_changed": changed_secrets})
+                       "daraja_env": env, "secrets_changed": changed_secrets,
+                       "shop_open": bool(tenant.shop_open),
+                       "shop_delivery": bool(tenant.shop_delivery),
+                       "whatsapp_number": tenant.whatsapp_number})
     db.session.commit()
     if changed_secrets or before["daraja_env"] != env:
         tokens.forget(tenant.id)

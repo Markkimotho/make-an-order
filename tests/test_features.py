@@ -113,8 +113,8 @@ def test_nav_differs_per_vertical(app):
     assert "Point of sale" not in institution and "Dukas" not in institution
     with app.test_request_context():
         cashier = {link["label"] for link in _flatten(nav_for("pharmacy", "cashier"))}
-    assert "Point of sale" in cashier
-    assert not cashier & {"Users & roles", "Reports", "Settings", "Online orders"}
+    assert "Point of sale" in cashier and "Online orders" in cashier   # counter staff run them
+    assert not cashier & {"Users & roles", "Reports", "Settings"}
 
 
 def test_nav_entries_name_real_features():

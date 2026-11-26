@@ -1,10 +1,10 @@
 from flask import Blueprint, request, jsonify, session, Response  # type: ignore
 from models import db, Order, OrderItem, Customer, InventoryItem, StockMovement
 from services import orders as order_service
-from services import stock
+from services import audit_service, online_shop, stock
 from services.sms_service import SendSMS
 from sqlalchemy.exc import IntegrityError
-from auth.auth_middleware import login_required, admin_api_required
+from auth.auth_middleware import login_required, admin_api_required, cashier_api_required
 from datetime import datetime, timedelta
 import logging
 import re
@@ -314,3 +314,76 @@ def export_orders():
         mimetype='text/csv',
         headers={'Content-Disposition': 'attachment; filename=orders.csv'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Online orders (shop, WhatsApp, public links): list and fulfilment.
+# Counter staff run these, so cashiers and pharmacists may too.
+# ---------------------------------------------------------------------------
+ONLINE_STATUSES = {'open', 'pending', 'ready', 'dispatched', 'collected', 'released',
+                   'restock_needed', 'cancelled'}
+
+
+@orders_bp.route('/online', methods=['GET'])
+@cashier_api_required
+def online_orders():
+    """Remote orders newest first. Filters: status (or 'open'), channel,
+    paid=paid|unpaid, customer_id, page, per_page."""
+    status = request.args.get('status') or None
+    channel = request.args.get('channel') or None
+    paid = request.args.get('paid') or None
+    if status and status not in ONLINE_STATUSES:
+        return jsonify({'error': 'unknown status'}), 400
+    if channel and channel not in online_shop.REMOTE_CHANNELS:
+        return jsonify({'error': 'unknown channel'}), 400
+    if paid and paid not in ('paid', 'unpaid'):
+        return jsonify({'error': 'paid must be paid or unpaid'}), 400
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        per_page = min(max(1, int(request.args.get('per_page', 50))), 200)
+        customer_id = int(request.args['customer_id']) if request.args.get('customer_id') else None
+    except ValueError:
+        return jsonify({'error': 'page, per_page and customer_id must be numbers'}), 400
+    orders, total = online_shop.list_orders(status=status, channel=channel, paid=paid,
+                                            customer_id=customer_id, page=page,
+                                            per_page=per_page)
+    now = datetime.utcnow()
+    return jsonify({'orders': [online_shop.order_row(o, now) for o in orders],
+                    'waiting': online_shop.waiting_summary(),
+                    'pagination': {'page': page, 'per_page': per_page, 'total': total,
+                                   'pages': (total + per_page - 1) // per_page}}), 200
+
+
+@orders_bp.route('/online/waiting', methods=['GET'])
+@cashier_api_required
+def online_waiting():
+    """Paid orders nobody has started on: the nav badge and the new-order sound."""
+    return jsonify(online_shop.waiting_summary()), 200
+
+
+@orders_bp.route('/<int:id>/fulfilment', methods=['PUT'])
+@cashier_api_required
+def order_fulfilment(id):
+    """{status: ready|dispatched|collected|delivered|cancelled}. Ready (pickup)
+    and dispatched text the customer once."""
+    status = str((request.get_json(silent=True) or {}).get('status') or '').lower()
+    if status not in online_shop.FULFILMENT_ACTIONS:
+        return jsonify({'error': 'status must be one of '
+                                 + ', '.join(online_shop.FULFILMENT_ACTIONS)}), 400
+    order = db.session.get(Order, id)
+    if order is None:
+        return jsonify({'error': 'Order not found'}), 404
+    before = order.fulfillment_status
+    try:
+        order = online_shop.set_fulfilment(order, status, user_id=session.get('user_id'))
+    except online_shop.FulfilmentError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
+    audit_service.log(session.get('user_id'), 'order.fulfilment', 'Order', order.id,
+                      {'fulfillment_status': before},
+                      {'fulfillment_status': order.fulfillment_status})
+    db.session.commit()
+    sms = online_shop.notify(order)
+    row = online_shop.order_row(order)
+    row['sms'] = sms.status if sms is not None else None
+    return jsonify({'order': row}), 200
