@@ -638,3 +638,22 @@ def test_void_decides_on_the_locked_sale_not_a_stale_read(app, till, monkeypatch
     db.session.expire_all()
     assert db.session.get(Transaction, txn).status == "completed"
     assert batches_of(item) == {"A": 2, "B": 10}
+
+
+def test_item_shows_the_batch_a_sale_would_take(app):
+    """The till shows the next sellable batch: not an expired, quarantined or
+    recalled one that a sale would skip."""
+    from datetime import timedelta
+    from services.clock import today_nairobi
+    today = today_nairobi()
+    item = InventoryItem(name="Panadol", price=Decimal("120"))
+    db.session.add(item)
+    db.session.flush()
+    stock.receive(item, 8, batch_number="OLD", expiry_date=today - timedelta(days=5))
+    stock.receive(item, 5, batch_number="HELD", expiry_date=today + timedelta(days=10))
+    stock.receive(item, 60, batch_number="GOOD", expiry_date=today + timedelta(days=200))
+    held = Batch.query.filter_by(batch_number="HELD").one()
+    stock.recall_batch(held, reason="supplier notice")
+    db.session.commit()
+    d = db.session.get(InventoryItem, item.id).to_dict()
+    assert (d["batch_number"], d["expiry_date"]) == ("GOOD", (today + timedelta(days=200)).isoformat())

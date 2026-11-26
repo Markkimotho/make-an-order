@@ -25,12 +25,12 @@ def _role() -> str:
 def _ui_gate():
     """None if the request may proceed, else the redirect to send."""
     if 'profile' not in session:
-        return redirect(url_for('auth.login'))
+        return redirect(url_for('login_page'))
     if g.get('current_tenant') is None:
         if g.get('is_platform_admin'):
             return redirect(url_for('platform.tenants'))
         session.clear()
-        return redirect(url_for('auth.login'))
+        return redirect(url_for('login_page'))
     return None
 
 
@@ -100,7 +100,7 @@ def platform_admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'profile' not in session:
-            return redirect(url_for('auth.login'))
+            return redirect(url_for('login_page'))
         if not g.get('is_platform_admin'):
             return jsonify({'error': 'Forbidden'}), 403
         return f(*args, **kwargs)

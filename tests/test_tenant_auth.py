@@ -1,6 +1,5 @@
 """Business signup, login, per-request tenant binding and platform admins."""
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -166,28 +165,15 @@ def test_expired_trial_blocks_ui_and_api(login_as, app):
     assert client.get("/logout").status_code == 302
 
 
-# --- Google -------------------------------------------------------------------
+# --- sign-in is email and password only ----------------------------------------
 
-def _fake_google(app, email):
-    google = app.extensions["authlib.integrations.flask_client"].google
-    google.authorize_access_token = MagicMock(return_value={"access_token": "t"})
-    google.get = MagicMock(return_value=MagicMock(json=lambda: {"email": email, "name": "G"}))
-
-
-def test_google_login_for_unknown_email_creates_nothing(client, app):
-    _fake_google(app, "stranger@gmail.com")
-    r = client.get("/auth/authorize")
-    assert r.status_code == 302 and r.headers["Location"].startswith("/register")
-    assert _user("stranger@gmail.com") is None
-
-
-def test_google_login_for_known_email(client, app):
-    _make_user(app.acme_id, "known@gmail.com")
-    _fake_google(app, "known@gmail.com")
-    r = client.get("/auth/authorize")
-    assert r.headers["Location"] == "/dashboard"
-    with client.session_transaction() as sess:
-        assert sess["tenant_id"] == app.acme_id
+def test_google_sign_in_is_gone(client):
+    """Old Google links lead to the password sign-in page; the callback is gone."""
+    r = client.get("/auth/login")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/login")
+    assert client.get("/auth/authorize").status_code == 404
+    html = client.get("/login").get_data(as_text=True)
+    assert "Google" not in html
 
 
 # --- platform admins -----------------------------------------------------------

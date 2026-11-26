@@ -10,7 +10,7 @@ class Config:
                               f"mysql+pymysql://{os.environ.get('MYSQL_USER')}:{os.environ.get('MYSQL_PASSWORD')}@{os.environ.get('MYSQL_HOST')}/{os.environ.get('MYSQL_DB')}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    # Base URL for generating absolute URLs (e.g., for OAuth redirects)
+    # Base URL for generating absolute URLs (pay links, callback URLs)
     APP_URL = os.environ.get("APP_URL", "http://localhost:5001")
 
     # Number of reverse-proxy hops to trust for X-Forwarded-For / -Proto.
@@ -25,8 +25,6 @@ class Config:
     # Comma-separated emails that get platform-admin rights at login.
     PLATFORM_ADMIN_EMAILS = os.environ.get("PLATFORM_ADMIN_EMAILS", "")
 
-    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
     # Africa's Talking credentials
     AT_USERNAME = os.environ.get("AT_USERNAME")

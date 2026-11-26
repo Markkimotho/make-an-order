@@ -33,7 +33,7 @@ The system handles three types of users: superuser (godmode), admin (run the bus
 
 **Staff Management**
 
-- Google OAuth login for staff
+- Email and password sign-in for staff
 - Three roles: superuser, admin, operator
 - Superuser: create/delete users, manage roles
 - Admin: manage customers, inventory, orders, see analytics
@@ -55,7 +55,7 @@ The system handles three types of users: superuser (godmode), admin (run the bus
 | Backend   | Flask 3.0                       |
 | Database  | MySQL 5.7+                      |
 | ORM       | SQLAlchemy 2.0                  |
-| Auth      | Google OAuth 2.0                |
+| Auth      | Email and password              |
 | SMS       | Africa's Talking API            |
 | Frontend  | Bootstrap 5.3, Jinja2, Chart.js |
 | Hosting   | Render, Heroku                  |
@@ -66,7 +66,6 @@ The system handles three types of users: superuser (godmode), admin (run the bus
 
 - Python 3.8+
 - MySQL running locally or on a server
-- Google OAuth credentials
 - Africa's Talking account (optional)
 
 **Install**
@@ -85,8 +84,6 @@ pip install -r requirements.txt
 APP_URL=http://localhost:5001
 APP_SECRET_KEY=your-secret-key
 
-GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-secret
 
 MYSQL_HOST=127.0.0.1
 MYSQL_USER=root
@@ -97,8 +94,6 @@ AT_USERNAME=sandbox
 AT_API_KEY=your-key
 AT_SENDER_ID=your-sender-id
 ```
-
-**Important:** Add `http://localhost:5001/auth/authorize` to Google Console OAuth Authorized redirect URIs.
 
 **Run**
 
@@ -112,8 +107,8 @@ Visit `http://localhost:5001`
 
 ### Auth (`/auth`)
 
-- `GET /auth/login` — Start Google OAuth
-- `GET /auth/authorize` — OAuth callback
+- `GET /login` — Sign-in page
+- `POST /auth/login/local` — Sign in with email and password
 - `POST /auth/login/local` — Email/password
 - `POST /auth/customer-login` — Customer lookup
 - `GET /auth/logout` — End session
@@ -196,7 +191,6 @@ Visit `http://localhost:5001`
 4. Add database URL to environment
 5. Deploy
 
-Add to Google Console OAuth: `https://your-render-url.com/auth/authorize`
 
 ### Heroku
 
@@ -204,7 +198,6 @@ Add to Google Console OAuth: `https://your-render-url.com/auth/authorize`
 2. `git push heroku main`
 3. `heroku config:set APP_URL=https://your-app.herokuapp.com ...`
 
-Add to Google Console OAuth: `https://your-app.herokuapp.com/auth/authorize`
 
 ## Project Structure
 
@@ -243,7 +236,7 @@ make-an-order/
 
 **Users vs Customers**
 
-Staff login with Google OAuth and get a User account with a role. Customers are separate records with a phone number and unique code. This keeps staff out of customer lists and prevents confusion about who actually bought something.
+Staff sign in with email and password and have a User account with a role. Customers are separate records with a phone number and unique code. This keeps staff out of customer lists and prevents confusion about who actually bought something.
 
 **Role-Based UI**
 
@@ -252,10 +245,6 @@ The inventory page (checkout interface) looks different for admins, operators, a
 **Stock Audit Trail**
 
 Every inventory change gets logged with timestamp, operator ID, quantity change, and reason. This means you can trace any discrepancy back to who changed it and why.
-
-**OAuth Configuration**
-
-The app takes APP_URL as an environment variable. It builds the redirect URI from that and registers it with Google. This prevents redirect_uri_mismatch errors when deploying to different environments.
 
 **SMS Handling**
 

@@ -14,7 +14,6 @@ from datetime import timedelta
 from logging.handlers import RotatingFileHandler
 
 import click
-from authlib.integrations.flask_client import OAuth  # type: ignore
 from dotenv import load_dotenv
 from flask import (Flask, Response, g, jsonify, redirect, render_template, request,
                    session, url_for)
@@ -222,7 +221,7 @@ def create_app(config_override=None):
     """Build the app. ``config_override`` keys win over ``Config``."""
     app = Flask(__name__)
     app.config.from_object(Config)
-    app.config['SESSION_COOKIE_NAME'] = 'google-login-session'
+    app.config['SESSION_COOKIE_NAME'] = 'mao-session'
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=1)
     app.config['PREFERRED_URL_SCHEME'] = (
         'https' if os.getenv("APP_URL", "").startswith("https") else 'http')
@@ -249,7 +248,6 @@ def create_app(config_override=None):
     db.init_app(app)
     migrate.init_app(app, db)
 
-    oauth = _register_oauth(app)
     _gate_blueprints()
     app.register_blueprint(customers_bp, url_prefix='/customers')
     app.register_blueprint(orders_bp, url_prefix='/orders')
@@ -267,7 +265,7 @@ def create_app(config_override=None):
     app.register_blueprint(institution_bp, url_prefix='/institution')
     app.register_blueprint(public_bp, url_prefix='/o')
     limiter.init_app(app)
-    app.register_blueprint(create_auth_blueprint(oauth), url_prefix='/auth')
+    app.register_blueprint(create_auth_blueprint(), url_prefix='/auth')
 
     app.before_request(bind_request_tenant)
     app.teardown_request(unbind_request_tenant)
@@ -334,25 +332,6 @@ def _configure_logging(app):
     app.logger.addHandler(handler)
     app.logger.setLevel(logging.INFO)
     app.logger.info('Make-An-Order startup')
-
-
-def _register_oauth(app):
-    """Register Google OAuth. Metadata is fetched lazily on first login."""
-    oauth = OAuth(app)
-    app_url = os.getenv("APP_URL", "http://localhost:5001").rstrip('/')
-    oauth.register(
-        name='google',
-        client_id=os.getenv("GOOGLE_CLIENT_ID"),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-        access_token_url='https://accounts.google.com/o/oauth2/token',
-        authorize_url='https://accounts.google.com/o/oauth2/auth',
-        api_base_url='https://www.googleapis.com/oauth2/v1/',
-        userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
-        client_kwargs={'scope': 'email profile'},
-        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    )
-    app.logger.info(f"OAuth redirect_uri configured: {app_url}/auth/authorize")
-    return oauth
 
 
 def _register_cli(app):

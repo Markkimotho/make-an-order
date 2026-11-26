@@ -31,5 +31,7 @@ def test_logout_clears_session_and_redirects_home(login_as):
 
 def test_dashboard_requires_login(client):
     response = client.get('/dashboard')
+    # The password sign-in page, not Google: a shop without Google keys
+    # would otherwise land on Google's 'Access blocked' error.
     assert response.status_code == 302
-    assert '/auth/login' in response.headers['Location']
+    assert response.headers['Location'].endswith('/login')

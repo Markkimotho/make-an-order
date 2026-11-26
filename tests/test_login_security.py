@@ -3,7 +3,6 @@ audit rows for every sign-in event, the idle timeout and admin unlock."""
 import json
 import time
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -76,15 +75,6 @@ def test_right_password_refused_while_locked(client, app):
     assert user().failed_logins == 5
 
 
-def test_lock_message_counts_down():
-    """Shown only where identity is proven (Google sign-in)."""
-    now = datetime(2026, 11, 26, 12, 0)
-    assert "locked for 1 more minute." in auth_routes.locked_message(
-        now + timedelta(seconds=50), now)
-    assert "locked for 15 more minutes." in auth_routes.locked_message(
-        now + timedelta(minutes=15), now)
-
-
 def test_locked_unknown_and_wrong_answers_are_identical(client, app):
     """A locked account cannot be told apart from a missing one."""
     make_user(app.acme_id)
@@ -141,17 +131,6 @@ def test_unknown_email_gets_the_same_message(client, app):
     unknown = login(client, email="nobody@acme.co", password=WRONG)
     wrong = login(client, password=WRONG)
     assert unknown.headers["Location"] == wrong.headers["Location"]
-
-
-def test_google_sign_in_is_refused_while_locked(client, app):
-    make_user(app.acme_id, email="known@gmail.com", failed_logins=5,
-              locked_until=datetime.utcnow() + timedelta(minutes=10))
-    google = app.extensions["authlib.integrations.flask_client"].google
-    google.authorize_access_token = MagicMock(return_value={"access_token": "t"})
-    google.get = MagicMock(return_value=MagicMock(json=lambda: {"email": "known@gmail.com"}))
-    r = client.get("/auth/authorize")
-    assert "locked" in r.headers["Location"]
-    assert not signed_in(client)
 
 
 def test_failed_count_increments_in_sql_not_from_a_stale_read(client, app, monkeypatch):

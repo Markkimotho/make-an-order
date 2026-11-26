@@ -41,7 +41,7 @@
 - 📱 **SMS Integration** — Automated order confirmations via Africa's Talking
 - 🔍 **Search & Scan** — Text search and barcode/SKU scanning for fast item lookup
 - 💾 **CSV Export** — Export orders, inventory, and reports for external analysis
-- 🎯 **Google SSO** — Single sign-on via Google OAuth 2.0
+- 🎯 **Email and password sign-in** with lockout after 5 wrong tries, rate limit and idle sign-out
 - ⚠️ **Stock Audit Trail** — Complete history of every inventory movement with reason tracking
 
 ---
@@ -83,9 +83,10 @@
 
 ### Authentication & Authorization
 
-#### Google OAuth 2.0 Integration
-- **Flow:** Login → Google auth → User created/updated → Session established
-- **Profile Data:** Email, name, picture URL
+#### Email and password sign-in
+- **Flow:** Sign-in page → email and password checked → session established
+- **Accounts:** owners sign up a business at `/register`; owners add staff
+- **Security:** 5 wrong passwords lock an account for 15 minutes (an admin can unlock it), 10 sign-in attempts per minute per IP, sign-out after the business's idle limit, every sign-in in the activity log
 - **Session Duration:** 24 hours (persistent cookie)
 - **Protected Routes:** All pages except `/` and `/login` require login
 - **Role-Based Routes:**
@@ -355,7 +356,7 @@
 
 **User Registration Flow:**
 1. User clicks "Sign up" on login page → redirects to registration form
-2. Fills: Email (auto-filled from Google), Name, Phone Number, password (optional)
+2. Fills: Email, Name, Phone Number, password (optional)
 3. Submits → User created with role "user" and status "pending"
 4. Admin notified (workflow TBD)
 
@@ -374,12 +375,12 @@
 
 #### User Fields
 
-- **Email** (unique) — Primary identifier, from Google OAuth
+- **Email** (unique) — Primary identifier, used to sign in
 - **Name** — Display name
 - **Phone Number** — For orders and SMS
 - **Role** — superuser, admin, user
 - **Status** — pending, approved, rejected
-- **Password Hash** — Optional (null for OAuth-only users)
+- **Password Hash** — Set at signup or by the owner
 - **Created At** — Timestamp
 
 #### Permission Changes
@@ -690,8 +691,8 @@ API: `GET /reports/daily?from=&to=[&format=csv]` (max 366 days),
 POST /auth/logout
   → Clears session, redirects to login
 
-POST /auth/google-callback
-  → OAuth callback, creates/updates user, sets session
+POST /auth/login/local
+  → Checks email and password, sets session
   → Redirects: superuser/admin → /dashboard, user → /dashboard
 ```
 
@@ -969,7 +970,7 @@ name            VARCHAR(255)
 phone_number    VARCHAR(20)
 role            VARCHAR(20) DEFAULT 'user'  — superuser|admin|user
 status          VARCHAR(20) DEFAULT 'pending'  — pending|approved|rejected
-password_hash   VARCHAR(255)  — NULL for OAuth-only
+password_hash   VARCHAR(255)  — NULL until a password is set
 created_at      DATETIME DEFAULT NOW()
 ```
 
@@ -1033,27 +1034,6 @@ created_at          DATETIME DEFAULT NOW()
 
 ## Integrations
 
-### Google OAuth 2.0
-
-**Configuration:**
-- Client ID & Secret in `.env` file
-- Redirect URI: `{base_url}/auth/google-callback`
-- Scopes: email, profile
-
-**User Profile Data Captured:**
-- Email (unique identifier)
-- Name
-- Picture URL
-
-**Session Flow:**
-1. User clicks "Sign in with Google"
-2. Redirects to Google consent screen
-3. User authorizes
-4. Google redirects back to `/auth/google-callback`
-5. System creates/updates user record
-6. Session set with profile data
-7. User redirected to dashboard
-
 ### Africa's Talking SMS
 
 **Configuration:**
@@ -1083,10 +1063,6 @@ created_at          DATETIME DEFAULT NOW()
 ### Environment Variables (.env)
 
 ```
-# Google OAuth
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-
 # App Secret
 APP_SECRET_KEY=your_random_secret_key_here
 
@@ -1143,7 +1119,7 @@ PORT=5001
 4. **Configure environment**
    ```bash
    cp .env.example .env
-   # Edit .env with your Google OAuth and Africa's Talking credentials
+   # Edit .env with your Africa's Talking credentials
    ```
 
 5. **Run application**
@@ -1180,9 +1156,6 @@ PORT=5001
    - Set `AFRICAS_TALKING_API_KEY` correctly
    - Monitor SMS delivery logs
 
-6. **Google OAuth:** Register production domain
-   - Add redirect URI to Google Console
-   - Update `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 
 7. **Logging:**
    - Enable rotating file handler (enabled in non-debug mode)
@@ -1209,7 +1182,7 @@ CMD ["gunicorn", "--bind", "0.0.0.0:5001", "app:app"]
 Build & run:
 ```bash
 docker build -t make-an-order .
-docker run -p 5001:5001 -e APP_SECRET_KEY="..." -e GOOGLE_CLIENT_ID="..." ... make-an-order
+docker run -p 5001:5001 -e APP_SECRET_KEY="..." ... make-an-order
 ```
 
 ---
@@ -1226,7 +1199,7 @@ docker run -p 5001:5001 -e APP_SECRET_KEY="..." -e GOOGLE_CLIENT_ID="..." ... ma
 - [x] Customer linking to orders
 
 ### User Management
-- [x] Google OAuth 2.0 integration
+- [x] Email and password sign-in with lockout
 - [x] Multi-role RBAC (superuser, admin, user)
 - [x] User registration workflow
 - [x] Admin approval of new users
@@ -1258,7 +1231,6 @@ docker run -p 5001:5001 -e APP_SECRET_KEY="..." -e GOOGLE_CLIENT_ID="..." ... ma
 - [x] Print-optimized styling
 
 ### Integrations
-- [x] Google SSO
 - [x] Africa's Talking SMS confirmations
 - [x] SMS on order placement
 
@@ -1304,7 +1276,7 @@ docker run -p 5001:5001 -e APP_SECRET_KEY="..." -e GOOGLE_CLIENT_ID="..." ... ma
 ### Troubleshooting
 
 **Issue: "User not found" on login**
-- Check user email matches registered Google account
+- Check the email is the one the owner registered, and that the account is not locked (Staff > Users & roles)
 - Verify SUPERUSER_EMAIL constant if first-time setup
 
 **Issue: Orders not decrementing stock**
@@ -1344,7 +1316,7 @@ docker run -p 5001:5001 -e APP_SECRET_KEY="..." -e GOOGLE_CLIENT_ID="..." ... ma
 ## License & Attribution
 
 - Built with Flask 3.0, SQLAlchemy 2.0, Bootstrap 5, Chart.js 4.4.3
-- Google OAuth via Authlib
+- Email and password sign-in (werkzeug password hashes)
 - SMS via Africa's Talking API
 - Hosting-ready for Render, Heroku, AWS, or self-hosted
 

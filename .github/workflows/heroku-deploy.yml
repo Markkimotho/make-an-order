@@ -42,8 +42,6 @@ jobs:
       # Step 4: Set up environment variables
       - name: Set up environment variables
         run: |
-          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
-          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
           echo "APP_SECRET_KEY=${{ secrets.APP_SECRET_KEY }}" >> .env
           echo "MYSQL_HOST=${{ secrets.MYSQL_HOST }}" >> .env
           echo "MYSQL_PORT=3306" >> .env

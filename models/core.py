@@ -43,7 +43,7 @@ class User(TenantMixin, db.Model):
     role          = db.Column(db.String(20), default='user', nullable=False)
     # 'superuser' | 'admin' | 'user' | 'cashier' | 'pharmacist' | 'stock_clerk'
     status        = db.Column(db.String(20), default='pending', nullable=False) # 'pending'|'approved'|'rejected'
-    password_hash = db.Column(db.String(255), nullable=True)                   # null for OAuth-only users
+    password_hash = db.Column(db.String(255), nullable=True)                   # null until a password is set
     ppb_reg_no    = db.Column(db.String(64), nullable=True)   # pharmacists' PPB registration
     is_platform_admin = db.Column(db.Boolean, nullable=False, default=False,
                                   server_default=db.false())
@@ -175,12 +175,18 @@ class InventoryItem(TenantMixin, db.Model):
 
     @staticmethod
     def soonest_batches(item_ids):
-        """{item_id: the stocked batch sold next} in one query, for lists."""
+        """{item_id: the stocked batch sold next} in one query, for lists.
+        Like a sale (services/stock.take), it skips expired (Nairobi date),
+        quarantined and recalled batches."""
         from models.stock import Batch
+        from services.clock import today_nairobi
         ids = list(item_ids)
         if not ids:
             return {}
-        rows = (Batch.query.filter(Batch.inventory_item_id.in_(ids), Batch.quantity_on_hand > 0)
+        rows = (Batch.query.filter(Batch.inventory_item_id.in_(ids), Batch.quantity_on_hand > 0,
+                                   Batch.quarantined.is_(False), Batch.recalled_at.is_(None),
+                                   db.or_(Batch.expiry_date.is_(None),
+                                          Batch.expiry_date >= today_nairobi()))
                 .order_by(Batch.inventory_item_id, Batch.expiry_date.is_(None),
                           Batch.expiry_date.asc(), Batch.id.asc()).all())
         out = {}

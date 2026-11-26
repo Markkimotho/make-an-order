@@ -1,21 +1,19 @@
 """Login, business signup and logout.
 
 Login looks the user up across all tenants (emails are globally unique),
-then the session carries that user's tenant. Google login only signs in
-existing users; a new business starts at /register, which creates the
-tenant and its owner (role 'superuser') together.
+then the session carries that user's tenant. Sign-in is email and
+password only. A new business starts at /register, which creates the
+tenant and its owner (role 'superuser') together; owners add their staff.
 
 Login security: MAX_FAILED_LOGINS wrong passwords in a row lock the account
 for LOCK_MINUTES (users.locked_until); a locked account is refused even with
 the right password until the lock passes or an admin unlocks it. The
 password form is also rate limited per IP. Every sign-in, failure, lock and
 sign-out is written to the audit log with the client IP; the password never
-is. Messages never say whether an email exists, except the lock message once
-an account is actually locked.
+is. Every password failure gets the same message (FAILED_LOGIN), so it never
+says whether an email has an account or is locked.
 """
 import logging
-import math
-import os
 import time
 from datetime import datetime, timedelta
 
@@ -54,13 +52,6 @@ def _spend_hash_time(password):
     if _dummy_hash is None:
         _dummy_hash = generate_password_hash("not-a-password")
     check_password_hash(_dummy_hash, password)
-
-
-def locked_message(locked_until, now=None):
-    minutes = max(1, math.ceil((locked_until - (now or _utcnow())).total_seconds() / 60))
-    unit = "minute" if minutes == 1 else "minutes"
-    return (f"Too many failed sign-in attempts. This account is locked for "
-            f"{minutes} more {unit}. Try again later or ask your manager to unlock it.")
 
 
 def _audit(action, user=None, details=None):
@@ -131,9 +122,8 @@ def _login_user(email, method='password'):
         now = _utcnow()
         if user.locked_until is not None and user.locked_until > now:
             _audit('login.failed', user, {'email': email, 'reason': 'locked', 'method': method})
-            message = locked_message(user.locked_until, now)
             db.session.commit()
-            return message
+            return FAILED_LOGIN
         if user.status in ('pending', 'rejected'):
             _audit('login.failed', user, {'email': email, 'reason': user.status,
                                           'method': method})
@@ -162,41 +152,15 @@ def _login_user(email, method='password'):
     return None
 
 
-def create_auth_blueprint(oauth):
+def create_auth_blueprint():
     auth_bp = Blueprint('auth', __name__)
-    google_client = oauth.google
-
-    # ── Google OAuth ────────────────────────────────────────────────────
 
     @auth_bp.route('/login')
     def login():
+        """Old sign-in links: there is one sign-in, email and password."""
         if 'profile' in session:
             return redirect(url_for('dashboard'))
-        try:
-            app_url = os.getenv("APP_URL", "http://127.0.0.1:5001").rstrip('/')
-            return google_client.authorize_redirect(f"{app_url}/auth/authorize",
-                                                    prompt='select_account')
-        except Exception as e:
-            logger.error(f"Failed to initiate Google login: {type(e).__name__}: {e}", exc_info=True)
-            return redirect(url_for('login_page', message="Could not connect to Google."))
-
-    @auth_bp.route('/authorize')
-    def authorize():
-        try:
-            google_client.authorize_access_token()
-            user_info = google_client.get('userinfo').json()
-        except Exception as e:
-            logger.error(f"OAuth authorization failed: {type(e).__name__}: {e}", exc_info=True)
-            return redirect(url_for('login_page', message="Google sign-in failed."))
-        email = (user_info.get('email') or '').strip().lower()
-        problem = _login_user(email, method='google')
-        if problem == 'not_found':
-            return redirect(url_for('register_page',
-                                    message="No account for that Google address. "
-                                            "Set up your business, or ask your owner to add you."))
-        if problem:
-            return redirect(url_for('login_page', message=problem))
-        return redirect(url_for('dashboard'))
+        return redirect(url_for('login_page'))
 
     # ── Local email/password login ──────────────────────────────────────
 

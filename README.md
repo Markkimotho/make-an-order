@@ -48,7 +48,7 @@ A customer and order management system with role-based access control (RBAC), a 
 The legacy customer/order/SMS flows from earlier versions are preserved unchanged.
 
 **Features:**
-- Google OAuth 2.0 login + customer self-checkout flow
+- Email and password sign-in for staff (lockout, rate limit, idle sign-out) + customer self-checkout flow
 - Six roles (`superuser`, `admin`, `user`, `cashier`, `pharmacist`, `stock_clerk`)
 - POS transactions with tax, discount, loyalty redemption, manager-OTP void
 - M-Pesa Daraja STK Push + callback (Safaricom)
@@ -66,7 +66,7 @@ The legacy customer/order/SMS flows from earlier versions are preserved unchange
 | Backend | Flask 3.0, SQLAlchemy 2.0 |
 | Database | MySQL (local) / JawsDB (production) |
 | Migrations | Flask-Migrate (Alembic) |
-| Auth | Google OAuth 2.0 (Authlib) |
+| Auth | Email and password (werkzeug hashes), Flask sessions |
 | Payments | M-Pesa Daraja, Flutterwave |
 | SMS | Africa's Talking API |
 | OTP store | Redis (with in-memory fallback) |
@@ -215,10 +215,7 @@ Backups: `flask backup create|list|verify|restore|rotate`, and Settings > Backup
 
 - Python 3.8+
 - MySQL running locally
-- Google OAuth 2.0 credentials ([setup guide](https://support.google.com/cloud/answer/6158849?hl=en))
 - Africa's Talking account (optional — SMS fails gracefully without it)
-
-> **OAuth redirect URI:** Add `http://127.0.0.1:5001/authorize` as an Authorised redirect URI in your Google Cloud Console.
 
 ### Installation
 
@@ -248,9 +245,6 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
-# Google OAuth
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
 APP_SECRET_KEY=a-very-strong-random-secret-key
 
 # MySQL (local)
@@ -316,7 +310,7 @@ business; its owner can change the business name and type later at
 
 ## API Reference
 
-All endpoints require an active session (Google OAuth login). API endpoints return JSON.
+All endpoints require an active session (email and password sign-in). API endpoints return JSON.
 
 **Base URL:** `http://127.0.0.1:5001`
 
@@ -328,8 +322,8 @@ All endpoints require an active session (Google OAuth login). API endpoints retu
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/login` | Redirects to Google OAuth login |
-| `GET` | `/authorize` | OAuth callback (handled automatically) |
+| `GET` | `/login` | Sign-in page (email and password) |
+| `POST` | `/auth/login/local` | Sign in |
 | `GET` | `/logout` | Clears session and redirects to login |
 
 ---
@@ -639,7 +633,7 @@ GET http://127.0.0.1:5001/users/
 
 #### Create a User
 
-Use this when someone cannot log in themselves (e.g. Google account issues). They can log in normally once their Google account matches the email you register here.
+Use this to add a staff member with a password. They sign in with that email and password.
 
 ```
 POST http://127.0.0.1:5001/users/
@@ -803,7 +797,7 @@ make-an-order/
 │   └── reports.py            # /reports/* — sales, inventory, expiry, performance, CSV
 │
 ├── auth/
-│   ├── auth_routes.py        # /login, /authorize, /logout + customer login
+│   ├── auth_routes.py        # /login, /logout, signup, lockout + customer login
 │   └── auth_middleware.py    # login/admin/superuser/cashier/pharmacist/stock_clerk
 │                             # decorators (UI + *_api_required JSON variants)
 │
@@ -857,7 +851,6 @@ See [.env.example](.env.example) for the full template. Key variables:
 
 | Variable | Description |
 |---|---|
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 credentials |
 | `APP_SECRET_KEY` | Flask session secret key |
 | `MYSQL_HOST` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DB` | Local MySQL |
 | `JAWSDB_URL` | Production MySQL URL (overrides the four above) |
@@ -911,7 +904,7 @@ Covers:
 - `test_tenancy_hooks.py` — the tenant filter: unbound queries, every read path, cached statements, unions, identity map, bulk writes, refused statements
 - `test_isolation_sweep.py` — every route called by another business: no leak, no change, no crash
 - `test_no_bypass.py` — no raw SQL in app code; `unscoped()` only at allowlisted call sites
-- `test_tenant_auth.py` — signup, login, stale sessions, lapsed trials, Google sign-in, platform admins, staff management
+- `test_tenant_auth.py` — signup, login, stale sessions, lapsed trials, platform admins, staff management
 - `test_tenant_models.py`, `test_phone.py`, `test_encrypted_type.py` — tenant model, phone normalisation, encrypted secrets
 - `test_auth.py` — login, landing, logout redirects
 - `test_customers.py` — customer endpoints and their role checks
