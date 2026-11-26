@@ -226,6 +226,11 @@
       <form method="POST" action="{{ url_for('settings.check_whatsapp') }}">
         <button class="btn btn-outline-primary btn-sm" type="submit">Check connection</button>
       </form>
+      <form method="POST" action="{{ url_for('settings.test_whatsapp') }}" class="d-flex gap-1">
+        <input name="to" type="tel" inputmode="tel" class="form-control form-control-sm" style="width: 11rem;"
+               placeholder="254712345678" aria-label="Phone number for the test message" required>
+        <button class="btn btn-outline-success btn-sm text-nowrap" type="submit">Send test message</button>
+      </form>
       {% endif %}
       <form method="POST" action="{{ url_for('settings.rotate_whatsapp_verify_token') }}">
         <button class="btn btn-outline-secondary btn-sm" type="submit">New verify token</button>

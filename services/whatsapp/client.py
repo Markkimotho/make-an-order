@@ -11,6 +11,7 @@ place: a title over Meta's limit is refused by Meta, not cut, so we cut it.
 import hashlib
 import hmac
 import logging
+from urllib.parse import urlparse
 
 import requests
 
@@ -113,6 +114,22 @@ def verify_signature(app_secret, raw_body, header):
     return hmac.compare_digest(expected, header[len("sha256="):].strip().lower())
 
 
+MEDIA_MAX_BYTES = 16 * 1024 * 1024     # larger files are opened in WhatsApp itself
+# Meta serves media from its own CDN; our token is never sent anywhere else.
+MEDIA_HOSTS = (".fbsbx.com", ".facebook.com", ".whatsapp.net", ".fbcdn.net")
+
+
+class MediaTooLarge(WhatsAppError):
+    pass
+
+
+def _meta_host(url):
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and any(host == h[1:] or host.endswith(h)
+                                            for h in MEDIA_HOSTS)
+
+
 class WhatsAppClient:
     def __init__(self, tenant):
         token = tenant.wa_access_token
@@ -171,3 +188,50 @@ class WhatsAppClient:
         if r.status_code >= 400:
             raise self._error(r)
         return r.json()
+
+    def send_template(self, to, name="hello_world", language="en_US"):
+        """A pre-approved template: the only thing Meta delivers to a number
+        that has not written to the business in the last 24 hours. Used by
+        Settings to prove the connection end to end."""
+        message = {"messaging_product": "whatsapp", "to": to, "type": "template",
+                   "template": {"name": name, "language": {"code": language}}}
+        try:
+            r = requests.post(self._url(f"{self.phone_number_id}/messages"), json=message,
+                              headers=self._headers, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise WhatsAppError(f"WhatsApp could not be reached: {e}"[:255])
+        if r.status_code >= 400:
+            raise self._error(r)
+        try:
+            return r.json()["messages"][0]["id"]
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise WhatsAppError("WhatsApp gave no message id")
+
+    def media(self, media_id):
+        """(bytes, mime type) of a file a customer sent. Meta keeps media for
+        about 30 days; the download link it gives lasts minutes, so it is
+        asked for fresh each time."""
+        try:
+            r = requests.get(self._url(str(media_id)), headers=self._headers, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise WhatsAppError(f"WhatsApp could not be reached: {e}"[:255])
+        if r.status_code >= 400:
+            raise self._error(r)
+        info = r.json()
+        url, mime = info.get("url"), str(info.get("mime_type") or "application/octet-stream")
+        if int(info.get("file_size") or 0) > MEDIA_MAX_BYTES:
+            raise MediaTooLarge("The file is too large to show here. Open it in WhatsApp.")
+        if not _meta_host(url):
+            raise WhatsAppError("WhatsApp gave an unexpected media address")
+        try:
+            r = requests.get(url, headers=self._headers, timeout=30, stream=True)
+        except requests.RequestException as e:
+            raise WhatsAppError(f"The file could not be downloaded: {e}"[:255])
+        if r.status_code >= 400:
+            raise WhatsAppError(f"The file could not be downloaded (HTTP {r.status_code})")
+        data = bytearray()
+        for chunk in r.iter_content(64 * 1024):
+            data.extend(chunk)
+            if len(data) > MEDIA_MAX_BYTES:
+                raise MediaTooLarge("The file is too large to show here. Open it in WhatsApp.")
+        return bytes(data), mime.split(";")[0].strip().lower()

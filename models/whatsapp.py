@@ -67,6 +67,11 @@ class WhatsAppMessage(TenantMixin, db.Model):
     error         = db.Column(db.String(255), nullable=True)
     sent_by       = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"),
                               nullable=True)                    # staff replies only
+    # A photo, document, voice note or video the customer sent (migration
+    # 0016): Meta's media id, fetched from Meta when staff open it.
+    media_id      = db.Column(db.String(128), nullable=True)
+    media_type    = db.Column(db.String(100), nullable=True)
+    media_name    = db.Column(db.String(255), nullable=True)
     dedupe_key    = db.Column(db.String(80), nullable=True)
     attempts      = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     created_at    = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
@@ -74,7 +79,9 @@ class WhatsAppMessage(TenantMixin, db.Model):
     def to_dict(self):
         return {"id": self.id, "direction": self.direction, "kind": self.kind,
                 "body": self.body, "status": self.status, "error": self.error,
-                "staff": self.sent_by is not None, "created_at": _iso(self.created_at)}
+                "staff": self.sent_by is not None, "created_at": _iso(self.created_at),
+                "media": ({"type": self.media_type or "", "name": self.media_name or ""}
+                          if self.media_id else None)}
 
 
 def _iso(value):

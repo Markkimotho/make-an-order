@@ -119,6 +119,23 @@ def _ctx(tenant, chat):
 
 # --- webhook payloads -----------------------------------------------------------------
 
+# Meta message types a person can open; stickers are left as "other".
+MEDIA_KINDS = {"image": "photo", "document": "document", "audio": "voice note",
+               "video": "video"}
+
+
+def media_of(message):
+    """(media id, mime type, file name) of a photo, document, voice note or
+    video, else (None, None, None)."""
+    kind = message.get("type")
+    if kind not in MEDIA_KINDS:
+        return None, None, None
+    media = message.get(kind) or {}
+    media_id = str(media.get("id") or "")[:128] or None
+    name = str(media.get("filename") or "")[:255] or None
+    return media_id, str(media.get("mime_type") or "")[:100] or None, name
+
+
 def parse_event(message):
     """Meta's message object -> bot.Event."""
     kind = message.get("type")
@@ -133,6 +150,10 @@ def parse_event(message):
         button = message.get("button") or {}
         return bot.Event("choice", choice=str(button.get("payload") or "")[:200],
                          text=str(button.get("text") or ""))
+    if kind in MEDIA_KINDS:
+        media = message.get(kind) or {}
+        return bot.Event("media", what=MEDIA_KINDS[kind],
+                         text=str(media.get("caption") or "")[:1000])
     if kind == "location":
         loc = message.get("location") or {}
         words = ", ".join(str(loc[k]) for k in ("name", "address") if loc.get(k))
@@ -160,6 +181,8 @@ def _inbound_text(message, event):
         return f"[tapped] {event.text or event.choice}"
     if event.kind == "location":
         return f"[location] {event.address}"
+    if event.kind == "media":
+        return f"[{event.what}]" + (f" {event.text}" if event.text else "")
     return f"[{message.get('type') or 'message'}]"
 
 
@@ -268,10 +291,12 @@ def handle_message(tenant, message, profile_name=None, now=None):
         db.session.rollback()                   # Meta's retry of a message we have
         return False
     chat = _chat_for(wa_id, profile_name)
+    media_id, media_type, media_name = media_of(message)
     db.session.add(WhatsAppMessage(chat_id=chat.id, direction="in",
                                    wa_message_id=wa_message_id, kind=event.kind,
                                    body=_inbound_text(message, event)[:4000],
-                                   status="received", created_at=now))
+                                   status="received", created_at=now, media_id=media_id,
+                                   media_type=media_type, media_name=media_name))
     db.session.flush()
     state = _fresh_state(chat, when)
     if chat.last_inbound_at is None or when > chat.last_inbound_at:
@@ -317,7 +342,8 @@ def _run(chat, state, reply, ctx, now):
         return bot.my_orders(reply.state, ctx, recent_orders(ctx.phone)), None
     if kind == "handoff":
         chat.mode, chat.needs_reply, chat.handoff_at = "person", True, now
-        return bot.handed_off(reply.state, ctx), None
+        what = reply.action[1] if len(reply.action) > 1 else None
+        return bot.handed_off(reply.state, ctx, what), None
     if kind == "checkout":
         details = reply.action[1]
         try:
@@ -585,3 +611,16 @@ def payment_notices(now=None):
 def _tenant_id():
     from auth.tenancy import current_tenant_id
     return current_tenant_id()
+
+
+def media_for(tenant, message_id):
+    """(bytes, mime type, file name) for a file a customer sent. Raises
+    LookupError when there is none, WhatsAppError when Meta will not give it."""
+    msg = db.session.get(WhatsAppMessage, message_id)
+    if msg is None or not msg.media_id:
+        raise LookupError("No file")
+    client, error = _client(tenant)
+    if client is None:
+        raise WhatsAppNotConfigured(error)
+    data, mime = client.media(msg.media_id)
+    return data, mime or msg.media_type or "application/octet-stream", msg.media_name

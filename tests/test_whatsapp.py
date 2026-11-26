@@ -29,9 +29,21 @@ NUMBER_ID = "109876543210"
 CUSTOMER = "254712345678"
 
 
+class MediaResp:
+    status_code = 200
+
+    def __init__(self, data):
+        self.data = data
+
+    def iter_content(self, size):
+        for i in range(0, len(self.data), size):
+            yield self.data[i:i + size]
+
+
 class FakeMeta:
     def __init__(self, fallback_post, fallback_get):
-        self.sent, self.reads, self.gets = [], [], []
+        self.sent, self.reads, self.gets, self.downloads = [], [], [], []
+        self.media, self.files = {}, {}  # media id -> Meta's info; url -> bytes
         self.fail = None                 # (status, error dict) for the next sends
         self._n = 0
         self._post, self._get = fallback_post, fallback_get
@@ -51,9 +63,15 @@ class FakeMeta:
                                        "messages": [{"id": f"wamid.out{self._n}"}]})
 
     def get(self, url, params=None, headers=None, timeout=None, **kw):
+        if url.startswith("https://lookaside.fbsbx.com/") or url.startswith("https://evil."):
+            self.downloads.append((url, headers))
+            return MediaResp(self.files[url])
         if not url.startswith("https://graph.facebook.com/"):
             return self._get(url, auth=kw.get("auth"), timeout=timeout)
         self.gets.append(url)
+        media_id = url.rsplit("/", 1)[-1]
+        if media_id in self.media:
+            return daraja_fakes.Resp(200, self.media[media_id])
         return daraja_fakes.Resp(200, {"display_phone_number": "+254 700 111222",
                                        "verified_name": "Duka Bora"})
 
@@ -621,3 +639,119 @@ def test_webhook_url_uses_the_same_public_address_as_mpesa(app, login_as, monkey
         db.session.commit()
     page = login_as("superuser").get("/settings/").get_data(as_text=True)
     assert "https://shop.example.co.ke/webhooks/whatsapp/acme" in page
+
+
+
+# --- photos and files ------------------------------------------------------------------------
+
+JPEG = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+
+
+def photo(wa, media_id="MID123", mime="image/jpeg", url="https://lookaside.fbsbx.com/p?mid=1",
+          data=JPEG, kind="image", caption="My prescription", size=None, filename=None):
+    wa["meta"].media[media_id] = {"url": url, "mime_type": mime,
+                                  "file_size": size if size is not None else len(data),
+                                  "id": media_id}
+    wa["meta"].files[url] = data
+    body = {"id": media_id, "mime_type": mime, "sha256": "x"}
+    if caption:
+        body["caption"] = caption
+    if filename:
+        body["filename"] = filename
+    msg = message(kind=kind, extra={kind: body})
+    assert deliver(wa["client"], webhook([msg])).status_code == 200
+    row = WhatsAppMessage.query.filter_by(media_id=media_id).one()
+    from types import SimpleNamespace
+    return SimpleNamespace(id=row.id, body=row.body, media_type=row.media_type)
+
+
+def test_a_photo_goes_to_a_person_and_staff_can_open_it(wa, login_as):
+    say(wa, "hi")
+    row = photo(wa)
+    assert row.body == "[photo] My prescription" and row.media_type == "image/jpeg"
+    assert "we got your photo" in wa["meta"].texts()[-1]
+    chat = WhatsAppChat.query.one()
+    assert chat.mode == "person" and chat.needs_reply
+
+    staff = login_as("pharmacist")
+    thread = staff.get(f"/whatsapp/chats/{chat.id}").get_json()
+    assert thread["messages"][-2]["media"] == {"type": "image/jpeg", "name": ""}
+    r = staff.get(f"/whatsapp/media/{row.id}")
+    assert r.status_code == 200 and r.data == JPEG
+    assert r.mimetype == "image/jpeg"
+    assert r.headers["Content-Disposition"].startswith("inline")
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    url, headers = wa["meta"].downloads[-1]
+    assert url.startswith("https://lookaside.fbsbx.com/")
+    assert headers["Authorization"] == "Bearer meta-token"
+
+
+def test_photos_while_talking_to_staff_just_wait_for_them(wa):
+    say(wa, "hi")
+    say(wa, choice="m:talk")
+    sent = len(wa["meta"].sent)
+    photo(wa, media_id="MID9")
+    assert len(wa["meta"].sent) == sent                 # no bot reply
+    assert WhatsAppChat.query.one().needs_reply
+
+
+def test_voice_notes_and_documents(wa, login_as):
+    say(wa, "hi")
+    voice = photo(wa, media_id="V1", mime="audio/ogg; codecs=opus", kind="audio", caption=None,
+                  url="https://lookaside.fbsbx.com/v", data=b"OggS")
+    assert voice.body == "[voice note]"
+    doc = photo(wa, media_id="D1", mime="application/pdf", kind="document", caption=None,
+                url="https://lookaside.fbsbx.com/d", data=b"%PDF-1.4", filename="rx scan.pdf")
+    staff = login_as("cashier")
+    r = staff.get(f"/whatsapp/media/{voice.id}")
+    assert r.mimetype == "audio/ogg" and r.headers["Content-Disposition"].startswith("inline")
+    r = staff.get(f"/whatsapp/media/{doc.id}")
+    assert r.mimetype == "application/pdf"
+    assert 'filename="rx scan.pdf"' in r.headers["Content-Disposition"]
+
+
+def test_a_risky_file_downloads_instead_of_opening(wa, login_as):
+    say(wa, "hi")
+    row = photo(wa, media_id="H1", mime="text/html", kind="document", caption=None,
+                url="https://lookaside.fbsbx.com/h", data=b"<script>alert(1)</script>",
+                filename='bad"; x=".html')
+    r = login_as("cashier").get(f"/whatsapp/media/{row.id}")
+    assert r.mimetype == "application/octet-stream"
+    disposition = r.headers["Content-Disposition"]
+    assert disposition.startswith("attachment") and '"; x=' not in disposition
+    assert "sandbox" in r.headers["Content-Security-Policy"]
+
+
+def test_our_token_is_never_sent_off_meta(wa, login_as):
+    say(wa, "hi")
+    row = photo(wa, media_id="E1", url="https://evil.example.com/steal")
+    r = login_as("cashier").get(f"/whatsapp/media/{row.id}")
+    assert r.status_code == 502 and "unexpected media address" in r.get_json()["error"]
+    assert not any("evil" in u for u, _ in wa["meta"].downloads)
+
+
+def test_huge_files_are_left_in_whatsapp(wa, login_as):
+    say(wa, "hi")
+    row = photo(wa, media_id="BIG", size=50 * 1024 * 1024)
+    r = login_as("cashier").get(f"/whatsapp/media/{row.id}")
+    assert r.status_code == 502 and "too large" in r.get_json()["error"]
+
+
+def test_media_is_for_till_staff_only(wa, login_as):
+    say(wa, "hi")
+    row = photo(wa)
+    assert login_as("stock_clerk").get(f"/whatsapp/media/{row.id}").status_code == 403
+    text_row = WhatsAppMessage.query.filter_by(media_id=None, direction="in").first()
+    assert login_as("cashier").get(f"/whatsapp/media/{text_row.id}").status_code == 404
+
+
+def test_send_test_message_from_settings(wa, login_as):
+    owner = login_as("superuser")
+    r = owner.post("/settings/whatsapp/test", data={"to": "0712 345 678"})
+    assert r.status_code == 302
+    sent = wa["meta"].sent[-1]
+    assert sent["type"] == "template" and sent["to"] == "254712345678"
+    assert sent["template"] == {"name": "hello_world", "language": {"code": "en_US"}}
+    count = len(wa["meta"].sent)
+    owner.post("/settings/whatsapp/test", data={"to": "12"})
+    assert len(wa["meta"].sent) == count

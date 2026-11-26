@@ -24,6 +24,16 @@ same as orders from the web shop. A customer who taps **Talk to us** goes to
    order ready or out for delivery they get a WhatsApp message, or an SMS
    if they last wrote more than 24 hours ago.
 
+A customer who sends a **photo, document, voice note or video** (a
+prescription, a picture of what they want) is handed to a person straight
+away: "Thanks, we got your photo. Someone will look at it and reply here."
+Staff see it inline in **WhatsApp chats** (photos, voice notes and videos
+play in the page; other files download). Files are fetched from Meta when
+opened, through `/whatsapp/media/<message id>` (till staff only), and are
+not copied to our server. Meta keeps them for about 30 days; files over
+16 MB are opened in WhatsApp itself. Only images, PDF, audio and video open
+in the browser; anything else (HTML, SVG, office files) downloads.
+
 Words that work anywhere: `hi` / `menu` (start over), `cart`, `checkout`,
 `orders`, `talk`, `cancel`.
 
@@ -64,8 +74,9 @@ The steps are also on the Settings page (owner only):
 6. Under WhatsApp > Configuration, enter the webhook URL
    (`https://<your host>/webhooks/whatsapp/<slug>`) and the verify token
    shown in Settings. Verify, then subscribe to **messages**.
-7. Press **Check connection**, switch the bot on, and send "Hi" from
-   another phone.
+7. Press **Check connection**, then **Send test message** to your own
+   phone (Meta's `hello_world` template; on a Meta test number, add your
+   phone as a recipient first). Switch the bot on and reply "Hi".
 
 The token and app secret are stored encrypted (`TENANT_SECRETS_KEY`) and are
 never shown again. A shop server needs the Cloudflare tunnel
@@ -84,7 +95,7 @@ must be set up for the bot to take payments; without it the bot only offers
 | Webhook routes | `api/whatsapp_webhook.py` |
 | Staff chats API and page | `api/whatsapp_chats.py`, `pages/whatsapp_chats.py`, `templates/whatsapp_chats.html` |
 | Settings | `api/settings.py` (`/settings/whatsapp*`) |
-| Tables | `whatsapp_chats`, `whatsapp_messages` (migration 0015) |
+| Tables | `whatsapp_chats`, `whatsapp_messages` (migrations 0015, 0016 for media) |
 | Tests | `tests/test_whatsapp_bot.py` (conversations), `tests/test_whatsapp.py` (end to end) |
 
 The bot uses menus and fixed rules, with no language model, so there is no

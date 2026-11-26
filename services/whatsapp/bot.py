@@ -51,10 +51,11 @@ TEXT_STEPS = ("qty", "name", "address", "pay_phone")
 
 @dataclass
 class Event:
-    kind: str                 # text | choice | location | other
+    kind: str                 # text | choice | location | media | other
     text: str = ""            # typed text, or the tapped option's title
     choice: str = ""          # the tapped option's id
     address: str = ""         # a shared location, as words
+    what: str = ""            # media: "photo", "document", "voice note", "video"
 
 
 @dataclass
@@ -319,10 +320,14 @@ def my_orders(state, ctx, rows):
                  {**state, "step": "menu"})
 
 
-def handed_off(state, ctx):
-    return Reply([say(f"OK. Someone from {ctx.business} will reply here soon. "
-                       "Type MENU any time to go back to the shop.")],
-                 {**state, "step": "menu"})
+def handed_off(state, ctx, what=None):
+    if what:
+        body = (f"Thanks, we got your {what}. Someone from {ctx.business} will look at it "
+                "and reply here soon. Type MENU any time to go back to the shop.")
+    else:
+        body = (f"OK. Someone from {ctx.business} will reply here soon. "
+                "Type MENU any time to go back to the shop.")
+    return Reply([say(body)], {**state, "step": "menu"})
 
 
 # --- checkout -------------------------------------------------------------------------
@@ -435,6 +440,10 @@ def step(state, event, ctx):
     state = dict(state or {})
     first = not state.get("seen")
     state["seen"] = True
+    if event.kind == "media":
+        # A photo (often a prescription or a picture of what they want), a
+        # document or a voice note: a person has to look at it.
+        return Reply([], state, ("handoff", event.what or "file"))
     if event.kind == "other":
         return Reply([buttons("I can read text and taps only. Type what you are looking "
                               "for, or talk to us.", ("m:shop", "Shop"),

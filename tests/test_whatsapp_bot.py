@@ -337,3 +337,12 @@ def test_search_matches_all_words_then_any():
     assert [i["id"] for i in bot.search(ITEMS, "brown sugar")] == [4]
     assert {i["id"] for i in bot.search(ITEMS, "sugar soap")} == {1, 2, 4}
     assert bot.search(ITEMS, "a") == []
+
+
+
+def test_a_photo_or_voice_note_is_handed_to_a_person():
+    c = Chat()
+    c.send(bot.Event("media", what="photo", text="my prescription"))
+    assert c.last.action == ("handoff", "photo")
+    r = bot.handed_off({}, c.ctx, "photo")
+    assert "we got your photo" in readable(r.messages[0])

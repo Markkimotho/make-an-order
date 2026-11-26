@@ -154,8 +154,9 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
                             state={"name": mark}, mode="person", needs_reply=True)
         db.session.add(chat)
         db.session.flush()
-        db.session.add(WhatsAppMessage(chat_id=chat.id, direction="in", kind="text", body=mark,
-                                       status="received", wa_message_id=f"wamid.{tag}"))
+        db.session.add(WhatsAppMessage(chat_id=chat.id, direction="in", kind="media", body=mark,
+                                       status="received", wa_message_id=f"wamid.{tag}",
+                                       media_id=f"MEDIA{tag}", media_type="image/jpeg"))
         db.session.commit()
 
 

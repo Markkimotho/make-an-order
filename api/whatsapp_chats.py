@@ -7,10 +7,14 @@ read and answered from the app (URL prefix /whatsapp).
   POST /chats/<id>/reply      {body}: answer on WhatsApp (within 24 hours of the
                               customer's last message: Meta's rule)
   POST /chats/<id>/hand-back  the bot answers this customer again
+  GET  /media/<message id>    a photo, document or voice note the customer
+                              sent, fetched from Meta when opened
 
 Anyone on the till (cashier, pharmacist, admin, owner) may answer.
 """
-from flask import Blueprint, g, jsonify, request, session
+import re
+
+from flask import Blueprint, Response, g, jsonify, request, session
 
 from auth.auth_middleware import cashier_api_required
 from models import Tenant, WhatsAppChat, WhatsAppMessage, db
@@ -115,3 +119,33 @@ def hand_back(chat_id):
     audit_service.log(session.get("user_id"), "whatsapp.hand_back", "WhatsAppChat", chat_id)
     db.session.commit()
     return jsonify({"chat": _row(chat)}), 200
+
+
+# Shown in the page; anything else (HTML, SVG, scripts, office files) is a
+# download, so a customer's file can never run as a page on our site.
+INLINE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf",
+                "audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr",
+                "video/mp4", "video/3gpp"}
+
+
+@whatsapp_chats_bp.route("/media/<int:message_id>", methods=["GET"])
+@cashier_api_required
+def media(message_id):
+    from services.whatsapp.client import WhatsAppError
+    tenant = db.session.get(Tenant, g.current_tenant.id)
+    try:
+        data, mime, name = service.media_for(tenant, message_id)
+    except LookupError:
+        return jsonify({"error": "Not found"}), 404
+    except WhatsAppError as e:
+        return jsonify({"error": str(e)}), 502
+    inline = mime in INLINE_TYPES
+    safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_", name or f"whatsapp-{message_id}")[:100]
+    response = Response(data, mimetype=mime if inline else "application/octet-stream")
+    response.headers["Content-Disposition"] = (
+        f'{"inline" if inline else "attachment"}; filename="{safe_name}"')
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, max-age=600"
+    if mime != "application/pdf":                 # the browser's PDF viewer needs scripts
+        response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return response

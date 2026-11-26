@@ -321,6 +321,32 @@ def check_whatsapp():
     return redirect(url_for("settings.page") + "#whatsapp")
 
 
+@settings_bp.route("/whatsapp/test", methods=["POST"])
+@superuser_required
+def test_whatsapp():
+    """Send Meta's hello_world template to a number: proves the number id and
+    token can send, before any customer has written in."""
+    from services.whatsapp.client import WhatsAppClient, WhatsAppError
+    tenant = _tenant()
+    to = re.sub(r"\D", "", request.form.get("to") or "")
+    if to.startswith("0") and len(to) == 10:
+        to = "254" + to[1:]
+    if not 8 <= len(to) <= 15:
+        flash("Enter the phone number to send the test to, with its country code "
+              "(for example 254712345678).", "danger")
+        return redirect(url_for("settings.page") + "#whatsapp")
+    try:
+        WhatsAppClient(tenant).send_template(to)
+    except (WhatsAppError, SecretsKeyMissing) as e:
+        flash(f"WhatsApp did not send the test: {e}", "danger")
+        return redirect(url_for("settings.page") + "#whatsapp")
+    audit_service.log(session.get("user_id"), "tenant.whatsapp_test", "Tenant", tenant.id)
+    db.session.commit()
+    flash("Test message sent. It should arrive on that phone within a minute. "
+          "Reply \"Hi\" from it to talk to the bot.", "success")
+    return redirect(url_for("settings.page") + "#whatsapp")
+
+
 @settings_bp.route("/whatsapp/verify-token", methods=["POST"])
 @superuser_required
 def rotate_whatsapp_verify_token():
