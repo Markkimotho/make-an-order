@@ -35,3 +35,11 @@ def test_dashboard_requires_login(client):
     # would otherwise land on Google's 'Access blocked' error.
     assert response.status_code == 302
     assert response.headers['Location'].endswith('/login')
+
+
+def test_sign_in_page_points_to_real_places(client):
+    """Staff are added by the owner; /register makes a new business, and the
+    old role-select page is gone."""
+    html = client.get("/login").get_data(as_text=True)
+    assert "Request access" not in html and "role-select" not in html
+    assert 'href="/register"' in html and "Create an account" in html
