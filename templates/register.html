@@ -3,10 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Make-An-Order — Create Account</title>
+    <title>Create account | Make-An-Order</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        body.login-page { padding: 16px; }
+        @media (max-width: 420px) { .login-container { padding: 28px 18px; } }
+        .vertical-includes {
+            margin-top: 8px; padding: 10px 12px; text-align: left;
+            background: var(--mac-stripe); border: 1px solid var(--mac-border-lt); border-radius: 6px;
+            font-size: 12px; color: var(--mac-text-sub);
+        }
+        .vertical-includes .vi-head { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 6px; color: var(--mac-text); }
+        .vertical-includes ul { list-style: none; padding: 0; margin: 0; }
+        .vertical-includes li { display: flex; gap: 6px; padding: 1px 0; }
+        .vertical-includes li i { color: var(--mac-green); font-size: 10px; margin-top: 4px; }
+    </style>
 </head>
 <body class="login-page">
     <div class="login-container" style="max-width: 440px;">
@@ -41,22 +54,35 @@
                     <label style="font-size: 11px; font-weight: 600; color: var(--mac-text-sub); display: block; margin-bottom: 3px;">
                         Type of business <span style="color: var(--mac-red);">*</span>
                     </label>
-                    <select name="vertical" id="verticalSelect" class="form-select form-select-sm" required style="font-size: 13px;">
-                        {% for slug, cfg in BUSINESS_CONFIGS.items() %}
-                        <option value="{{ slug }}" {% if form_data and form_data.vertical == slug %}selected{% endif %}>{{ cfg.label }}</option>
+                    {% set chosen = form_data.vertical if form_data and form_data.vertical else 'shop' %}
+                    <select name="vertical" id="verticalSelect" class="form-select form-select-sm" required
+                            aria-describedby="verticalHelp" style="font-size: 13px;">
+                        {% for group, members in BUSINESS_GROUPS %}
+                        <optgroup label="{{ group }}">
+                            {% for slug, cfg in members %}
+                            <option value="{{ slug }}" {% if chosen == slug %}selected{% endif %}>{{ cfg.label }}{% if cfg.specialised %} (extra tools){% endif %}</option>
+                            {% endfor %}
+                        </optgroup>
                         {% endfor %}
                     </select>
+                    <div id="verticalHelp" style="font-size: 11px; color: var(--mac-text-muted); margin-top: 3px;">
+                        Not listed? Choose Any other shop. You can change this later.
+                    </div>
                     {% for slug, cfg in BUSINESS_CONFIGS.items() %}
-                    <ul class="vertical-includes small text-muted mt-2 mb-0 ps-3" data-vertical="{{ slug }}" hidden>
-                        {% for line in cfg.includes %}<li>{{ line }}</li>{% endfor %}
-                    </ul>
+                    <div class="vertical-includes" data-vertical="{{ slug }}" {% if chosen != slug %}hidden{% endif %}>
+                        <div class="vi-head"><i class="fas {{ cfg.icon }}" style="color: {{ cfg.color }};"></i>
+                            <span>{{ cfg.examples }}</span></div>
+                        <ul>
+                            {% for line in cfg.includes %}<li><i class="fas fa-check"></i><span>{{ line }}</span></li>{% endfor %}
+                        </ul>
+                    </div>
                     {% endfor %}
                     <script>
                     (function () {
                         const sel = document.getElementById('verticalSelect');
                         function show() {
-                            document.querySelectorAll('.vertical-includes').forEach(function (ul) {
-                                ul.hidden = ul.dataset.vertical !== sel.value;
+                            document.querySelectorAll('.vertical-includes').forEach(function (box) {
+                                box.hidden = box.dataset.vertical !== sel.value;
                             });
                         }
                         sel.addEventListener('change', show); show();

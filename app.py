@@ -43,9 +43,10 @@ from auth.auth_routes import create_auth_blueprint, record_logout
 from auth.idle import enforce_idle_timeout
 from auth.tenancy import CrossTenantWrite, bind_tenant, reset_tenant, unscoped
 from config import Config
-from verticals.features import VERTICAL_FEATURES, feature_required, gate_blueprint
+from verticals.business_types import BUSINESS_CONFIGS, grouped as business_groups
+from verticals.features import feature_required, gate_blueprint
 from verticals.nav import nav_for
-from models import VERTICALS, Campaign, Customer, Order, Tenant, User, db
+from models import Campaign, Customer, Order, Tenant, User, db
 
 load_dotenv()
 
@@ -55,88 +56,9 @@ migrate = Migrate()
 # ---------------------------------------------------------------------------
 # Verticals
 # ---------------------------------------------------------------------------
-# One entry per tenant vertical (models.VERTICALS). ``features`` comes from
-# verticals/features.py and drives the nav, dashboard cards and which routes
-# answer; ``seed`` names the demo catalogue used by ``flask seed-demo``.
-BUSINESS_CONFIGS = {
-    'pharmacy': {
-        'label':       'Pharmacy',
-        'icon':        'fa-prescription-bottle-medical',
-        'color':       '#198754',
-        'tagline':     'Batches & expiry · Patients · Controlled drugs · Profit',
-        'description': 'For chemists and pharmacies. Till with discounts and M-Pesa or '
-                       'bank confirmation, batch and expiry tracking, recalls, patient '
-                       'medication history, the controlled-drug register, purchase '
-                       'orders, daily profit and cashier reconciliation.',
-        'includes':    ['Point of sale with M-Pesa, bank and cash',
-                        'Batch, expiry and recall tracking',
-                        'Patient medication history and refills',
-                        'Controlled-drug register (PPB)',
-                        'Purchase orders and markup pricing',
-                        'Daily sales, profit and cash reconciliation',
-                        'Staff roles, performance and activity log'],
-        'seed':        'pharmacy',
-    },
-    'distributor': {
-        'label':       'Distributor / Wholesaler',
-        'icon':        'fa-truck',
-        'color':       '#0d6efd',
-        'tagline':     'Trade credit · Route orders · Collections',
-        'description': 'For FMCG, gas and hardware distributors selling to dukas on '
-                       'credit, with M-Pesa collections and credit limits.',
-        'includes':    ['Point of sale with M-Pesa, bank and cash',
-                        'Dukas on credit with limits and deni aging',
-                        'Duka order links and price tiers',
-                        'Purchase orders and markup pricing',
-                        'Daily sales, profit and cash reconciliation',
-                        'Staff roles, performance and activity log'],
-        'seed':        'supermarket',
-    },
-    'institution': {
-        'label':       'School / Estate / Chama',
-        'icon':        'fa-school',
-        'color':       '#6f42c1',
-        'tagline':     'Pre-orders · M-Pesa collection · Pickup',
-        'description': 'For schools, gated estates and chamas collecting payments '
-                       'for uniforms, bundles and levies against a student or house number.',
-        'includes':    ['Campaign links parents pay through M-Pesa',
-                        'Instalments matched to admission or house numbers',
-                        'Pickup codes and packing lists',
-                        'Purchasing, expenses and collection reports',
-                        'Staff roles and activity log'],
-        'seed':        'general',
-    },
-}
-_GENERAL_INCLUDES = ['Point of sale with M-Pesa, bank and cash',
-                     'Online shop and WhatsApp orders paid by M-Pesa',
-                     'Stock, low-stock alerts and purchase orders',
-                     'Markup pricing, daily sales and profit',
-                     'Cash reconciliation, staff roles and activity log']
-for _slug, _label, _icon, _color, _tagline, _seed in (
-        ('shop', 'Any other shop', 'fa-store', '#6c757d',
-         'Any retail business', 'general'),
-        ('supermarket', 'Supermarket / Minimart', 'fa-cart-shopping', '#0d6efd',
-         'Groceries · FMCG · Expiry', 'supermarket'),
-        ('hardware', 'Hardware', 'fa-screwdriver-wrench', '#fd7e14',
-         'Building · Tools · Trade accounts', 'hardware'),
-        ('salon', 'Salon / Barber / Spa', 'fa-scissors', '#d63384',
-         'Services · Products · Stylists', 'salon'),
-        ('restaurant', 'Restaurant / Café', 'fa-utensils', '#dc3545',
-         'Menu · Takeaway · Delivery', 'restaurant'),
-        ('agrovet', 'Agrovet', 'fa-seedling', '#2e7d32',
-         'Seeds · Feeds · Vet drugs · Expiry', 'general'),
-        ('electronics', 'Electronics / Phones', 'fa-mobile-screen', '#20c997',
-         'Phones · Accessories · Repairs', 'general'),
-        ('cosmetics', 'Cosmetics / Beauty shop', 'fa-spray-can-sparkles', '#e83e8c',
-         'Beauty · Skincare · Fragrance', 'general')):
-    BUSINESS_CONFIGS[_slug] = {'label': _label, 'icon': _icon, 'color': _color,
-                               'tagline': _tagline,
-                               'description': f'{_label}: sell at the counter and online, '
-                                              'with stock, pricing and money in one place.',
-                               'includes': list(_GENERAL_INCLUDES), 'seed': _seed}
-for _vertical, _config in BUSINESS_CONFIGS.items():
-    _config['features'] = VERTICAL_FEATURES[_vertical]
-assert set(BUSINESS_CONFIGS) == set(VERTICALS)
+# BUSINESS_CONFIGS (verticals/business_types.py) is the one table of business
+# types: labels, groups, what each includes, the starter catalogue (``seed``)
+# and its ``features`` from verticals/features.py.
 
 
 def get_user_context():
@@ -271,6 +193,9 @@ def create_app(config_override=None):
                             x_proto=int(app.config['PROXY_FIX_X_PROTO']))
 
     _configure_logging(app)
+
+    # Business types grouped for the landing, signup and onboarding pages.
+    app.jinja_env.globals['BUSINESS_GROUPS'] = business_groups()
 
     db.init_app(app)
     migrate.init_app(app, db)
