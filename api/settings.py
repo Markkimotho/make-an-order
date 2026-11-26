@@ -69,7 +69,11 @@ def _whatsapp_context(tenant):
             state[field] = bool(getattr(tenant, field))
         except SecretsKeyMissing:
             state[field] = True
-    return {"webhook_url": online_shop.absolute(f"/webhooks/whatsapp/{tenant.slug}"),
+    # A webhook, like Daraja's callbacks: the server's public address
+    # (APP_URL), else the shop's link base.
+    from config import Config
+    base = (Config.APP_URL or "").rstrip("/") or online_shop.absolute("")
+    return {"webhook_url": f"{base}/webhooks/whatsapp/{tenant.slug}",
             "verify_token": tenant.wa_verify_token, "token_set": state["wa_access_token"],
             "secret_set": state["wa_app_secret"]}
 

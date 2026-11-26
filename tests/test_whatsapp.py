@@ -607,3 +607,17 @@ def test_chats_page_sends_to_the_chat_on_screen():
     from pathlib import Path
     html = (Path(__file__).resolve().parents[1] / "templates/whatsapp_chats.html").read_text()
     assert "seq !== loadSeq" in html and "target !== shown" in html
+
+
+def test_webhook_url_uses_the_same_public_address_as_mpesa(app, login_as, monkeypatch):
+    from config import Config
+    monkeypatch.setattr(Config, "APP_URL", "https://shop.example.co.ke")
+    set_vertical(app.acme_id, "shop")
+    page = login_as("superuser").get("/settings/").get_data(as_text=True)
+    assert "https://shop.example.co.ke/api/payments/daraja/stk/acme/" in page
+    with unscoped():
+        t = db.session.get(Tenant, app.acme_id)
+        t.wa_verify_token = "v"
+        db.session.commit()
+    page = login_as("superuser").get("/settings/").get_data(as_text=True)
+    assert "https://shop.example.co.ke/webhooks/whatsapp/acme" in page
