@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Recalls{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-triangle-exclamation me-2"></i>Recalls</h2>
+    <p class="text-muted mb-0 small">Recalled batches are held for good. See who bought each one, text them,
+      and write off what is still on the shelf (destroyed or sent back to the supplier).
+      Recall a batch from <a href="{{ url_for('batches_page') }}">Batches &amp; expiry</a>.</p>
+  </div>
+</div>
+<div id="rcList"><div class="text-muted">Loading…</div></div>
+{% include "_write_off_modal.html" %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const CAN_TEXT = {{ (user_role in ('admin', 'superuser'))|tojson }};
+  const REASONS = ['recalled', 'returned_to_supplier'];
+  const list = document.getElementById('rcList');
+  let batches = [];
+
+  function buyersTable(data) {
+    if (!data.buyers.length) return '<div class="text-muted small">Nobody has units of this batch.</div>';
+    return `<div class="small mb-1">${esc(data.units_out)} units out with ${esc(data.customers)} customer(s),
+      ${esc(data.customers_with_phone)} with a phone${data.walk_in_units ? `; ${esc(data.walk_in_units)} units sold to walk-ins` : ''}.</div>
+      <div class="table-responsive"><table class="table table-sm mb-0">
+      <thead><tr><th>Date</th><th>Customer</th><th>Phone</th><th>Sale / order</th><th class="text-end">Qty</th></tr></thead>
+      <tbody>${data.buyers.map(r => `<tr>
+        <td class="small">${esc((r.date || '').replace('T', ' ').slice(0, 16))}</td>
+        <td>${esc(r.customer_name)}</td><td class="small">${esc(r.phone || '')}</td>
+        <td class="small font-monospace">${esc(r.ref)}</td><td class="text-end">${esc(r.quantity)}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  }
+  async function loadBuyers(b) {
+    const box = document.getElementById(`buyers-${b.id}`);
+    const r = await fetch(`/inventory/batches/${b.id}/buyers`);
+    const data = await r.json().catch(() => ({}));
+    box.innerHTML = r.ok ? buyersTable(data) : `<div class="text-danger small">${esc(data.error || 'Could not load buyers')}</div>`;
+  }
+  async function load() {
+    const r = await fetch('/inventory/batches?status=recalled');
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { list.innerHTML = `<div class="text-danger">${esc(data.error || 'Could not load recalls')}</div>`; return; }
+    batches = data.batches;
+    if (!batches.length) {
+      list.innerHTML = '<div class="card"><div class="card-body text-muted">No recalled batches.</div></div>';
+      return;
+    }
+    list.innerHTML = batches.map(b => `<div class="card mb-3" id="batch-${b.id}"><div class="card-body">
+      <div class="d-flex justify-content-between flex-wrap gap-2">
+        <div>
+          <h5 class="mb-1">${esc(b.item_name)} <span class="font-monospace small">batch ${esc(b.batch_number)}</span></h5>
+          <div class="small text-muted">Recalled ${esc((b.recalled_at || '').slice(0, 10))}
+            ${b.recall_ref ? '· ref ' + esc(b.recall_ref) : ''} · ${esc(b.recall_reason || '')}</div>
+        </div>
+        <div class="text-end">
+          <div class="small text-muted">Still on hand</div>
+          <div class="fs-5 fw-bold">${esc(b.quantity_on_hand)} <span class="small text-muted">(${kes(b.value_at_cost)})</span></div>
+        </div>
+      </div>
+      <div class="d-flex gap-2 my-2 flex-wrap">
+        ${b.quantity_on_hand > 0 ? `<button class="btn btn-sm btn-outline-danger" data-act="wo" data-id="${b.id}">Write off what is left</button>` : ''}
+        ${CAN_TEXT ? `<button class="btn btn-sm btn-primary" data-act="text" data-id="${b.id}"><i class="fas fa-comment-sms me-1"></i>Text these patients</button>` : ''}
+        <span class="small align-self-center" id="sent-${b.id}"></span>
+      </div>
+      <div id="buyers-${b.id}" class="small text-muted">Loading buyers…</div>
+    </div></div>`).join('');
+    batches.forEach(loadBuyers);
+  }
+  list.addEventListener('click', async e => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const b = batches.find(x => String(x.id) === btn.dataset.id);
+    if (!b) return;
+    if (btn.dataset.act === 'wo') {
+      openWriteOff(b, {reasons: REASONS, reason: 'recalled'}, load);
+      return;
+    }
+    if (!confirm('Text every customer who bought this batch? Each is texted once.')) return;
+    btn.disabled = true;
+    const r = await fetch(`/inventory/batches/${b.id}/recall/notify`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: '{}'});
+    const data = await r.json().catch(() => ({}));
+    btn.disabled = false;
+    document.getElementById(`sent-${b.id}`).textContent = r.ok
+      ? `Sent ${data.sent}, failed ${data.failed}, already texted ${data.already_sent}, no phone ${data.no_phone} (walk-in sales ${data.walk_in}).`
+      : (data.error || 'Could not send');
+  });
+  load();
+})();
+</script>
+{% endblock %}

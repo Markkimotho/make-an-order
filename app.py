@@ -729,6 +729,8 @@ def _register_core_routes(app):
             return render_template('404.html', message="Order not found"), 404
         return render_template('order_edit.html', order=order, **get_user_context())
 
+    __import__('pages.stock_control', fromlist=['register']).register(app)
+
     @app.errorhandler(400)
     def bad_request_error(error):
         app.logger.error(f"Bad Request: {request.url} - {str(error)}")
