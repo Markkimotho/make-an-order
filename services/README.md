@@ -17,6 +17,7 @@ call into `services/*` and translate domain errors to HTTP responses.
 | [`flutterwave_service`](flutterwave_service.py) | Flutterwave v3                  | `FlutterwaveError`  | No — needs network + creds |
 | [`sms_service`](sms_service.py)               | Africa's Talking, `sms_messages` | never for provider problems | Yes — records `failed`, returns the row |
 | [`stock`](stock.py)                           | Batches, variants, line batches | `StockError`, `InsufficientStock` | Yes (database) |
+| [`recalls`](recalls.py)                       | Buyer trace, recall SMS          | `RecallError`       | Yes (database + SMS outbox; commits) |
 | [`clock`](clock.py)                           | Nothing                         | never               | Yes |
 | [`orders`](orders.py)                         | Orders, invoices, stock holds   | `OrderError`, `StockError` | Yes (database) |
 | [`controlled`](controlled.py)                 | Controlled-drug register        | `RegisterIncomplete` (a `StockError`) | Yes (database) |
@@ -93,11 +94,37 @@ stock.receive(item, 50, batch_number="AMX-7", expiry_date=d, unit_cost=12)
 taken = stock.take(item, 10, transaction_item=line)   # FEFO, skips expired; [(batch, n)]
 stock.give_back(item, 3, transaction_item=line)        # back to the batches it came from
 stock.adjust(item, -4, reason="expired_write_off")     # takes expired stock too
+stock.adjust(item, -2, batch=b, reason="count")        # from that batch only
+stock.write_off(item, 3, batch=b, reason="damaged", note="dropped",
+                register=controlled.Register(witness_name=..., witness_reg_no=...))
+stock.recall_batch(b, reason="PPB recall", reference="PPB/RC/77")
 ```
 
 Locks item, then batches by id, then variant. Raises `InsufficientStock`
 before changing anything. Flushes; callers commit. Items with
 `has_variants` need `variant=`.
+
+`write_off` takes from the chosen batch only, never more than it holds.
+Reasons are `WRITE_OFF_REASONS` (damaged, expired, recalled, lost,
+returned_to_supplier, count_correction); `expired` only for a batch past
+its expiry in Nairobi. Cost lost = quantity x batch unit cost (else the
+item's cost price), kept in the StockMovement note (reason
+`write_off:<reason>`) and in the `stock.write_off` audit row, which
+`GET /inventory/write_offs` reports from. Controlled drugs need a witness:
+damaged, expired and recalled are a register destruction, the rest an
+adjustment. Variant items are refused.
+
+`recall_batch` sets `recalled_at`, `recall_reason`, `recall_ref` and
+quarantines the batch for good: sales skip it, `PUT /inventory/batches/<id>`
+will not release it, and `receive` refuses new stock into it.
+
+## `recalls.py` — who bought a recalled batch
+
+`recall_buyers(batch)` lists completed or refunded sales and uncancelled
+orders that kept units of the batch (LineBatch, net of `returned_quantity`).
+`notify_recall(batch, user_id)` texts each customer with a phone once
+(dedupe key `recall:<batch_id>:<customer_id>`) and returns
+`{sent, failed, already_sent, no_phone, walk_in}`. It commits.
 
 ## `sms_service.py` — the outbox
 

@@ -12,11 +12,16 @@ the batch it came from, and never more than was taken. Goods returned with
 no such record go to the batch named on the line if it exists, else into a
 quarantined batch an admin must check before it can be sold.
 
+Damaged, expired and recalled stock leaves through ``write_off`` from a
+batch the user chooses. A recalled batch (``recall_batch``) is quarantined
+for good: it is never sold, never released and takes no new stock.
+
 Locking: the item row first, then its batches (in id order), then the
 variant, so concurrent sales of the last unit cannot both succeed.
 Callers commit.
 """
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 
@@ -25,6 +30,14 @@ from services.clock import today_nairobi
 
 DEFAULT_BATCH = "UNBATCHED"
 QUARANTINE_BATCH = "QUARANTINE"
+
+# Why stock is written off. The StockMovement reason is "write_off:<reason>".
+WRITE_OFF_REASONS = ("damaged", "expired", "recalled", "lost", "returned_to_supplier",
+                     "count_correction")
+WRITE_OFF_PREFIX = "write_off:"
+# A controlled drug destroyed for these reasons is a "destruction" register
+# entry; the other write-offs are "adjustment" entries. Both need a witness.
+DESTRUCTION_REASONS = ("damaged", "expired", "recalled")
 
 
 class StockError(ValueError):
@@ -127,6 +140,8 @@ def receive(item, qty, *, batch_number=None, expiry_date=None, unit_cost=None, v
             raise StockError(f"batch {number} already has expiry {batch.expiry_date}")
         elif expiry_date and not batch.expiry_date:
             batch.expiry_date = expiry_date
+        if batch.recalled_at is not None:
+            raise StockError(f"batch {number} of {item.name} is recalled; it takes no new stock")
         batch.quantity_on_hand = int(batch.quantity_on_hand or 0) + qty
     db.session.flush()
     _resync(item)
@@ -143,10 +158,12 @@ def _fefo_order(batch):
 
 def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
          allow_expired=False, reason="sale", note=None, user_id=None, today=None,
-         register=None, register_entry="dispense"):
+         register=None, register_entry="dispense", batch=None):
     """Remove stock, soonest expiry first. Returns [(batch, units)].
 
     Expired batches are skipped unless ``allow_expired`` (write-offs).
+    ``batch`` takes every unit from that one batch instead, whatever its
+    expiry or hold (write-offs and corrections, never sales).
     Raises InsufficientStock before changing anything. Controlled drugs
     need ``register`` for a ``register_entry`` (dispense, adjustment,
     destruction) entry: one register row per batch taken.
@@ -167,23 +184,30 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
         expired = [b for b in batches
                    if b.quarantined or (b.expiry_date and b.expiry_date < today)]
         usable = batches if allow_expired else [b for b in batches if b not in expired]
+        if batch is not None:
+            chosen = _chosen_batch(item, batch)
+            on_hand = int(chosen.quantity_on_hand or 0)
+            if on_hand < qty:
+                raise StockError(f"batch {chosen.batch_number} of {item.name} has only "
+                                 f"{on_hand}; {qty} wanted")
+            usable = [chosen]
         sellable = sum(b.quantity_on_hand for b in usable)
         if sellable < qty:
             raise InsufficientStock(item, qty, sellable,
                                     0 if allow_expired else sum(b.quantity_on_hand for b in expired))
         remaining = qty
-        for batch in sorted(usable, key=_fefo_order):
+        for source in sorted(usable, key=_fefo_order):
             if remaining == 0:
                 break
-            units = min(batch.quantity_on_hand, remaining)
-            batch.quantity_on_hand -= units
+            units = min(source.quantity_on_hand, remaining)
+            source.quantity_on_hand -= units
             remaining -= units
-            taken.append((batch, units))
+            taken.append((source, units))
             if transaction_item is not None or order_item is not None:
                 db.session.add(LineBatch(
                     transaction_item_id=transaction_item.id if transaction_item is not None else None,
                     order_item_id=order_item.id if order_item is not None else None,
-                    batch_id=batch.id, quantity=units, returned_quantity=0))
+                    batch_id=source.id, quantity=units, returned_quantity=0))
     db.session.flush()
     _resync(item)
     _movement(item, -qty, reason, user_id, note)
@@ -191,6 +215,18 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
         ledger.record(item, register_entry, [(b, 0, n) for b, n in taken], register, before)
     db.session.flush()
     return taken
+
+
+def _chosen_batch(item, batch):
+    """The locked row of ``batch`` (a Batch or its id), which must be the
+    item's. Callers lock the item and its batches first."""
+    batch_id = batch.id if isinstance(batch, Batch) else int(batch)
+    row = db.session.execute(select(Batch).where(Batch.id == batch_id)
+                             .with_for_update()
+                             .execution_options(populate_existing=True)).scalar_one_or_none()
+    if row is None or row.inventory_item_id != item.id:
+        raise StockError(f"that batch is not {item.name}'s")
+    return row
 
 
 def _free_quarantine_number(batches):
@@ -278,23 +314,114 @@ def give_back(item, qty, *, transaction_item=None, order_item=None, variant=None
     return restored
 
 
+def _register_entry(reason):
+    """A controlled drug's register entry for a manual removal."""
+    reason = reason or ""
+    destroyed = ("expir" in reason or "destr" in reason
+                 or reason.removeprefix(WRITE_OFF_PREFIX) in DESTRUCTION_REASONS)
+    return "destruction" if destroyed else "adjustment"
+
+
 def adjust(item, delta, *, batch_number=None, expiry_date=None, variant=None,
-           reason="adjustment", note=None, user_id=None, register=None):
+           reason="adjustment", note=None, user_id=None, register=None, batch=None):
     """Manual correction. Positive adds (to a named or default batch);
-    negative removes soonest-expiry first, expired stock included.
-    A controlled drug's write-off of expired stock is a "destruction"
-    entry; anything else an "adjustment"; both need a witness."""
+    negative removes from ``batch`` if given, else soonest-expiry first,
+    expired stock included. A controlled drug's removal of expired,
+    damaged or destroyed stock is a "destruction" entry; anything else an
+    "adjustment"; both need a witness."""
     delta = int(delta)
     if delta == 0:
         raise StockError("adjustment must not be zero")
-    entry = "destruction" if "expir" in (reason or "") or "destr" in (reason or "") else "adjustment"
     if delta > 0:
         return receive(item, delta, batch_number=batch_number, expiry_date=expiry_date,
                        variant=variant, reason=reason, note=note, user_id=user_id,
                        register=register, register_entry="adjustment")
+    if batch is not None and item.has_variants:
+        raise StockError(f"{item.name} comes in sizes; sizes have no batches")
     take(item, -delta, variant=variant, allow_expired=True, reason=reason, note=note,
-         user_id=user_id, register=register, register_entry=entry)
+         user_id=user_id, register=register, register_entry=_register_entry(reason),
+         batch=batch)
     return item
+
+
+def _money(value):
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+
+
+def write_off(item, quantity, *, batch, reason, note=None, user_id=None, register=None,
+              today=None):
+    """Take ``quantity`` out of one chosen batch as a loss. Returns a summary
+    dict, also kept in the audit log ("stock.write_off"), which the
+    write-off report reads.
+
+    ``reason`` is one of WRITE_OFF_REASONS; ``expired`` only for a batch
+    whose expiry is before today in Nairobi. The cost lost is quantity x
+    the batch's unit cost (else the item's cost price), and is also in the
+    StockMovement note. Controlled drugs need a witness: damaged, expired
+    and recalled stock is a destruction entry in the register, the rest an
+    adjustment.
+    """
+    from services import audit_service
+    if reason not in WRITE_OFF_REASONS:
+        raise StockError("reason must be one of: " + ", ".join(WRITE_OFF_REASONS))
+    quantity = _units(quantity)
+    item = _lock_item(item)
+    if item.has_variants:
+        raise StockError(f"{item.name} comes in sizes; sizes have no batches to write off")
+    _locked_batches(item)
+    row = _chosen_batch(item, batch)
+    on_hand = int(row.quantity_on_hand or 0)
+    if quantity > on_hand:
+        raise StockError(f"batch {row.batch_number} of {item.name} has only {on_hand}; "
+                         f"cannot write off {quantity}")
+    today = today or today_nairobi()
+    if reason == "expired" and not (row.expiry_date and row.expiry_date < today):
+        raise StockError(f"batch {row.batch_number} has not expired"
+                         + (f" (expires {row.expiry_date.isoformat()})" if row.expiry_date
+                            else " (no expiry date)"))
+    unit_cost = _money(row.unit_cost if row.unit_cost is not None else item.cost_price)
+    cost = _money(unit_cost * quantity)
+    note = (note or "").strip() or None
+    text = f"batch {row.batch_number}; cost KES {cost}" + (f"; {note}" if note else "")
+    take(item, quantity, batch=row, allow_expired=True, reason=WRITE_OFF_PREFIX + reason,
+         note=text[:255], user_id=user_id, register=register,
+         register_entry="destruction" if reason in DESTRUCTION_REASONS else "adjustment",
+         today=today)
+    summary = {"item_id": item.id, "item_name": item.name, "batch_id": row.id,
+               "batch_number": row.batch_number,
+               "expiry_date": row.expiry_date.isoformat() if row.expiry_date else None,
+               "quantity": quantity, "reason": reason, "note": note,
+               "unit_cost": str(unit_cost), "cost": str(cost),
+               "batch_left": int(row.quantity_on_hand), "item_stock": int(item.stock or 0)}
+    audit_service.log(user_id, "stock.write_off", "Batch", row.id,
+                      {"quantity_on_hand": on_hand}, summary)
+    return summary
+
+
+def recall_batch(batch, *, reason, reference=None, user_id=None):
+    """Mark a batch recalled and hold it for good: sales skip it (it is
+    quarantined), the release endpoint refuses it and it takes no new
+    stock. Its units leave only by write-off. Returns the batch."""
+    from services import audit_service
+    reason = (reason or "").strip()
+    if not reason:
+        raise StockError("say why the batch is recalled")
+    item = _lock_item(db.session.get(InventoryItem, batch.inventory_item_id))
+    _locked_batches(item)
+    row = _chosen_batch(item, batch)
+    if row.recalled_at is not None:
+        raise StockError(f"batch {row.batch_number} is already recalled")
+    old = row.to_dict()
+    row.recalled_at = datetime.utcnow()
+    row.recall_reason = reason[:255]
+    row.recall_ref = ((reference or "").strip() or None)
+    if row.recall_ref:
+        row.recall_ref = row.recall_ref[:64]
+    row.quarantined = True
+    db.session.flush()
+    audit_service.log(user_id, "stock.recall", "Batch", row.id, old,
+                      {**row.to_dict(), "item_name": item.name})
+    return row
 
 
 def batch_label(taken):

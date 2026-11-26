@@ -13,6 +13,7 @@ from auth.auth_middleware import (
     admin_api_required, superuser_api_required, login_required,
     stock_clerk_api_required,
 )
+from verticals.features import feature_required
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select
 from datetime import date, datetime, timedelta
@@ -23,8 +24,6 @@ import io
 
 inventory_bp = Blueprint('inventory', __name__)
 logger = logging.getLogger(__name__)
-
-LOW_STOCK_THRESHOLD = 5
 
 
 def _parse_date(value):
@@ -358,19 +357,28 @@ def restock_item(id):
 # Low-stock & audit log (admin+)
 # ---------------------------------------------------------------------------
 
+LOW_STOCK_RULE = 'stock <= reorder_level'
+
+
+def _low_stock_items():
+    """The one low-stock rule: stock at or below the item's reorder level.
+    /inventory/low_stock, /inventory/low_stock_reorder, /reports/low_stock
+    and the till's SMS alert all use it."""
+    return (InventoryItem.query
+            .filter(InventoryItem.stock <= InventoryItem.reorder_level)
+            .order_by(InventoryItem.stock.asc(), InventoryItem.name.asc(), InventoryItem.id.asc())
+            .all())
+
+
 @inventory_bp.route('/low_stock', methods=['GET'])
-@admin_api_required
+@stock_clerk_api_required
 def low_stock():
-    threshold = int(request.args.get('threshold', LOW_STOCK_THRESHOLD))
-    items = (InventoryItem.query
-             .filter(InventoryItem.stock < threshold)
-             .order_by(InventoryItem.stock)
-             .all())
+    items = _low_stock_items()
     soonest = InventoryItem.soonest_batches(i.id for i in items)
     return jsonify({
-        'threshold': threshold,
-        'count':     len(items),
-        'items':     [i.to_dict(soonest) for i in items],
+        'rule':  LOW_STOCK_RULE,
+        'count': len(items),
+        'items': [i.to_dict(soonest) for i in items],
     }), 200
 
 
@@ -537,10 +545,7 @@ def stock_adjustment():
 @login_required
 def low_stock_reorder():
     """Items where ``stock <= reorder_level`` (POS reorder helper, flat list)."""
-    rows = (InventoryItem.query
-            .filter(InventoryItem.stock <= InventoryItem.reorder_level)
-            .order_by(InventoryItem.stock.asc())
-            .all())
+    rows = _low_stock_items()
     soonest = InventoryItem.soonest_batches(i.id for i in rows)
     return jsonify([i.to_dict(soonest) for i in rows]), 200
 
@@ -598,6 +603,10 @@ def update_batch(id):
     if 'expiry_date' in data:
         batch.expiry_date = _parse_date(data.get('expiry_date'))
     if data.get('quarantined') is False and batch.quarantined:
+        if batch.recalled_at is not None:
+            db.session.rollback()
+            return jsonify({'error': 'A recalled batch is never released. '
+                                     'Write its stock off instead.'}), 400
         if batch.batch_number.upper().startswith(stock.QUARANTINE_BATCH):
             return jsonify({'error': 'Give the checked goods their batch number to release them'}), 400
         batch.quarantined = False
@@ -624,6 +633,276 @@ def item_movement(id):
     return jsonify({
         'item': item.to_dict(),
         'movements': [m.to_dict() for m in rows],
+    }), 200
+
+
+# ---------------------------------------------------------------------------
+# Batches, write-offs and recalls (stock roles; texting buyers is admin only)
+# ---------------------------------------------------------------------------
+
+BATCH_STATUSES = ('all', 'active', 'expiring', 'expired', 'quarantined', 'recalled')
+EXPIRING_DAYS = 90
+
+
+def _batch_status(batch, today, expiring_days):
+    """recalled, quarantined, empty, expired, expiring or active."""
+    if batch.recalled_at is not None:
+        return 'recalled'
+    if batch.quarantined:
+        return 'quarantined'
+    if not batch.quantity_on_hand:
+        return 'empty'
+    if batch.expiry_date and batch.expiry_date < today:
+        return 'expired'
+    if batch.expiry_date and (batch.expiry_date - today).days <= expiring_days:
+        return 'expiring'
+    return 'active'
+
+
+def _money(value):
+    return Decimal(str(value or 0)).quantize(Decimal('0.01'))
+
+
+def _batch_row(batch, item, today, expiring_days):
+    unit_cost = batch.unit_cost if batch.unit_cost is not None else item.cost_price
+    qty = int(batch.quantity_on_hand or 0)
+    return {**batch.to_dict(),
+            'item_id': item.id, 'item_name': item.name, 'unit': item.unit,
+            'is_controlled': bool(item.is_controlled), 'has_variants': bool(item.has_variants),
+            'days_to_expiry': (batch.expiry_date - today).days if batch.expiry_date else None,
+            'unit_cost': float(_money(unit_cost)) if unit_cost is not None else None,
+            'cost_known': unit_cost is not None,
+            'value_at_cost': float(_money(unit_cost) * qty),
+            'status': _batch_status(batch, today, expiring_days)}
+
+
+@inventory_bp.route('/batches', methods=['GET'])
+@stock_clerk_api_required
+@feature_required('batches')
+def list_batches():
+    """Batches with stock (and every recalled batch), soonest expiry first.
+
+    ``?status=all|active|expiring|expired|quarantined|recalled`` (active
+    means sellable, so it includes expiring), ``?item_id=``, ``?days=``
+    (expiring window, default 90), ``?include_empty=1``.
+    """
+    status = (request.args.get('status') or 'all').strip()
+    if status not in BATCH_STATUSES:
+        return jsonify({'error': 'status must be one of ' + ', '.join(BATCH_STATUSES)}), 400
+    try:
+        days = max(int(request.args.get('days', EXPIRING_DAYS)), 0)
+        item_id = int(request.args['item_id']) if request.args.get('item_id') else None
+    except ValueError:
+        return jsonify({'error': 'days and item_id must be numbers'}), 400
+    include_empty = request.args.get('include_empty') in ('1', 'true')
+    today = today_nairobi()
+    q = (db.session.query(Batch, InventoryItem)
+         .join(InventoryItem, InventoryItem.id == Batch.inventory_item_id))
+    if item_id is not None:
+        q = q.filter(Batch.inventory_item_id == item_id)
+    if not include_empty:
+        q = q.filter((Batch.quantity_on_hand > 0) | Batch.recalled_at.isnot(None))
+    rows = q.order_by(Batch.expiry_date.is_(None), Batch.expiry_date, Batch.id).all()
+    wanted = {'all': None, 'active': {'active', 'expiring'}, 'expiring': {'expiring'},
+              'expired': {'expired'}, 'quarantined': {'quarantined'},
+              'recalled': {'recalled'}}[status]
+    out = [_batch_row(b, i, today, days) for b, i in rows]
+    if wanted is not None:
+        out = [r for r in out if r['status'] in wanted]
+    return jsonify({'today': today.isoformat(), 'status': status, 'expiring_days': days,
+                    'count': len(out),
+                    'quantity': sum(r['quantity_on_hand'] for r in out),
+                    'value_at_cost': float(sum(_money(r['value_at_cost']) for r in out)),
+                    'batches': out}), 200
+
+
+def _batch_or_404(id):
+    """(batch, None), or (None, 404 response) for a missing batch or one
+    whose item is gone (SQLite without FK enforcement can leave those)."""
+    batch = db.session.get(Batch, id)
+    if batch is None or db.session.get(InventoryItem, batch.inventory_item_id) is None:
+        return None, (jsonify({'error': 'Batch not found'}), 404)
+    return batch, None
+
+
+def _stock_error(e):
+    body = {'error': str(e)}
+    if isinstance(e, controlled.RegisterIncomplete):
+        body['register_missing'] = e.missing
+    return jsonify(body), 400
+
+
+@inventory_bp.route('/batches/<int:id>/write_off', methods=['POST'])
+@stock_clerk_api_required
+def write_off_batch(id):
+    """Write off units of one batch.
+
+    Body: ``{"quantity": 3, "reason": "damaged", "note": "..."}``; reason is
+    one of services/stock.WRITE_OFF_REASONS. Controlled drugs also need
+    ``witness_name`` and ``witness_reg_no``.
+    """
+    batch, missing = _batch_or_404(id)
+    if missing:
+        return missing
+    data = request.get_json(silent=True) or {}
+    try:
+        quantity = int(data.get('quantity') or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'quantity must be a whole number'}), 400
+    item = db.session.get(InventoryItem, batch.inventory_item_id)
+    try:
+        summary = stock.write_off(
+            item, quantity, batch=batch, reason=(data.get('reason') or '').strip(),
+            note=(data.get('note') or '').strip() or None, user_id=session.get('user_id'),
+            register=_witness_register(data) if item.is_controlled else None)
+    except stock.StockError as e:
+        db.session.rollback()
+        return _stock_error(e)
+    db.session.commit()
+    return jsonify({'message': 'Written off', 'write_off': summary,
+                    'batch': db.session.get(Batch, id).to_dict()}), 200
+
+
+@inventory_bp.route('/batches/<int:id>/recall', methods=['POST'])
+@stock_clerk_api_required
+@feature_required('recalls')
+def recall_batch(id):
+    """Recall a batch: ``{"reason": "...", "reference": "PPB/RC/..."}``. It is
+    held for good; its stock leaves only by write-off."""
+    batch, missing = _batch_or_404(id)
+    if missing:
+        return missing
+    data = request.get_json(silent=True) or {}
+    try:
+        batch = stock.recall_batch(batch, reason=data.get('reason'),
+                                   reference=data.get('reference'),
+                                   user_id=session.get('user_id'))
+    except stock.StockError as e:
+        db.session.rollback()
+        return _stock_error(e)
+    db.session.commit()
+    return jsonify({'message': 'Batch recalled', 'batch': batch.to_dict()}), 200
+
+
+@inventory_bp.route('/batches/<int:id>/buyers', methods=['GET'])
+@stock_clerk_api_required
+@feature_required('recalls')
+def batch_buyers(id):
+    """Who has units of this batch: sales and orders, net of returns."""
+    from services import recalls
+    batch, missing = _batch_or_404(id)
+    if missing:
+        return missing
+    item = db.session.get(InventoryItem, batch.inventory_item_id)
+    return jsonify({'batch': _batch_row(batch, item, today_nairobi(), EXPIRING_DAYS),
+                    **recalls.buyers_summary(batch)}), 200
+
+
+@inventory_bp.route('/batches/<int:id>/recall/notify', methods=['POST'])
+@admin_api_required
+@feature_required('recalls')
+def notify_recall(id):
+    """Text each buyer with a phone, once per batch."""
+    from services import recalls
+    batch, missing = _batch_or_404(id)
+    if missing:
+        return missing
+    try:
+        counts = recalls.notify_recall(batch, user_id=session.get('user_id'))
+    except recalls.RecallError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'message': 'Patients texted', **counts}), 200
+
+
+def _nairobi_day_start_utc(day):
+    """Midnight in Nairobi on ``day`` as the naive UTC datetime the app stores."""
+    from datetime import time, timezone
+    from services.clock import NAIROBI
+    return (datetime.combine(day, time.min, tzinfo=NAIROBI)
+            .astimezone(timezone.utc).replace(tzinfo=None))
+
+
+def _write_off_rows(d_from, d_to, reason=None):
+    from models import AuditLog
+    from services.clock import now_nairobi
+    rows = (AuditLog.query
+            .filter(AuditLog.action == 'stock.write_off',
+                    AuditLog.created_at >= _nairobi_day_start_utc(d_from),
+                    AuditLog.created_at < _nairobi_day_start_utc(d_to + timedelta(days=1)))
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(5000).all())
+    users = {u.id: (u.name or u.email) for u in
+             User.query.filter(User.id.in_({r.user_id for r in rows if r.user_id})).all()} \
+        if any(r.user_id for r in rows) else {}
+    out = []
+    for r in rows:
+        v = r.new_value or {}
+        if reason and v.get('reason') != reason:
+            continue
+        when = now_nairobi(r.created_at) if r.created_at else None
+        out.append({'id': r.id, 'date': when.strftime('%Y-%m-%d %H:%M') if when else None,
+                    'month': when.strftime('%Y-%m') if when else None,
+                    'item_id': v.get('item_id'), 'item_name': v.get('item_name'),
+                    'batch_id': v.get('batch_id'), 'batch_number': v.get('batch_number'),
+                    'expiry_date': v.get('expiry_date'),
+                    'quantity': int(v.get('quantity') or 0), 'reason': v.get('reason'),
+                    'unit_cost': float(_money(v.get('unit_cost'))),
+                    'cost': float(_money(v.get('cost'))), 'note': v.get('note'),
+                    'user_id': r.user_id, 'by': users.get(r.user_id)})
+    return out
+
+
+@inventory_bp.route('/write_offs', methods=['GET'])
+@stock_clerk_api_required
+def write_offs_report():
+    """Write-offs between ``?from=`` and ``?to=`` (Nairobi dates, default
+    this month), optional ``?reason=``, with totals by reason and by month
+    (quantity and KES at cost). ``?format=csv`` downloads the rows."""
+    today = today_nairobi()
+    d_from = _parse_date(request.args.get('from')) or today.replace(day=1)
+    d_to = _parse_date(request.args.get('to')) or today
+    if d_from > d_to:
+        return jsonify({'error': '"from" must not be after "to"'}), 400
+    reason = (request.args.get('reason') or '').strip() or None
+    if reason and reason not in stock.WRITE_OFF_REASONS:
+        return jsonify({'error': 'reason must be one of ' + ', '.join(stock.WRITE_OFF_REASONS)}), 400
+    rows = _write_off_rows(d_from, d_to, reason)
+
+    if request.args.get('format') == 'csv':
+        out = io.StringIO()
+        w = csv.writer(out)
+        w.writerow(['date', 'item', 'batch', 'expiry', 'quantity', 'reason',
+                    'unit_cost', 'cost', 'note', 'by'])
+        for r in rows:
+            w.writerow([r['date'], r['item_name'], r['batch_number'], r['expiry_date'] or '',
+                        r['quantity'], r['reason'], f"{r['unit_cost']:.2f}", f"{r['cost']:.2f}",
+                        r['note'] or '', r['by'] or ''])
+        name = f'write-offs-{d_from.isoformat()}-to-{d_to.isoformat()}.csv'
+        return Response(out.getvalue(), mimetype='text/csv',
+                        headers={'Content-Disposition': f'attachment; filename={name}'})
+
+    by_reason = {k: {'quantity': 0, 'cost': Decimal('0.00')} for k in stock.WRITE_OFF_REASONS}
+    by_month = {}
+    for r in rows:
+        bucket = by_reason.setdefault(r['reason'], {'quantity': 0, 'cost': Decimal('0.00')})
+        bucket['quantity'] += r['quantity']
+        bucket['cost'] += _money(r['cost'])
+        month = by_month.setdefault(r['month'], {})
+        cell = month.setdefault(r['reason'], {'quantity': 0, 'cost': Decimal('0.00')})
+        cell['quantity'] += r['quantity']
+        cell['cost'] += _money(r['cost'])
+
+    def plain(totals):
+        return {k: {'quantity': v['quantity'], 'cost': float(v['cost'])} for k, v in totals.items()}
+
+    return jsonify({
+        'from': d_from.isoformat(), 'to': d_to.isoformat(), 'reason': reason,
+        'reasons': list(stock.WRITE_OFF_REASONS),
+        'count': len(rows),
+        'total_quantity': sum(r['quantity'] for r in rows),
+        'total_cost': float(sum((_money(r['cost']) for r in rows), Decimal('0.00'))),
+        'by_reason': plain(by_reason),
+        'by_month': {m: plain(v) for m, v in sorted(by_month.items(), reverse=True)},
+        'write_offs': rows,
     }), 200
 
 

@@ -1,0 +1,91 @@
+{# Write-off modal shared by the batches and recalls pages.
+   JS: window.openWriteOff(batchRow, {reasons: [...], reason: 'recalled'}, onDone) #}
+<div class="modal fade" id="woModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <form id="woForm">
+  <div class="modal-header"><h5 class="modal-title">Write off stock</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+  <div class="modal-body">
+    <p class="mb-2" id="woWhat"></p>
+    <div class="row g-2">
+      <div class="col-5"><label class="form-label small mb-0">Quantity</label>
+        <input type="number" min="1" step="1" class="form-control" id="woQty" required></div>
+      <div class="col-7"><label class="form-label small mb-0">Reason</label>
+        <select class="form-select" id="woReason" required></select></div>
+      <div class="col-12"><label class="form-label small mb-0">Note</label>
+        <input type="text" maxlength="200" class="form-control" id="woNote"
+               placeholder="What happened, credit note no., who counted"></div>
+    </div>
+    <div id="woWitness" class="row g-2 mt-1 d-none">
+      <div class="col-12 small text-muted">Controlled drug: the register needs a witness.</div>
+      <div class="col-7"><label class="form-label small mb-0">Witness name</label>
+        <input type="text" class="form-control" id="woWitnessName"></div>
+      <div class="col-5"><label class="form-label small mb-0">Witness reg. no.</label>
+        <input type="text" class="form-control" id="woWitnessReg"></div>
+    </div>
+    <div class="small mt-2" id="woCost"></div>
+    <div class="alert alert-danger small py-2 mt-2 mb-0 d-none" id="woError"></div>
+  </div>
+  <div class="modal-footer">
+    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button type="submit" class="btn btn-danger" id="woSubmit">Write off</button>
+  </div>
+  </form>
+</div></div></div>
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const label = r => r.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+  let current = null, done = null, modal = null;
+  const el = id => document.getElementById(id);
+  function showCost() {
+    if (!current) return;
+    const q = parseInt(el('woQty').value || '0', 10);
+    el('woCost').textContent = current.cost_known
+      ? `Loss at cost: ${kes(q * current.unit_cost)}` : 'No cost price on file: the loss is recorded as KES 0.00.';
+  }
+  window.openWriteOff = function (b, opts, onDone) {
+    current = b; done = onDone;
+    opts = opts || {};
+    const reasons = opts.reasons || [];
+    el('woWhat').innerHTML = `<strong>${esc(b.item_name)}</strong> batch <span class="font-monospace">${esc(b.batch_number)}</span>`
+      + ` &middot; ${esc(b.quantity_on_hand)} on hand` + (b.expiry_date ? ` &middot; expires ${esc(b.expiry_date)}` : '');
+    el('woReason').innerHTML = reasons.map(r => `<option value="${esc(r)}">${esc(label(r))}</option>`).join('');
+    const expired = b.status === 'expired' || (b.days_to_expiry != null && b.days_to_expiry < 0);
+    el('woReason').value = opts.reason || (b.recalled_at ? 'recalled' : expired ? 'expired' : 'damaged');
+    el('woQty').value = b.quantity_on_hand;
+    el('woQty').max = b.quantity_on_hand;
+    el('woNote').value = '';
+    el('woWitness').classList.toggle('d-none', !b.is_controlled);
+    el('woWitnessName').required = el('woWitnessReg').required = !!b.is_controlled;
+    el('woError').classList.add('d-none');
+    showCost();
+    modal = modal || new bootstrap.Modal(el('woModal'));
+    modal.show();
+  };
+  el('woQty').addEventListener('input', showCost);
+  el('woForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const body = {quantity: parseInt(el('woQty').value, 10), reason: el('woReason').value,
+                  note: el('woNote').value};
+    if (current.is_controlled) {
+      body.witness_name = el('woWitnessName').value;
+      body.witness_reg_no = el('woWitnessReg').value;
+    }
+    el('woSubmit').disabled = true;
+    try {
+      const r = await fetch(`/inventory/batches/${current.id}/write_off`, {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        el('woError').textContent = data.error || 'Could not write off';
+        el('woError').classList.remove('d-none');
+        return;
+      }
+      modal.hide();
+      if (done) done(data);
+    } finally { el('woSubmit').disabled = false; }
+  });
+})();
+</script>
