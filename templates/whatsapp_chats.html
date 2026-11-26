@@ -73,7 +73,9 @@ window.WHATSAPP_CHATS_PAGE = true;
     c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const when = iso => iso ? new Date(iso + 'Z').toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : '';
   const $ = id => document.getElementById(id);
-  let current = null;
+  let current = null;      // the chat being opened or shown
+  let shown = null;        // the chat whose messages are on screen (replies go here)
+  let loadSeq = 0;         // newer loads win; a late answer for an old chat is dropped
 
   async function getJSON(url, opts) {
     const r = await fetch(url, Object.assign({headers: {'Accept': 'application/json',
@@ -115,10 +117,16 @@ window.WHATSAPP_CHATS_PAGE = true;
   }
 
   async function openChat(id) {
+    const seq = ++loadSeq;
+    if (id !== shown) {           // switching chats: nothing can be sent until it loads
+      shown = null;
+      $('body').disabled = $('sendBtn').disabled = true;
+    }
     current = id;
     $('wrap').classList.add('open');
     try {
       const data = await getJSON('/whatsapp/chats/' + id);
+      if (seq !== loadSeq || id !== current) return;
       const c = data.chat;
       $('title').textContent = c.profile_name || c.phone;
       $('subtitle').innerHTML = `<a href="tel:${esc(c.phone.replace(/\s/g, ''))}">${esc(c.phone)}</a>`
@@ -135,8 +143,11 @@ window.WHATSAPP_CHATS_PAGE = true;
       $('windowNote').textContent = c.can_reply ? '' :
         'The customer last wrote more than 24 hours ago. WhatsApp will not deliver a reply; call them instead.';
       $('body').disabled = $('sendBtn').disabled = !c.can_reply;
+      shown = c.id;
+      $('compose').dataset.chat = c.id;
       loadList();
     } catch (e) {
+      if (seq !== loadSeq) return;
       $('messages').innerHTML = `<p class="text-danger small">${esc(e.message)}</p>`;
     }
   }
@@ -144,12 +155,13 @@ window.WHATSAPP_CHATS_PAGE = true;
   $('compose').addEventListener('submit', async ev => {
     ev.preventDefault();
     const body = $('body').value.trim();
-    if (!body || !current) return;
+    const target = Number($('compose').dataset.chat);
+    if (!body || !target || target !== shown) return;
     $('sendBtn').disabled = true; $('sendError').textContent = '';
     try {
-      await getJSON(`/whatsapp/chats/${current}/reply`, {method: 'POST', body: JSON.stringify({body})});
+      await getJSON(`/whatsapp/chats/${target}/reply`, {method: 'POST', body: JSON.stringify({body})});
       $('body').value = '';
-      await openChat(current);
+      await openChat(target);
     } catch (e) {
       $('sendError').textContent = e.message;
     } finally {
@@ -163,7 +175,7 @@ window.WHATSAPP_CHATS_PAGE = true;
       await openChat(current);
     } catch (e) { $('sendError').textContent = e.message; }
   });
-  $('back').addEventListener('click', () => { $('wrap').classList.remove('open'); current = null; loadList(); });
+  $('back').addEventListener('click', () => { $('wrap').classList.remove('open'); current = shown = null; loadSeq++; loadList(); });
   $('show').addEventListener('change', loadList);
   loadList();
   setInterval(() => { loadList(); if (current && !$('body').value) openChat(current); }, 15000);

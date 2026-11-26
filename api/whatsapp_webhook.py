@@ -6,9 +6,9 @@ POST Messages and delivery statuses. The body must carry Meta's signature
      (``X-Hub-Signature-256``, HMAC-SHA256 of the raw body with the business's
      app secret), or it is refused with 403 and nothing is read.
 
-A signed delivery always gets 200, even when handling a message failed
-(that is logged): Meta retries anything else for days, and the message ids
-are deduplicated anyway.
+A signed delivery gets 200 once every message in it is saved. If one could
+not be handled (a database error, a deadlock), the answer is 500 and Meta
+delivers the batch again; messages already saved are dropped as duplicates.
 """
 import hmac
 import logging
@@ -68,7 +68,10 @@ def receive(slug):
         try:
             counts = service.handle_webhook(tenant, body)
             logger.info("whatsapp webhook %s: %s", slug, counts)
-        except Exception:
+        except Exception as e:
+            # A message that was not saved: 500 makes Meta deliver it again.
+            # Messages already handled are dropped as duplicates on the retry.
             db.session.rollback()
-            logger.exception("whatsapp webhook for %s failed", slug)
+            logger.error("whatsapp webhook for %s needs a retry: %s", slug, e)
+            return jsonify({"error": "retry"}), 500
     return jsonify({"ok": True}), 200

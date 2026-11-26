@@ -57,6 +57,8 @@ def upgrade():
         sa.Column("status", sa.String(12), nullable=False),
         sa.Column("error", sa.String(255), nullable=True),
         sa.Column("sent_by", sa.Integer(), nullable=True),
+        sa.Column("dedupe_key", sa.String(80), nullable=True),
+        sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"],
                                 name="fk_whatsapp_messages_tenant_id_tenants",
@@ -69,6 +71,8 @@ def upgrade():
         sa.PrimaryKeyConstraint("id", name="pk_whatsapp_messages"),
         sa.UniqueConstraint("tenant_id", "wa_message_id",
                             name="uq_whatsapp_messages_tenant_wa_message_id"),
+        sa.UniqueConstraint("tenant_id", "dedupe_key",
+                            name="uq_whatsapp_messages_tenant_dedupe_key"),
     )
     op.create_index("ix_whatsapp_messages_tenant_id", "whatsapp_messages", ["tenant_id"])
     op.create_index("ix_whatsapp_messages_chat_id", "whatsapp_messages", ["chat_id"])

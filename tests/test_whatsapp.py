@@ -5,6 +5,7 @@ person, staff replies, order updates and the settings page.
 Meta and Daraja are fakes (no network): FakeMeta answers Graph API calls and
 records every message the bot sends."""
 import hashlib
+import time
 import hmac
 import json
 from datetime import datetime, timedelta
@@ -115,7 +116,8 @@ _n = [0]
 
 def message(text=None, choice=None, title="", wa_id=CUSTOMER, kind=None, extra=None):
     _n[0] += 1
-    msg = {"from": wa_id, "id": f"wamid.in{_n[0]}", "timestamp": "1764150000"}
+    msg = {"from": wa_id, "id": f"wamid.in{_n[0]}",
+           "timestamp": str(int(time.time()))}
     if text is not None:
         msg.update(type="text", text={"body": text})
     elif choice is not None:
@@ -516,3 +518,92 @@ def test_payments_sweep_sends_the_notice(wa, app):
     assert result.exit_code == 0, result.output
     assert "whatsapp_notices': 1" in result.output
     assert wa["meta"].texts()[-1].startswith("Payment received")
+
+
+# --- review fixes (Codex) -------------------------------------------------------------------
+
+def test_order_and_emptied_cart_commit_together_even_if_mpesa_blows_up(wa, monkeypatch):
+    """P1: the order committed before the chat state, so a crash or a second
+    tap in between could place a second order from the same cart."""
+    from services.billing import stk
+    def boom(*a, **kw):
+        raise RuntimeError("network died")
+    monkeypatch.setattr(stk, "start_stk", boom)
+    reply = order_two_sugars(wa)
+    number = Order.query.one().order_number
+    state = WhatsAppChat.query.one().state
+    assert "cart" not in state and state["awaiting"] == [number]
+    assert "could not be sent" in reply and "Pay here instead" in reply
+    say(wa, choice="y:self")                                  # the same button again
+    say(wa, choice="k:checkout")
+    assert Order.query.count() == 1
+
+
+def test_a_message_that_fails_is_redelivered_by_meta(wa, monkeypatch):
+    """P1: a failure before the commit answered 200, so Meta never resent it."""
+    from services.whatsapp import bot as bot_module
+    real = bot_module.step
+    monkeypatch.setattr(bot_module, "step", lambda *a: (_ for _ in ()).throw(RuntimeError("db")))
+    msg = message(text="hi")
+    r = deliver(wa["client"], webhook([msg]))
+    assert r.status_code == 500 and WhatsAppMessage.query.count() == 0
+    monkeypatch.setattr(bot_module, "step", real)
+    assert deliver(wa["client"], webhook([msg])).status_code == 200      # Meta's retry
+    assert "Welcome" in wa["meta"].texts()[-1]
+
+
+def test_payment_notice_only_touches_awaiting(wa):
+    """P1: the notice rewrote the whole chat state, losing a newer cart."""
+    order_two_sugars(wa)
+    say(wa, choice=f"i:{wa['soap']}")
+    say(wa, choice="q:1")                                     # a new cart meanwhile
+    inv = Invoice.query.one()
+    from services import billing
+    billing.record_payment(method="mpesa_c2b", amount=inv.total, receipt="QWA0000003",
+                           invoice=inv)
+    db.session.commit()
+    with tenant_scope(wa_tenant(wa)):
+        assert service.payment_notices() == 1
+        assert service.payment_notices() == 0                 # once
+    state = WhatsAppChat.query.one().state
+    assert state["awaiting"] == [] and state["cart"][0]["id"] == wa["soap"]
+
+
+def test_a_failed_notice_is_retried_by_the_next_sweep(wa):
+    """P2: a notice that failed to send was never tried again."""
+    order_two_sugars(wa)
+    inv = Invoice.query.one()
+    from services import billing
+    billing.record_payment(method="mpesa_c2b", amount=inv.total, receipt="QWA0000004",
+                           invoice=inv)
+    db.session.commit()
+    wa["meta"].fail = (500, {"error": {"message": "Service unavailable", "code": 2}})
+    with tenant_scope(wa_tenant(wa)):
+        assert service.payment_notices() == 0
+    row = WhatsAppMessage.query.filter(WhatsAppMessage.dedupe_key.like("paid:%")).one()
+    assert row.status == "failed" and row.attempts == 1
+    wa["meta"].fail = None
+    with tenant_scope(wa_tenant(wa)):
+        assert service.payment_notices() == 1
+    assert wa["meta"].texts()[-1].startswith("Payment received")
+    assert WhatsAppMessage.query.filter(WhatsAppMessage.dedupe_key.like("paid:%")).count() == 1
+
+
+def test_a_late_delivered_message_does_not_reopen_the_window(wa):
+    """P2: processing time was used, so a message Meta delivered a day late
+    let the bot write outside the 24-hour window."""
+    old = message(text="hi")
+    old["timestamp"] = str(int(time.time()) - 30 * 3600)
+    deliver(wa["client"], webhook([old]))
+    assert wa["meta"].sent == []
+    row = WhatsAppMessage.query.filter_by(direction="out").one()
+    assert row.status == "failed" and "24-hour window" in row.error
+    say(wa, "hi")                                               # a fresh message: fine
+    assert "Welcome" in wa["meta"].texts()[-1]
+
+
+def test_chats_page_sends_to_the_chat_on_screen():
+    """P2: a slow load for an old chat could leave replies going to another."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "templates/whatsapp_chats.html").read_text()
+    assert "seq !== loadSeq" in html and "target !== shown" in html

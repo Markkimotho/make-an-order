@@ -7,6 +7,11 @@ ids and quantities; prices and stock are read again at checkout.
 
 ``WhatsAppMessage.wa_message_id`` is Meta's message id. Meta retries a
 webhook it thinks failed, so an inbound id seen before is ignored.
+
+``WhatsAppMessage.dedupe_key`` (unique per business) makes a notice
+(``paid:<order id>``, ``order_ready:<order id>``) go out once however many
+callbacks or sweeps try; ``attempts`` counts sends, so a failed notice is
+retried a few times and then left alone.
 """
 from datetime import datetime
 
@@ -14,7 +19,7 @@ from models.base import TenantMixin, db
 
 CHAT_MODES = ("bot", "person")        # person: a staff member is answering
 MESSAGE_DIRECTIONS = ("in", "out")
-MESSAGE_STATUSES = ("received", "queued", "sent", "delivered", "read", "failed")
+MESSAGE_STATUSES = ("received", "queued", "sending", "sent", "delivered", "read", "failed")
 
 
 class WhatsAppChat(TenantMixin, db.Model):
@@ -47,6 +52,8 @@ class WhatsAppMessage(TenantMixin, db.Model):
     __table_args__ = (
         db.UniqueConstraint("tenant_id", "wa_message_id",
                             name="uq_whatsapp_messages_tenant_wa_message_id"),
+        db.UniqueConstraint("tenant_id", "dedupe_key",
+                            name="uq_whatsapp_messages_tenant_dedupe_key"),
     )
 
     id            = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -60,6 +67,8 @@ class WhatsAppMessage(TenantMixin, db.Model):
     error         = db.Column(db.String(255), nullable=True)
     sent_by       = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"),
                               nullable=True)                    # staff replies only
+    dedupe_key    = db.Column(db.String(80), nullable=True)
+    attempts      = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     created_at    = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def to_dict(self):
