@@ -339,6 +339,28 @@ def test_download_allowed_for_owner_on_a_single_business_install(app, bdir, logi
         assert AuditLog.query.filter_by(action="backup.download").count() == 1
 
 
+def test_a_second_business_on_a_single_install_cannot_download(app, bdir, login_as,
+                                                               other_tenant):
+    """A dump holds every business: once a second one exists, the shop flag
+    no longer unlocks downloads (only a platform admin can)."""
+    app.config["SINGLE_BUSINESS_INSTALL"] = True
+    path = touch_backup(bdir, NOW, body=b"dump-bytes")
+    assert login_as("superuser").get(f"/settings/backup/{path.name}").status_code == 403
+    intruder = login_as("superuser", tenant_id=other_tenant)
+    assert intruder.get(f"/settings/backup/{path.name}").status_code == 403
+
+
+def test_signup_is_closed_on_a_single_business_install(app, client):
+    app.config["SINGLE_BUSINESS_INSTALL"] = True
+    r = client.post("/auth/register", data={
+        "business_name": "Intruder Ltd", "vertical": "pharmacy", "name": "X",
+        "email": "x@intruder.test", "password": "longenough1", "phone_number": "0712345999"})
+    assert r.status_code == 400 and b"already has its business" in r.data
+    from models import Tenant
+    with unscoped():
+        assert Tenant.query.count() == 1
+
+
 # --- CLI ---------------------------------------------------------------------
 
 @sqlite_only
@@ -550,3 +572,12 @@ def test_dockerfile_runs_as_a_non_root_user_and_scripts_are_executable():
         path = DEPLOY / script
         assert path.read_text().startswith("#!"), script
         assert os.access(path, os.X_OK), script
+
+
+def test_relative_sqlite_path_is_the_instance_folder_like_flask_sqlalchemy(app):
+    """Flask-SQLAlchemy opens sqlite:///shop.sqlite in the instance folder;
+    backup and restore must use that same file."""
+    from pathlib import Path
+    target = backup.target_for("sqlite:///shop.sqlite")
+    assert target.sqlite_path == Path(app.instance_path) / "shop.sqlite"
+    assert backup.target_for("sqlite:////abs/shop.sqlite").sqlite_path == Path("/abs/shop.sqlite")

@@ -294,6 +294,25 @@ def _lock_txn(txn):
                               .execution_options(populate_existing=True)).scalar_one()
 
 
+def _hand_back(released, txn, uid, note):
+    """Settle money released by a void or refund, and record cash handed
+    back as a cash-out from the drawer it came out of: the open shift of
+    whoever hands it back (the sale's own shift if none is open), so that
+    drawer's expected cash drops by exactly what left it."""
+    billing.settle_released(released, uid, note=note)
+    cash = sum((billing.money(amount) for payment, amount in released
+                if payment.method == PAY_CASH), Decimal('0'))
+    if cash <= 0:
+        return
+    shift = _current_shift()
+    shift_id = shift.id if shift is not None else txn.shift_id
+    if shift_id is None:
+        logger.warning('cash handed back for %s with no shift to record it on', note)
+        return
+    db.session.add(CashMovement(shift_id=shift_id, user_id=uid, movement_type='cash_out',
+                                amount=cash, reason=note[:255]))
+
+
 def _invoice_to_credit(txn):
     """The invoice a void or refund of this sale credits: its own, or, for a
     credit sale made before invoices existed, the customer's opening-balance
@@ -1028,6 +1047,7 @@ def transaction_complete(txn_id):
             db.session.rollback()
             return jsonify({'error': str(e)}), 409
         li.batch_number = stock.batch_label(taken) if taken else li.batch_number
+        li.unit_cost = item.cost_price           # sale-time cost, for profit reports
         item = db.session.get(InventoryItem, li.inventory_item_id)
         if int(item.stock or 0) <= int(item.reorder_level or 0):
             low_stock.append((item.id, item.name, int(item.stock or 0),
@@ -1193,14 +1213,14 @@ def transaction_void(txn_id):
     invoice = _invoice_to_credit(txn)
     if invoice is not None and invoice.transaction_id == txn.id:
         _, released = billing.void_invoice(invoice, uid, reason=reason, roll=False)
-        billing.settle_released(released, uid, note=f'VOID {txn.transaction_ref}')
+        _hand_back(released, txn, uid, f'VOID {txn.transaction_ref}')
     elif invoice is not None and txn.status == TXN_COMPLETED:
         # A pre-invoice credit sale: take its amount off the opening balance.
         credit = min(_q(Decimal(str(txn.total or 0))), billing.money(invoice.balance))
         if credit > 0:
             _, released = billing.adjust(invoice, credit, 'void', note=f'VOID {txn.transaction_ref}',
                                          user_id=uid, roll=False)
-            billing.settle_released(released, uid, note=f'VOID {txn.transaction_ref}')
+            _hand_back(released, txn, uid, f'VOID {txn.transaction_ref}')
 
     txn.status = TXN_VOIDED
     txn.notes = ((txn.notes or '') + f'\nVOID: {reason}').strip()
@@ -1335,7 +1355,7 @@ def transaction_refund(txn_id):
         if credit > 0:
             _, released = billing.adjust(invoice, credit, 'return', note=reason, user_id=uid,
                                          roll=False)
-            billing.settle_released(released, uid, note=f'REFUND {txn.transaction_ref}')
+            _hand_back(released, txn, uid, f'REFUND {txn.transaction_ref}')
 
     txn.notes = ((txn.notes or '') +
                  f'\nREFUND {refunded_value} ({reason})').strip()

@@ -241,6 +241,12 @@ def _sale_rows(customer_id, rx_links, start, end, names):
     rows = []
     for li in lines:
         txn = by_txn[li.transaction_id]
+        rx, rx_item = _rx_for_line(li, rx_links.get(txn.id))
+        if txn.customer_id != customer_id and rx is None:
+            # A sale reached only through this patient's prescription may
+            # also hold someone else's medicines: only the prescribed lines
+            # are this patient's.
+            continue
         sold = Decimal(str(li.quantity))
         refunded = min(Decimal(str(li.refunded_quantity or 0)), sold)
         net = sold - refunded
@@ -248,7 +254,6 @@ def _sale_rows(customer_id, rx_links, start, end, names):
         ratio = Decimal(str(txn.total or 0)) / subtotal if subtotal > 0 else ZERO
         paid = Decimal(str(li.line_total)) * ratio
         spent = paid * net / sold if sold > 0 else ZERO
-        rx, rx_item = _rx_for_line(li, rx_links.get(txn.id))
         entries, _ = batches.get(li.id, ([], 0))
         if not entries and li.batch_number:
             entries = [{"batch_number": li.batch_number, "expiry_date": None,

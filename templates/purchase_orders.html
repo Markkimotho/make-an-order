@@ -152,10 +152,10 @@
   async function loadSuppliers() {
     suppliers = await api('GET', '/inventory/suppliers');
     $('#supList').innerHTML = suppliers.length ? suppliers.map(s =>
-      `<tr><td>${s.name}</td><td>${s.contact_name||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td></tr>`
+      `<tr><td>${esc(s.name)}</td><td>${esc(s.contact_name||'—')}</td><td>${esc(s.phone||'—')}</td><td>${esc(s.email||'—')}</td></tr>`
     ).join('') : '<tr><td colspan="4" class="text-muted">No suppliers.</td></tr>';
     $('#poSupplier').innerHTML = suppliers.map(s =>
-      `<option value="${s.id}">${s.name}</option>`).join('');
+      `<option value="${s.id}">${esc(s.name)}</option>`).join('');
     $('#lowSupplier').innerHTML = '<option value="">All low items</option>' + suppliers.map(s =>
       `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   }
@@ -165,8 +165,8 @@
     const list = await api('GET', '/inventory/purchase_orders' + (status?`?status=${status}`:''));
     $('#poList').innerHTML = list.length ? list.map(po => `
       <tr>
-        <td>${po.po_number}</td>
-        <td>${po.supplier_name||po.supplier_id||'—'}</td>
+        <td>${esc(po.po_number)}</td>
+        <td>${esc(po.supplier_name||po.supplier_id||'—')}</td>
         <td><span class="badge bg-${badgeColor(po.status)}">${po.status}</span></td>
         <td>${(po.items||[]).length}</td>
         <td>${fmt(po.total)}</td>
@@ -190,7 +190,7 @@
     if (!t) { $('#poItemResults').innerHTML=''; return; }
     const matches = inv.filter(i => i.name.toLowerCase().includes(t)).slice(0,5);
     $('#poItemResults').innerHTML = matches.map(i =>
-      `<div><a href="#" data-id="${i.id}" data-name="${i.name}" data-cost="${i.cost_price||0}">${i.name}</a></div>`).join('');
+      `<div><a href="#" data-id="${i.id}" data-name="${esc(i.name)}" data-cost="${i.cost_price||0}">${esc(i.name)}</a></div>`).join('');
     $('#poItemResults').querySelectorAll('a').forEach(a => {
       a.addEventListener('click', ev => {
         ev.preventDefault();
@@ -212,7 +212,7 @@
       const lt = (it.quantity_ordered||0) * (it.unit_cost||0);
       total += lt;
       return `<tr>
-        <td>${it.name}</td>
+        <td>${esc(it.name)}</td>
         <td><input type="number" min="1" class="form-control form-control-sm"
                    value="${it.quantity_ordered}" onchange="window.PO.qty(${idx}, this.value)"></td>
         <td><input type="number" step="0.01" class="form-control form-control-sm"
@@ -243,7 +243,7 @@
         receivingPo = po;
         $('#recvItems').innerHTML = (po.items||[]).map(li =>
           `<tr data-pid="${li.id}">
-            <td>${li.item_name||li.inventory_item_id}</td>
+            <td>${esc(li.item_name||li.inventory_item_id)}</td>
             <td>${li.quantity_ordered}</td>
             <td>${li.quantity_received||0}</td>
             <td><input type="number" min="0" max="${li.quantity_ordered - (li.quantity_received||0)}"

@@ -562,3 +562,55 @@ def test_another_business_never_sees_these_numbers(app, shop, login_as, other_te
     with tenant_scope(other_tenant):
         assert Expense.query.count() == 0
     assert Expense.query.count() == 1
+
+
+# --- review fixes -----------------------------------------------------------------
+
+def _move_refunds(txn_id, when):
+    """Date the refund records (stock movements and credit notes) of a sale."""
+    from models import Invoice, InvoiceAdjustment, StockMovement
+    ref = db.session.get(Transaction, txn_id).transaction_ref
+    for m in StockMovement.query.filter_by(note=f"REFUND {ref}", reason="refund"):
+        m.created_at = when
+    inv = Invoice.query.filter_by(transaction_id=txn_id).one()
+    for adj in InvoiceAdjustment.query.filter_by(invoice_id=inv.id, reason="return"):
+        adj.created_at = when
+    db.session.commit()
+
+
+def test_each_refund_takes_its_own_cost_on_its_own_day(shop):
+    """Two units at different batch costs returned on two days: each day loses
+    the cost of the unit returned that day (70 then 50), not half of 120."""
+    c = shop["cashier"]
+    txn = sell(c, [(shop["amox"], 3)])          # AMX-1 x2 at 50, AMX-2 x1 at 70
+    today = today_nairobi()
+    day1, day2 = today - timedelta(days=2), today - timedelta(days=1)
+    set_time(txn, datetime.combine(day1 - timedelta(days=1), datetime.min.time()) + timedelta(hours=9))
+    line = TransactionItem.query.filter_by(transaction_id=txn).one().id
+    c.post(f"/pos/transaction/{txn}/refund", json={"items": [{"transaction_item_id": line,
+                                                              "quantity": 1}]})
+    _move_refunds(txn, datetime.combine(day1, datetime.min.time()) + timedelta(hours=9))
+    c.post(f"/pos/transaction/{txn}/refund", json={"items": [{"transaction_item_id": line,
+                                                              "quantity": 1}]})
+    from models import StockMovement
+    ref = db.session.get(Transaction, txn).transaction_ref
+    newest = (StockMovement.query.filter_by(note=f"REFUND {ref}")
+              .order_by(StockMovement.id.desc()).first())
+    newest.created_at = datetime.combine(day2, datetime.min.time()) + timedelta(hours=9)
+    db.session.commit()
+    days = {r["date"]: r for r in shop["accountant"].get(
+        f"/reports/daily?from={day1}&to={day2}").get_json()["days"]}
+    assert days[day1.isoformat()]["cogs"] == -70.0
+    assert days[day2.isoformat()]["cogs"] == -50.0
+
+
+def test_past_profit_keeps_the_cost_price_of_the_day_it_sold(shop):
+    """Zinc's batch has no cost; the sale used the item cost (60). Raising the
+    cost price later must not change that sale's profit."""
+    txn = sell(shop["cashier"], [(shop["zinc"], 1)])
+    assert TransactionItem.query.filter_by(transaction_id=txn).one().unit_cost == D("60.00")
+    before = today_row(shop["accountant"])["cogs"]
+    item = db.session.get(InventoryItem, shop["zinc"])
+    item.cost_price = D("95")
+    db.session.commit()
+    assert today_row(shop["accountant"])["cogs"] == before == 60.0

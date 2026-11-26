@@ -181,8 +181,11 @@ def take(item, qty, *, transaction_item=None, order_item=None, variant=None,
     else:
         today = today or today_nairobi()
         batches = [b for b in _locked_batches(item) if (b.quantity_on_hand or 0) > 0]
+        # Recalled is checked on its own too: never sold, even if a bug ever
+        # cleared its quarantine flag.
         expired = [b for b in batches
-                   if b.quarantined or (b.expiry_date and b.expiry_date < today)]
+                   if b.quarantined or b.recalled_at is not None
+                   or (b.expiry_date and b.expiry_date < today)]
         usable = batches if allow_expired else [b for b in batches if b not in expired]
         if batch is not None:
             chosen = _chosen_batch(item, batch)

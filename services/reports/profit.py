@@ -41,7 +41,8 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from models import (
     Batch, Category, Expense, InventoryItem, Invoice, InvoiceAdjustment, LineBatch, Payment,
-    PaymentAllocation, Transaction, TransactionItem, TXN_COMPLETED, TXN_REFUNDED,
+    PaymentAllocation, StockMovement, Transaction, TransactionItem, TXN_COMPLETED,
+    TXN_REFUNDED,
 )
 from models.finance import EXPENSE_CATEGORIES
 from services.clock import NAIROBI, now_nairobi, today_nairobi
@@ -127,7 +128,7 @@ class _Sale:
     """One sale with everything the reports need, in Decimal."""
     __slots__ = ("txn", "day", "revenue", "tax", "total", "discounts", "lines", "mix",
                  "refunds", "returned_cogs", "cogs", "cost_missing_lines",
-                 "revenue_without_cost")
+                 "revenue_without_cost", "returned_events")
 
 
 def _empty_day():
@@ -175,6 +176,16 @@ class _Loader:
             if payment is not None:
                 self.tendered[self.invoice_txn[invoice_id]].append(
                     (_PAYMENT_METHOD.get(payment.method, "other"), d(a.amount)))
+        # Refunded units, one stock movement per item per refund, with its
+        # date: each refund's cost comes off the day it happened.
+        by_ref = {t.transaction_ref: t.id for t in self.txns.values()}
+        self.refund_moves = defaultdict(list)
+        notes = [f"REFUND {ref}" for ref in by_ref]
+        for m in _fetch(StockMovement, StockMovement.note, notes,
+                        StockMovement.reason == "refund"):
+            txn_id = by_ref.get((m.note or "")[len("REFUND "):])
+            if txn_id is not None:
+                self.refund_moves[txn_id].append(m)
         self.credit_notes = defaultdict(list)
         for adj in _fetch(InvoiceAdjustment, InvoiceAdjustment.invoice_id, self.invoice_txn,
                           InvoiceAdjustment.reason == "return"):
@@ -188,9 +199,14 @@ class _Loader:
             return tendered
         return [(_TXN_METHOD.get(txn.payment_method or "", "other"), Decimal(1))]
 
-    def _unit_cost(self, batch, item):
+    def _unit_cost(self, batch, item, snapshot=None):
+        """A batch's own cost; else the item's cost as it was at the sale
+        (TransactionItem.unit_cost, kept since migration 0013); else, for
+        older sales, today's item cost."""
         if batch is not None and batch.unit_cost is not None:
             return d(batch.unit_cost)
+        if snapshot is not None:
+            return d(snapshot)
         if item is not None and item.cost_price is not None:
             return d(item.cost_price)
         return None
@@ -212,20 +228,60 @@ class _Loader:
         batches = self.line_batches.get(li.id)
         if batches:
             for lb in batches:
-                cost = self._unit_cost(self.batches.get(lb.batch_id), item)
+                cost = self._unit_cost(self.batches.get(lb.batch_id), item, li.unit_cost)
                 if cost is None:
                     line.cost_missing = True
                     continue
                 line.cogs += Decimal(int(lb.quantity or 0)) * cost
                 line.returned_cogs += Decimal(int(lb.returned_quantity or 0)) * cost
         else:
-            cost = self._unit_cost(None, item)
+            cost = self._unit_cost(None, item, li.unit_cost)
             if cost is None:
                 line.cost_missing = True
             else:
                 line.cogs = line.qty * cost
                 line.returned_cogs = line.refunded_qty * cost
         return line
+
+    def _return_order(self, txn_id):
+        """{item id: [(units, unit cost)]} in the order a refund puts units
+        back (services/stock.give_back: the most recently taken batch first)."""
+        out = defaultdict(list)
+        for li in self.lines.get(txn_id, []):
+            item = self.items.get(li.inventory_item_id)
+            rows = sorted(self.line_batches.get(li.id, []), key=lambda lb: -lb.id)
+            if rows:
+                for lb in rows:
+                    cost = self._unit_cost(self.batches.get(lb.batch_id), item, li.unit_cost)
+                    out[li.inventory_item_id].append((int(lb.quantity or 0), cost))
+            else:
+                out[li.inventory_item_id].append((int(d(li.quantity)),
+                                                  self._unit_cost(None, item, li.unit_cost)))
+        return out
+
+    def _returned_cost_events(self, txn_id, lines):
+        """[(day, cost)] for each refund's units, oldest refund first, each
+        costed at the batches its units went back to."""
+        moves = sorted(self.refund_moves.get(txn_id, []), key=lambda m: (m.created_at, m.id))
+        if not moves:
+            return []
+        queues = {item_id: list(rows) for item_id, rows in self._return_order(txn_id).items()}
+        events = []
+        for m in moves:
+            left, cost = int(m.delta or 0), ZERO
+            queue = queues.get(m.item_id, [])
+            while left > 0 and queue:
+                units, unit_cost = queue[0]
+                take = min(units, left)
+                if unit_cost is not None:
+                    cost += Decimal(take) * unit_cost
+                left -= take
+                if take == units:
+                    queue.pop(0)
+                else:
+                    queue[0] = (units - take, unit_cost)
+            events.append((nairobi_day(m.created_at), cost))
+        return events
 
     def sale(self, txn):
         s = _Sale()
@@ -244,6 +300,7 @@ class _Loader:
         s.cost_missing_lines = len(missing)
         s.revenue_without_cost = sum((li.revenue for li in missing), ZERO)
         s.mix = self._mix(txn)
+        s.returned_events = self._returned_cost_events(txn.id, s.lines)
         # Refund events: (day, amount the customer got back incl. tax).
         notes = self.credit_notes.get(txn.id, [])
         if notes:
@@ -324,10 +381,15 @@ def _compute(d_from, d_to):
             net = amount * s.revenue / s.total if s.total > 0 else ZERO
             row["refunds"] += net
             row["tax"] -= amount - net
-            row["cogs"] -= s.returned_cogs * amount / refunded
+            if not s.returned_events:          # older refunds: spread by value
+                row["cogs"] -= s.returned_cogs * amount / refunded
             for m, part in _split(net, s.mix).items():
                 row["by_method"][m] -= part
-        if not s.refunds and s.returned_cogs and s.day in days:
+        # Cost of returned goods comes off the day each refund happened.
+        for day, cost in s.returned_events:
+            if day in days:
+                days[day]["cogs"] -= cost
+        if not s.refunds and not s.returned_events and s.returned_cogs and s.day in days:
             days[s.day]["cogs"] -= s.returned_cogs
     exp_by_category = defaultdict(lambda: ZERO)
     for e in Expense.query.filter(Expense.spent_on >= d_from, Expense.spent_on <= d_to).all():

@@ -602,6 +602,9 @@ class TransactionItem(TenantMixin, db.Model):
     discount          = db.Column(db.Numeric(12, 2), default=0, nullable=False)
     line_total        = db.Column(db.Numeric(12, 2), nullable=False)
     batch_number      = db.Column(db.String(64), nullable=True)
+    # The item's cost price when it was sold (migration 0013), so profit on
+    # past sales does not change when the cost price is edited later.
+    unit_cost         = db.Column(db.Numeric(12, 2), nullable=True)
     # Units already returned; refunds cannot return more than were sold.
     refunded_quantity = db.Column(db.Numeric(12, 3), nullable=False, default=0,
                                   server_default='0')

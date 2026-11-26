@@ -210,6 +210,11 @@ and no fixed public IP.
 
 Tills in the shop keep using the LAN address, which works without internet.
 
+Leave `PROXY_FIX_X_FOR=0` here. The tills reach the app directly, so trusting
+`X-Forwarded-For` would let anyone on the shop network fake their address and
+get round the sign-in rate limit. Remote sign-ins through the tunnel then share
+one rate limit (10 a minute); account lockout still applies per person.
+
 ## 8. Updates
 
 ```bash

@@ -348,3 +348,30 @@ def test_pages_render_for_a_pharmacist(app, ward, login_as):
 def test_nav_and_dashboard_link_to_patients(app, login_as):
     html = login_as("pharmacist").get("/dashboard").get_data(as_text=True)
     assert 'href="/patients-ui"' in html
+
+
+def test_a_shared_checkout_only_brings_in_the_prescribed_lines(app, chronic):
+    """A walk-in sale holding this patient's prescription and someone else's
+    cough syrup: only the prescribed medicine lands in this patient's history."""
+    syrup = InventoryItem(name="Cough syrup", price=D("150"))
+    db.session.add(syrup)
+    db.session.flush()
+    stock.receive(syrup, 5, batch_number="CS1", expiry_date=date(2027, 6, 1))
+    db.session.commit()
+    syrup_id = syrup.id
+    c = chronic["client"]
+    txn = c.post("/pos/transaction/new", json={}).get_json()["transaction"]["id"]
+    c.post(f"/pos/transaction/{txn}/add_item", json={"inventory_item_id": chronic["item"],
+                                                      "quantity": 60})
+    c.post(f"/pos/transaction/{txn}/add_item", json={"inventory_item_id": syrup_id,
+                                                      "quantity": 1})
+    rx = c.get(f"/pharmacy/prescriptions/{chronic['rx']}").get_json()
+    c.post(f"/pharmacy/prescriptions/{chronic['rx']}/dispense", json={
+        "transaction_id": txn,
+        "items": [{"prescription_item_id": rx["items"][0]["id"], "quantity_dispensed": 60}]})
+    assert c.post(f"/pos/transaction/{txn}/complete",
+                  json={"payment_method": "cash"}).status_code == 200
+    out = history.medication_history(chronic["patient"], 12)
+    names = [r["item_name"] for m in out["months"] for r in m["rows"]]
+    assert names == ["Metformin 500mg"]
+    assert out["months"][0]["total_spent"] == 120.0

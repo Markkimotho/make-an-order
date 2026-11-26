@@ -19,7 +19,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
-from flask import Blueprint, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 MAX_FAILED_LOGINS = 5
 LOCK_MINUTES = 15
 LOGIN_RATE_LIMIT = "10 per minute"
-INVALID_LOGIN = "Invalid email or password."
+# Password sign-in answers every failure the same way (unknown email, wrong
+# password, locked account), so the lockout cannot be used to find out which
+# emails have accounts. It still tells people the rule.
+FAILED_LOGIN = ("Invalid email or password. After 5 wrong tries an account is locked for "
+                "15 minutes; your manager can unlock it.")
 
 _dummy_hash = None
 
@@ -213,10 +217,11 @@ def create_auth_blueprint(oauth):
                 _spend_hash_time(password)
                 _audit('login.failed', None, {'email': typed, 'reason': 'unknown_email'})
                 db.session.commit()
-                return redirect(url_for('login_page', message=INVALID_LOGIN))
+                return redirect(url_for('login_page', message=FAILED_LOGIN))
             if user.locked_until is not None and user.locked_until > now:
+                _spend_hash_time(password)
                 _audit('login.failed', user, {'email': typed, 'reason': 'locked'})
-                message = locked_message(user.locked_until, now)
+                message = FAILED_LOGIN
                 db.session.commit()
                 return redirect(url_for('login_page', message=message))
             if not user.check_password(password):
@@ -230,12 +235,11 @@ def create_auth_blueprint(oauth):
                 count = user.failed_logins          # re-read after the UPDATE
                 _audit('login.failed', user, {'email': typed, 'reason': 'bad_password',
                                               'failed_logins': count})
-                message = INVALID_LOGIN
+                message = FAILED_LOGIN
                 if count >= MAX_FAILED_LOGINS:
                     user.locked_until = now + timedelta(minutes=LOCK_MINUTES)
                     _audit('login.locked', user, {'email': typed, 'failed_logins': count,
                                                   'minutes': LOCK_MINUTES})
-                    message = locked_message(user.locked_until, now)
                     logger.warning("Account %s locked after %d failed sign-ins", user.id, count)
                 db.session.commit()
                 return redirect(url_for('login_page', message=message))
@@ -269,6 +273,11 @@ def create_auth_blueprint(oauth):
             return render_template('register.html', error=message, form_data=form,
                                    BUSINESS_CONFIGS=BUSINESS_CONFIGS), 400
 
+        if current_app.config.get("SINGLE_BUSINESS_INSTALL") and Tenant.query.count() >= 1:
+            # A shop's own server holds one business; staff are added by the
+            # owner from Users & roles, not by signing up.
+            return fail("This server already has its business. Ask the owner to add you "
+                        "from Users & roles.")
         if not all((business_name, vertical, name, email, password, phone_raw)):
             return fail("All fields are required.")
         if vertical not in BUSINESS_CONFIGS:

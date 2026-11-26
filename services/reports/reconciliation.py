@@ -48,6 +48,30 @@ def _sales(shift_id):
                                      Transaction.status == TXN_COMPLETED).all())
 
 
+def _cash_taken_sales(shift_id):
+    """Every sale this shift took money for, including ones refunded or
+    voided later: cash handed back is a cash-out on the drawer it left (see
+    api/pos.py _hand_back), so the cash taken here stays counted in full."""
+    return (Transaction.query.filter(Transaction.shift_id == shift_id,
+                                     Transaction.payment_method.isnot(None),
+                                     Transaction.status.in_((TXN_COMPLETED, "refunded",
+                                                             "voided"))).all())
+
+
+def _handed_back(payment_ids):
+    """Cash already returned from these payments (refunds and voids lower
+    a payment's amount and log it as payment.refund)."""
+    from models import AuditLog
+    out = defaultdict(lambda: ZERO)
+    if not payment_ids:
+        return out
+    for row in AuditLog.query.filter(AuditLog.action == "payment.refund",
+                                     AuditLog.entity_type == "Payment",
+                                     AuditLog.entity_id.in_(list(payment_ids))):
+        out[row.entity_id] += d((row.new_value or {}).get("amount", 0))
+    return out
+
+
 def _live_payments(sales):
     """{sale id: [(payment, live allocation amount)]} for confirmed payments
     on these sales' (non-void) invoices."""
@@ -72,17 +96,29 @@ def _live_payments(sales):
     return out
 
 
-def _cash_sales(sales, paid):
+def _cash_sales(shift_id):
+    """Cash the shift's sales put in the drawer, as taken at the sale: cash
+    sales at their total, plus the cash part of split sales (what is still
+    allocated plus what was handed back since)."""
+    sales = _cash_taken_sales(shift_id)
     cash = sum((d(t.total) for t in sales if t.payment_method == "cash"), ZERO)
-    return cash + sum((a for t in sales if t.payment_method == "split"
-                       for p, a in paid[t.id] if p.method == "cash"), ZERO)
+    split = [t.id for t in sales if t.payment_method == "split"]
+    if not split:
+        return cash
+    # Cash payments ever put on these sales' invoices, at what they were
+    # when taken: today's amount plus anything handed back since.
+    invoice_ids = [i.id for i in Invoice.query.filter(Invoice.transaction_id.in_(split))]
+    payment_ids = {a.payment_id for a in PaymentAllocation.query.filter(
+        PaymentAllocation.invoice_id.in_(invoice_ids))} if invoice_ids else set()
+    payments = [p for p in Payment.query.filter(Payment.id.in_(payment_ids))
+                if p.method == "cash"] if payment_ids else []
+    back = _handed_back({p.id for p in payments})
+    return cash + sum((d(p.amount) + back[p.id] for p in payments), ZERO)
 
 
 def cash_sales(shift):
-    """Cash a shift's sales put in the drawer: completed cash sales plus the
-    cash part of completed split sales."""
-    sales = _sales(shift.id)
-    return _cash_sales(sales, _live_payments([t for t in sales if t.payment_method == "split"]))
+    """Cash a shift's sales put in the drawer (see _cash_sales)."""
+    return _cash_sales(shift.id)
 
 
 def _movements(shift_id):
@@ -99,7 +135,7 @@ def _shift_numbers(shift):
     """Decimal figures for one shift (see the module docstring)."""
     sales = _sales(shift.id)
     paid = _live_payments(sales)
-    cash = _cash_sales(sales, paid)
+    cash = _cash_sales(shift.id)
     cash_in, cash_out = _movements(shift.id)
     computed = d(shift.opening_float) + cash + cash_in - cash_out
     closed = shift.status == SHIFT_CLOSED

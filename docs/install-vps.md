@@ -43,6 +43,7 @@ APP_URL=https://pos.example.co.ke
 PUBLIC_BASE_URL=https://pos.example.co.ke
 APP_BIND=127.0.0.1
 APP_PORT=8080
+PROXY_FIX_X_FOR=1                      # every request comes through Caddy
 SINGLE_BUSINESS_INSTALL=false          # true if only one business uses this server
 ```
 

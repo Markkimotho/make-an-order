@@ -83,7 +83,20 @@ class Target:
 
     @property
     def sqlite_path(self):
-        return Path(self.url.database)
+        return resolve_sqlite_path(self.url.database)
+
+
+def resolve_sqlite_path(database):
+    """The file Flask-SQLAlchemy actually opens: a relative SQLite path is
+    relative to the app's instance folder, not the working directory."""
+    path = Path(database)
+    if path.is_absolute():
+        return path
+    try:
+        from flask import current_app
+        return Path(current_app.instance_path) / path
+    except RuntimeError:                 # no app (plain CLI use): keep it as given
+        return path
 
 
 def target_for(database_url=None):

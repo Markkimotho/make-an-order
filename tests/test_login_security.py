@@ -57,7 +57,9 @@ def test_four_failures_do_not_lock_the_fifth_does(client, app):
         u = user()
         assert (u.failed_logins, u.locked_until) == (n, None)
     r = login(client, password=WRONG)
-    assert "locked+for+15+more+minutes" in r.headers["Location"]
+    # The same answer as any failure: the lock is not announced to the
+    # person guessing (that would tell them the email has an account).
+    assert "Invalid+email+or+password" in r.headers["Location"]
     u = user()
     assert u.failed_logins == 5
     assert u.locked_until > datetime.utcnow() + timedelta(minutes=14)
@@ -68,19 +70,29 @@ def test_right_password_refused_while_locked(client, app):
     for _ in range(5):
         login(client, password=WRONG)
     r = login(client)
-    assert "locked" in r.headers["Location"]
+    assert "Invalid+email+or+password" in r.headers["Location"]
     assert not signed_in(client)
     # Attempts while locked neither extend the lock nor raise the count.
     assert user().failed_logins == 5
 
 
-def test_lock_message_counts_down(client, app, monkeypatch):
-    make_user(app.acme_id, locked_until=datetime.utcnow() + timedelta(minutes=15),
-              failed_logins=5)
-    later = datetime.utcnow() + timedelta(minutes=14, seconds=10)
-    monkeypatch.setattr(auth_routes, "_utcnow", lambda: later)
-    r = login(client)
-    assert "locked+for+1+more+minute." in r.headers["Location"]
+def test_lock_message_counts_down():
+    """Shown only where identity is proven (Google sign-in)."""
+    now = datetime(2026, 11, 26, 12, 0)
+    assert "locked for 1 more minute." in auth_routes.locked_message(
+        now + timedelta(seconds=50), now)
+    assert "locked for 15 more minutes." in auth_routes.locked_message(
+        now + timedelta(minutes=15), now)
+
+
+def test_locked_unknown_and_wrong_answers_are_identical(client, app):
+    """A locked account cannot be told apart from a missing one."""
+    make_user(app.acme_id)
+    for _ in range(5):
+        login(client, password=WRONG)
+    locked = login(client, password=WRONG).headers["Location"]
+    unknown = login(client, email="nobody@acme.co", password=WRONG).headers["Location"]
+    assert locked == unknown
 
 
 def test_lock_expires(client, app):

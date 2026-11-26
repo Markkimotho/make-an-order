@@ -20,9 +20,16 @@ from services import audit_service, backup
 from verticals.features import feature_required
 
 
+def single_business():
+    """A shop's own server: the flag is set AND the database really holds one
+    business. The count matters: a dump holds every business, so a second
+    business signed up on the same server must never be able to download it."""
+    from models import Tenant
+    return bool(current_app.config.get("SINGLE_BUSINESS_INSTALL")) and Tenant.query.count() <= 1
+
+
 def can_download():
-    return bool(g.get("is_platform_admin")) or bool(
-        current_app.config.get("SINGLE_BUSINESS_INSTALL"))
+    return bool(g.get("is_platform_admin")) or single_business()
 
 
 def _audit(action, name):

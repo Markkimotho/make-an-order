@@ -367,3 +367,42 @@ def test_parallel_line_discounts_cannot_both_pass_the_cap(till):
     with tenant_scope(app.acme_id):
         t = db.session.get(Transaction, txn)
         assert sum(li.discount for li in t.items) == D("50.00")
+
+
+def _shift_numbers(app, client):
+    shift = client.get("/pos/shift/current").get_json()["shift"]
+    from models import Shift
+    from services.reports.reconciliation import shift_report
+    return shift_report(db.session.get(Shift, shift["id"]))
+
+
+def test_partial_cash_refund_leaves_the_drawer_balanced(app, till):
+    """KES 400 sale, KES 200 handed back: expected cash is 200, no false shortage."""
+    c = till["cashier"]
+    txn = new_sale(c)
+    a = add(c, txn, till["item"]).get_json()["line"]["id"]
+    add(c, txn, till["item"])
+    assert c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash"}).status_code == 200
+    r = c.post(f"/pos/transaction/{txn}/refund",
+               json={"items": [{"transaction_item_id": a, "quantity": 1}], "reason": "wrong item"})
+    assert r.status_code == 200, r.get_json()
+    report = _shift_numbers(app, c)
+    assert report["cash_sales"] == 400.0 and report["cash_out"] == 200.0
+    assert report["expected_cash"] == 200.0
+
+
+def test_full_cash_refund_and_void_hand_cash_out_of_the_drawer(app, till):
+    c = till["cashier"]
+    first, second = new_sale(c), new_sale(c)
+    for txn in (first, second):
+        line = add(c, txn, till["item"]).get_json()["line"]["id"]
+        c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash"})
+    line = db.session.get(Transaction, first).items[0].id
+    c.post(f"/pos/transaction/{first}/refund",
+           json={"items": [{"transaction_item_id": line, "quantity": 1}], "reason": "x"})
+    r = c.post(f"/pos/transaction/{second}/void", json={"reason": "mistake"})
+    code = otp_service.peek_otp(f"void:txn:{second}")
+    assert c.post(f"/pos/transaction/{second}/void",
+                  json={"reason": "mistake", "otp": code}).status_code == 200
+    report = _shift_numbers(app, c)
+    assert (report["cash_sales"], report["cash_out"], report["expected_cash"]) == (400.0, 400.0, 0.0)

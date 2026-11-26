@@ -594,6 +594,14 @@ def update_batch(id):
     batch = db.session.get(Batch, id)
     if not batch:
         return jsonify({'error': 'Batch not found'}), 404
+    # Same locks as a recall (item, then its batches), so a release cannot
+    # read the batch before a recall commits and undo its hold.
+    item = db.session.get(InventoryItem, batch.inventory_item_id)
+    if item is None:                     # its item is gone (SQLite has no cascade)
+        return jsonify({'error': 'Batch not found'}), 404
+    item = stock._lock_item(item)
+    stock._locked_batches(item)
+    batch = db.session.get(Batch, id)
     data = request.get_json(silent=True) or {}
     if 'batch_number' in data:
         number = (data.get('batch_number') or '').strip()
