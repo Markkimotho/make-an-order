@@ -348,7 +348,7 @@ def online_orders():
                                             customer_id=customer_id, page=page,
                                             per_page=per_page)
     now = datetime.utcnow()
-    return jsonify({'orders': [online_shop.order_row(o, now) for o in orders],
+    return jsonify({'orders': [online_shop.order_row(o, now, session.get('role')) for o in orders],
                     'waiting': online_shop.waiting_summary(),
                     'pagination': {'page': page, 'per_page': per_page, 'total': total,
                                    'pages': (total + per_page - 1) // per_page}}), 200
@@ -375,7 +375,11 @@ def order_fulfilment(id):
         return jsonify({'error': 'Order not found'}), 404
     before = order.fulfillment_status
     try:
-        order = online_shop.set_fulfilment(order, status, user_id=session.get('user_id'))
+        order = online_shop.set_fulfilment(order, status, user_id=session.get('user_id'),
+                                           role=session.get('role'))
+    except online_shop.FulfilmentForbidden as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 403
     except online_shop.FulfilmentError as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 409
@@ -384,6 +388,6 @@ def order_fulfilment(id):
                       {'fulfillment_status': order.fulfillment_status})
     db.session.commit()
     sms = online_shop.notify(order)
-    row = online_shop.order_row(order)
+    row = online_shop.order_row(order, role=session.get('role'))
     row['sms'] = sms.status if sms is not None else None
     return jsonify({'order': row}), 200

@@ -406,3 +406,20 @@ def test_full_cash_refund_and_void_hand_cash_out_of_the_drawer(app, till):
                   json={"reason": "mistake", "otp": code}).status_code == 200
     report = _shift_numbers(app, c)
     assert (report["cash_sales"], report["cash_out"], report["expected_cash"]) == (400.0, 400.0, 0.0)
+
+
+@pytest.mark.parametrize("vertical, status", [("pharmacy", 403), ("agrovet", 200)])
+def test_prescription_gate_is_for_pharmacies(till, vertical, status):
+    """A pharmacy needs a dispensed prescription on the sale; an agrovet has
+    no prescription screens, checks the vet's paper at the counter, and must
+    still be able to sell its prescription-only stock (the shop never lists it)."""
+    from tests.conftest import set_vertical
+    set_vertical(till["app"].acme_id, vertical)
+    item = db.session.get(InventoryItem, till["item"])
+    item.is_drug, item.requires_prescription = True, True
+    db.session.commit()
+    c = till["cashier"]
+    txn = new_sale(c)
+    add(c, txn, till["item"])
+    r = c.post(f"/pos/transaction/{txn}/complete", json={"payment_method": "cash"})
+    assert r.status_code == status, r.get_json()

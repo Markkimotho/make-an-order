@@ -50,6 +50,7 @@ from services import audit_service, billing, controlled, loyalty_service, otp_se
 from services.receipt_service import build_receipt
 from services.clock import today_nairobi
 from services.sms_service import SendSMS
+from verticals.features import has_feature
 
 pos_bp = Blueprint('pos', __name__)
 logger = logging.getLogger(__name__)
@@ -953,10 +954,13 @@ def transaction_complete(txn_id):
         if _q(cash_a + mpesa_a + card_a) != _q(total):
             return jsonify({'error': 'split amounts must sum to total'}), 400
 
-    # Prescription gating: any line that requires prescription must already be
-    # linked to a dispensed PrescriptionItem on this transaction.
+    # Prescription gating (pharmacies): any line that requires prescription
+    # must already be linked to a dispensed PrescriptionItem on this
+    # transaction. Other businesses (an agrovet selling a vet antibiotic) have
+    # no prescription screens: the attendant checks the paper prescription at
+    # the counter, and the online shop never lists these items.
     rx_required = [li for li in txn.items
-                   if li.inventory_item_id
+                   if has_feature("pharmacy") and li.inventory_item_id
                    and (db.session.get(InventoryItem, li.inventory_item_id) or
                         type('x', (), {'requires_prescription': False})()).requires_prescription]
     if rx_required:

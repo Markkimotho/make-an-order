@@ -227,3 +227,13 @@ def test_register_select_is_grouped_with_includes_per_type(client):
     # The default choice is Any other shop, and only its list is visible.
     assert re.search(r'<option value="shop"\s+selected', select)
     assert re.search(r'data-vertical="shop"\s*>', html)
+
+
+def test_landing_does_not_promise_institutions_a_till(client):
+    """Codex P2: 'Every type gets the till' was false for schools, estates
+    and chamas, which have no POS."""
+    from verticals.features import features_for
+    assert "pos" not in features_for("institution")
+    html = client.get("/").get_data(as_text=True)
+    assert "Every type gets the till" not in html
+    assert "collect money by campaign" in html

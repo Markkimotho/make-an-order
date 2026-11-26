@@ -378,6 +378,10 @@ class FulfilmentError(ValueError):
     pass
 
 
+class FulfilmentForbidden(FulfilmentError):
+    """The user's role may not make this move (403, not 409)."""
+
+
 def _paid_order_ids():
     return select(Invoice.order_id).where(Invoice.order_id.isnot(None),
                                           Invoice.status == "paid")
@@ -417,12 +421,23 @@ def waiting_summary():
                 Order.id.in_(_paid_order_ids())).scalar()}
 
 
-def _actions(order, invoice):
+# Medicine on a prescription leaves the pharmacy only through a pharmacist
+# (the pharmacy hand-over route has the same rule); anyone on the till may
+# still cancel it.
+PRESCRIPTION_ROLES = ("pharmacist", "admin", "superuser")
+
+
+def may_move(order, role):
+    """Whether ``role`` may mark this order ready, dispatched or collected."""
+    return order.prescription_id is None or role in PRESCRIPTION_ROLES
+
+
+def _actions(order, invoice, role=None):
     status = order.fulfillment_status
     if status in ("collected", "cancelled"):
         return []
     actions = []
-    if _may_hand_over(invoice):
+    if _may_hand_over(invoice) and may_move(order, role):
         if status == "pending":
             actions.append("ready")
         if order.delivery_address and status in ("pending", "ready"):
@@ -439,7 +454,7 @@ def _may_hand_over(invoice):
     return invoice.status == "paid" or invoice.kind == "credit"
 
 
-def order_row(order, now=None):
+def order_row(order, now=None, role=None):
     now = now or datetime.utcnow()
     invoice = order_service.invoice_for(order)
     customer = db.session.get(Customer, order.customer_id) if order.customer_id else None
@@ -464,17 +479,20 @@ def order_row(order, now=None):
         "prescription_id": order.prescription_id,
         "time": order.time.isoformat() if order.time else None,
         "age_minutes": age,
-        "actions": _actions(order, invoice),
+        "actions": _actions(order, invoice, role),
     }
 
 
-def set_fulfilment(order, status, user_id=None, now=None):
-    """Move a remote order on. Returns the order. Raises FulfilmentError.
+def set_fulfilment(order, status, user_id=None, now=None, role=None):
+    """Move a remote order on. Returns the order. Raises FulfilmentError, or
+    FulfilmentForbidden when ``role`` may not move a prescription order.
     The caller commits, then calls :func:`notify`."""
     if status == "delivered":
         status = "collected"
     if status not in ("ready", "dispatched", "collected", "cancelled"):
         raise FulfilmentError("status must be ready, dispatched, collected, delivered or cancelled")
+    if status != "cancelled" and not may_move(order, role):
+        raise FulfilmentForbidden("A pharmacist hands over prescription orders.")
     if order.campaign_id is not None:
         raise FulfilmentError("campaign orders are handed over with their pickup code")
     if status == "cancelled":

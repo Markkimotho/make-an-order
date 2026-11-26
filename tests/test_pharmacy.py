@@ -426,3 +426,32 @@ def test_counter_refill_after_an_online_hand_over(app, chronic, client):
     db.session.expire_all()
     rx = db.session.get(Prescription, chronic["rx"])
     assert (rx.refills_remaining, rx.refill_status) == (0, "ended")
+
+
+def test_cashier_cannot_hand_over_a_refill_from_online_orders(app, chronic, client, login_as):
+    """Codex P1: /orders/<id>/fulfilment handed refills over for cashiers,
+    while /pharmacy/orders/<id>/hand-over is pharmacist only."""
+    dispense_cycle(chronic)
+    rx = db.session.get(Prescription, chronic["rx"])
+    assert client.post(f"/o/acme/r/{rx.refill_token}/order",
+                       json={"fulfilment": "pickup"}).status_code == 201
+    invoice = Invoice.query.one()
+    from services import billing
+    billing.record_payment(method="mpesa_c2b", amount=invoice.total, receipt="SRF0000009",
+                           invoice=invoice)
+    db.session.commit()
+    order_id = Order.query.one().id
+    cashier = login_as("cashier")
+    row = cashier.get("/orders/online").get_json()["orders"][0]
+    assert row["actions"] == ["cancelled"]
+    for status in ("ready", "collected", "delivered"):
+        r = cashier.put(f"/orders/{order_id}/fulfilment", json={"status": status})
+        assert r.status_code == 403, (status, r.get_json())
+    db.session.expire_all()
+    assert db.session.get(Prescription, chronic["rx"]).refills_remaining == 1
+    pharmacist = login_as("pharmacist")
+    assert "collected" in pharmacist.get("/orders/online").get_json()["orders"][0]["actions"]
+    r = pharmacist.put(f"/orders/{order_id}/fulfilment", json={"status": "collected"})
+    assert r.status_code == 200, r.get_json()
+    db.session.expire_all()
+    assert db.session.get(Prescription, chronic["rx"]).refills_remaining == 0

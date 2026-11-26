@@ -359,13 +359,16 @@ _AGROVET = [
     # Vet drugs
     dict(name='Albendazole Dewormer 1L',        description='Broad-spectrum dewormer, cattle and sheep',
          price=1500.00, cost_price=1100.00, category='Vet Drugs',
-         stock=20,  reorder_level=5,  unit='bottle', icon='fa-prescription-bottle'),
+         stock=20,  reorder_level=5,  unit='bottle', icon='fa-prescription-bottle',
+         is_drug=True, requires_prescription=False),
     dict(name='Oxytetracycline 20% 100ml',      description='Long-acting antibiotic injection',
          price=650.00,  cost_price=450.00,  category='Vet Drugs',
-         stock=25,  reorder_level=6,  unit='bottle', icon='fa-syringe'),
+         stock=25,  reorder_level=6,  unit='bottle', icon='fa-syringe',
+         is_drug=True, requires_prescription=True),   # POM-VT: vet prescription
     dict(name='Newcastle Vaccine 100 doses',    description='Poultry vaccine, keep cold',
          price=250.00,  cost_price=170.00,  category='Vet Drugs',
-         stock=30,  reorder_level=8,  unit='vial', icon='fa-syringe'),
+         stock=30,  reorder_level=8,  unit='vial', icon='fa-syringe',
+         is_drug=True, requires_prescription=False),
     # Crop protection
     dict(name='Insecticide 100ml',              description='Lambda-cyhalothrin for aphids and worms',
          price=450.00,  cost_price=310.00,  category='Crop Protection',

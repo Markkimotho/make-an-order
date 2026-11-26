@@ -10,6 +10,12 @@ from services.billing.invoices import (BillingError, live_allocations, lock_invo
 from services.billing.matching import match_reference
 
 OWING = ("open", "partial")
+# Orders anyone can place from a public page by typing a phone number. Their
+# invoices are paid only when a payment names them (the order's own STK
+# push, or staff allocating by hand), never from the customer's spare credit:
+# otherwise a stranger could order on someone else's number and have that
+# person's overpayment or refund pay for it.
+ANONYMOUS_CHANNELS = ("shop", "whatsapp")
 
 
 class DuplicateReceipt(BillingError):
@@ -37,7 +43,11 @@ def _payer_invoices(customer_id=None, exclude=(), member_id=None):
     (institutions bill students and houses, not customers)."""
     payer = (Invoice.customer_id == customer_id if customer_id is not None
              else Invoice.member_id == member_id)
-    q = Invoice.query.filter(payer, Invoice.status.in_(OWING))
+    from models import Order
+    anonymous = db.session.query(Order.id).filter(Order.channel.in_(ANONYMOUS_CHANNELS))
+    q = Invoice.query.filter(payer, Invoice.status.in_(OWING),
+                             db.or_(Invoice.order_id.is_(None),
+                                    Invoice.order_id.notin_(anonymous)))
     if exclude:
         q = q.filter(Invoice.id.notin_(exclude))
     return q.order_by(Invoice.issued_at.asc(), Invoice.id.asc()).all()

@@ -521,3 +521,53 @@ def test_unpaid_hold_is_released_by_the_sweep(app, client, goods):
     assert db.session.get(InventoryItem, goods["sugar"]).stock == 20
     html = client.get(body["status_url"]).get_data(as_text=True)
     assert "Not paid in time" in html and "Pay with M-Pesa" not in html
+
+
+# --- review fixes ------------------------------------------------------------------
+
+def test_a_stranger_ordering_on_your_number_never_gets_your_money(app, client, goods, login_as):
+    """Codex P1: a shop order placed with someone else's phone joined that
+    customer's invoices, so their refund credit paid for it."""
+    mine = place(client, goods, qty=2)                       # the real customer, paid
+    mine_id = order_by_number(mine["order"]).id
+    pay(Invoice.query.filter_by(order_id=mine_id).one().id)
+    theirs = place(client, goods, qty=2, ip="41.80.0.2",     # a stranger, same phone
+                   fulfilment="delivery", address="Somewhere else")
+    theirs_invoice_id = Invoice.query.filter_by(
+        order_id=order_by_number(theirs["order"]).id).one().id
+    c = login_as("cashier")
+    assert c.put(f"/orders/{mine_id}/fulfilment",
+                 json={"status": "cancelled"}).status_code == 200
+    db.session.expire_all()
+    assert db.session.get(Invoice, theirs_invoice_id).status == "open"
+    from models import Payment
+    payment = Payment.query.one()
+    assert payment.unallocated_amount == D("300")            # still the customer's credit
+
+
+def test_paybill_money_without_a_named_invoice_skips_shop_orders(app, client, goods):
+    body = place(client, goods)
+    invoice = Invoice.query.filter_by(order_id=order_by_number(body["order"]).id).one()
+    customer_id = invoice.customer_id
+    billing.record_payment(method="mpesa_c2b", amount=D("300"), receipt="QPB0000001",
+                           customer_id=customer_id)
+    db.session.commit()
+    db.session.expire_all()
+    assert db.session.get(Invoice, invoice.id).status == "open"
+    pay(invoice.id, receipt="QPB0000002")                    # its own payment still pays it
+    assert db.session.get(Invoice, invoice.id).status == "paid"
+
+
+def test_agrovet_shop_leaves_out_the_vet_antibiotic(app, client):
+    from services.seed_service import seed_inventory
+    set_vertical(app.acme_id, "agrovet")
+    seed_inventory("agrovet")
+    db.session.commit()
+    oxy = InventoryItem.query.filter(InventoryItem.name.like("Oxytetracycline%")).one()
+    assert oxy.is_drug and oxy.requires_prescription
+    tenant_set(app.acme_id, shop_open=True)
+    names = {i["name"] for i in catalogue_of(client.get("/o/acme/shop").get_data(as_text=True))}
+    assert "Oxytetracycline 20% 100ml" not in names
+    assert "Albendazole Dewormer 1L" in names
+    r = post_order(client, checkout([{"id": oxy.id, "quantity": 1}]))
+    assert r.status_code in (400, 404, 409) and Order.query.count() == 0
