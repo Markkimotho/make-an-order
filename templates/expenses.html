@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Expenses{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-money-bill-wave me-2"></i>Expenses</h2>
+    <p class="text-muted mb-0 small">Rent, wages, power and other costs that are not stock. Net profit on the
+      daily report is gross profit less these. Cash paid from the till while your shift is open also comes
+      out of that drawer's expected cash.</p>
+  </div>
+  <div class="text-end"><div class="small text-muted">Total shown</div><div class="fs-4 fw-bold" id="exTotal">KES 0.00</div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card"><div class="card-body">
+      <h6 class="card-title">Add an expense</h6>
+      <form id="exForm" novalidate>
+        <div class="mb-2"><label class="form-label small mb-0" for="exDate">Date</label>
+          <input type="date" class="form-control form-control-sm" id="exDate" required></div>
+        <div class="mb-2"><label class="form-label small mb-0" for="exCategory">Category</label>
+          <select class="form-select form-select-sm" id="exCategory" required></select></div>
+        <div class="mb-2"><label class="form-label small mb-0" for="exAmount">Amount (KES)</label>
+          <input type="number" class="form-control form-control-sm" id="exAmount" min="0.01" step="0.01" required></div>
+        <div class="mb-2"><label class="form-label small mb-0" for="exMethod">Paid by</label>
+          <select class="form-select form-select-sm" id="exMethod"></select></div>
+        <div class="form-check mb-2" id="exDrawerWrap">
+          <input class="form-check-input" type="checkbox" id="exDrawer">
+          <label class="form-check-label small" for="exDrawer">Taken from my till drawer (open shift)</label>
+        </div>
+        <div class="mb-3"><label class="form-label small mb-0" for="exNote">Note</label>
+          <input type="text" class="form-control form-control-sm" id="exNote" maxlength="255" placeholder="e.g. November rent"></div>
+        <div class="alert alert-danger small py-2 d-none" id="exError" role="alert"></div>
+        <div class="alert alert-warning small py-2 d-none" id="exWarn" role="status"></div>
+        <button class="btn btn-primary btn-sm w-100" type="submit" id="exSave"><i class="fas fa-plus me-1"></i>Save expense</button>
+      </form>
+    </div></div>
+
+    <div class="card mt-3"><div class="card-body">
+      <h6 class="card-title">Monthly totals by category</h6>
+      <div id="exMonths" class="small text-muted">Loading…</div>
+    </div></div>
+  </div>
+
+  <div class="col-lg-8">
+    <form class="d-flex gap-2 align-items-end flex-wrap mb-2" id="exFilter">
+      <div><label class="form-label small mb-0" for="fFrom">From</label>
+        <input type="date" class="form-control form-control-sm" id="fFrom"></div>
+      <div><label class="form-label small mb-0" for="fTo">To</label>
+        <input type="date" class="form-control form-control-sm" id="fTo"></div>
+      <div><label class="form-label small mb-0" for="fCategory">Category</label>
+        <select class="form-select form-select-sm" id="fCategory"><option value="">All</option></select></div>
+      <div><label class="form-label small mb-0" for="fMethod">Paid by</label>
+        <select class="form-select form-select-sm" id="fMethod"><option value="">All</option></select></div>
+      <button class="btn btn-sm btn-outline-primary" type="submit"><i class="fas fa-filter me-1"></i>Filter</button>
+    </form>
+    <div class="card"><div class="table-responsive">
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Date</th><th>Category</th><th>Paid by</th><th class="text-end">Amount</th><th>Note</th>
+          <th>Recorded by</th><th></th></tr></thead>
+        <tbody id="exRows"><tr><td colspan="7" class="text-muted p-3">Loading…</td></tr></tbody>
+      </table>
+    </div></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const nice = s => String(s || '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
+  const methodLabel = {cash: 'Cash', mpesa: 'M-Pesa', bank: 'Bank'};
+  const $ = id => document.getElementById(id);
+  const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  let optionsFilled = false;
+
+  function fillOptions(categories, methods) {
+    if (optionsFilled) return;
+    optionsFilled = true;
+    const cat = categories.map(c => `<option value="${esc(c)}">${esc(nice(c))}</option>`).join('');
+    const met = methods.map(m => `<option value="${esc(m)}">${esc(methodLabel[m] || m)}</option>`).join('');
+    $('exCategory').innerHTML = cat;
+    $('fCategory').insertAdjacentHTML('beforeend', cat);
+    $('exMethod').innerHTML = met;
+    $('fMethod').insertAdjacentHTML('beforeend', met);
+    syncDrawer();
+  }
+  function syncDrawer() {
+    const cash = $('exMethod').value === 'cash';
+    $('exDrawerWrap').classList.toggle('d-none', !cash);
+    if (!cash) $('exDrawer').checked = false;
+  }
+
+  async function loadList() {
+    const p = new URLSearchParams({from: $('fFrom').value, to: $('fTo').value});
+    if ($('fCategory').value) p.set('category', $('fCategory').value);
+    if ($('fMethod').value) p.set('method', $('fMethod').value);
+    const r = await fetch('/reports/expenses?' + p);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { $('exRows').innerHTML = `<tr><td colspan="7" class="text-danger p-3">${esc(data.error || 'Could not load expenses.')}</td></tr>`; return; }
+    fillOptions(data.categories, data.methods);
+    $('exTotal').textContent = kes(data.total);
+    $('exRows').innerHTML = data.expenses.length ? data.expenses.map(e => `<tr>
+      <td class="text-nowrap">${esc(e.spent_on)}</td><td>${esc(nice(e.category))}</td>
+      <td>${esc(methodLabel[e.method] || e.method)}${e.shift_id ? ' <span class="badge text-bg-light border">drawer, shift #' + esc(e.shift_id) + '</span>' : ''}</td>
+      <td class="text-end">${kes(e.amount)}</td><td class="small">${esc(e.note)}</td>
+      <td class="small">${esc(e.created_by_name)}</td>
+      <td><button class="btn btn-sm btn-outline-danger" data-id="${esc(e.id)}" title="Delete"><i class="fas fa-trash-can"></i></button></td></tr>`).join('')
+      : '<tr><td colspan="7" class="text-muted p-3">No expenses in this range.</td></tr>';
+  }
+
+  async function loadMonths() {
+    const to = new Date(), from = new Date(to.getFullYear(), to.getMonth() - 5, 1);
+    const r = await fetch(`/reports/expenses?from=${iso(from)}&to=${iso(to)}`);
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { $('exMonths').textContent = data.error || 'Could not load totals.'; return; }
+    fillOptions(data.categories, data.methods);
+    $('exMonths').classList.remove('text-muted');
+    $('exMonths').innerHTML = data.by_month.length ? data.by_month.map(m => `
+      <div class="mb-2"><div class="d-flex justify-content-between fw-semibold"><span>${esc(m.month)}</span><span>${kes(m.total)}</span></div>
+      ${Object.entries(m.by_category).map(([c, v]) => `<div class="d-flex justify-content-between text-muted ps-2"><span>${esc(nice(c))}</span><span>${kes(v)}</span></div>`).join('')}</div>`).join('')
+      : '<span class="text-muted">No expenses in the last 6 months.</span>';
+  }
+
+  $('exMethod').addEventListener('change', syncDrawer);
+  $('exFilter').addEventListener('submit', e => { e.preventDefault(); loadList(); });
+  $('exForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('exError').classList.add('d-none'); $('exWarn').classList.add('d-none');
+    $('exSave').disabled = true;
+    const r = await fetch('/reports/expenses', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({spent_on: $('exDate').value, category: $('exCategory').value, amount: $('exAmount').value,
+        method: $('exMethod').value, note: $('exNote').value, pay_from_drawer: $('exDrawer').checked})});
+    const data = await r.json().catch(() => ({}));
+    $('exSave').disabled = false;
+    if (!r.ok) { $('exError').textContent = data.error || 'Could not save.'; $('exError').classList.remove('d-none'); return; }
+    if (data.warning) { $('exWarn').textContent = data.warning; $('exWarn').classList.remove('d-none'); }
+    $('exAmount').value = ''; $('exNote').value = ''; $('exDrawer').checked = false;
+    loadList(); loadMonths();
+  });
+  $('exRows').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-id]');
+    if (!b || !confirm('Delete this expense?')) return;
+    b.disabled = true;
+    const r = await fetch('/reports/expenses/' + encodeURIComponent(b.dataset.id), {method: 'DELETE'});
+    if (!r.ok) { alert((await r.json().catch(() => ({}))).error || 'Could not delete.'); b.disabled = false; return; }
+    loadList(); loadMonths();
+  });
+
+  const today = new Date(), from = new Date();
+  from.setDate(today.getDate() - 29);
+  $('exDate').value = iso(today); $('exDate').max = iso(today);
+  $('fFrom').value = iso(from); $('fTo').value = iso(today);
+  loadList();
+  loadMonths();
+})();
+</script>
+{% endblock %}

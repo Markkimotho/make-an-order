@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Reconciliation{% endblock %}
+{% block content %}
+<div class="d-flex align-items-end justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-scale-balanced me-2"></i>Reconciliation</h2>
+    <p class="text-muted mb-0 small">Does the cash counted match what the system expects? Expected cash is the
+      opening float plus cash sales plus cash in, less cash out. M-Pesa and bank lines show what is
+      confirmed and what still needs checking. Shifts are listed on the day they opened.</p>
+  </div>
+  <form class="d-flex gap-2 align-items-end" id="rcForm">
+    <div><label class="form-label small mb-0" for="rcDate">Day</label>
+      <input type="date" class="form-control form-control-sm" id="rcDate" required></div>
+    <button class="btn btn-sm btn-primary" type="submit"><i class="fas fa-rotate me-1"></i>Show</button>
+  </form>
+</div>
+
+<div class="alert alert-danger d-none" id="rcError" role="alert"></div>
+<p class="small text-muted" id="rcThreshold"></p>
+
+<div class="card mb-3"><div class="table-responsive">
+  <table class="table table-sm table-hover align-middle mb-0">
+    <thead><tr><th>Cashier</th><th class="text-end">Shifts</th><th class="text-end">Opening float</th>
+      <th class="text-end">Cash sales</th><th class="text-end">Cash in</th><th class="text-end">Cash out</th>
+      <th class="text-end">Expected</th><th class="text-end">Counted</th><th class="text-end">Variance</th>
+      <th class="text-end">M-Pesa sales</th><th class="text-end">M-Pesa confirmed</th><th class="text-end">M-Pesa to check</th>
+      <th class="text-end">Bank</th><th class="text-end">Bank to check</th></tr></thead>
+    <tbody id="rcRows"><tr><td colspan="14" class="text-muted p-3">Loading…</td></tr></tbody>
+    <tfoot id="rcFoot" class="fw-semibold"></tfoot>
+  </table>
+</div></div>
+
+<div class="card d-none" id="rcShift"><div class="card-body">
+  <div class="d-flex justify-content-between align-items-start">
+    <h6 class="card-title" id="rcShiftTitle"></h6>
+    <button type="button" class="btn-close" aria-label="Close" id="rcShiftClose"></button>
+  </div>
+  <div class="row g-3" id="rcShiftBody"></div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = n => Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const kes = n => 'KES ' + num(n);
+  const $ = id => document.getElementById(id);
+  const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const time = s => s ? new Date(s + 'Z').toLocaleTimeString('en-KE', {hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi'}) : '';
+
+  function variance(r) {
+    if (r.variance == null) return '<span class="text-muted">open</span>';
+    const cls = r.over_threshold ? 'text-danger fw-bold' : (Math.abs(r.variance) > 0.004 ? 'text-warning-emphasis' : 'text-success');
+    return `<span class="${cls}">${r.variance > 0 ? '+' : ''}${num(r.variance)}</span>`;
+  }
+  function cells(r) {
+    return `<td class="text-end">${num(r.opening_float)}</td><td class="text-end">${num(r.cash_sales)}</td>
+      <td class="text-end">${num(r.cash_in)}</td><td class="text-end">${num(r.cash_out)}</td>
+      <td class="text-end">${num(r.expected_cash)}</td>
+      <td class="text-end">${r.counted_cash == null ? '<span class="text-muted">-</span>' : num(r.counted_cash)}</td>
+      <td class="text-end">${variance(r)}</td>
+      <td class="text-end">${num(r.mpesa_system)}</td><td class="text-end">${num(r.mpesa_confirmed)}</td>
+      <td class="text-end ${r.mpesa_unverified || r.mpesa_unexplained ? 'text-warning-emphasis' : ''}">${num(r.mpesa_unverified)}${Math.abs(r.mpesa_unexplained) > 0.004 ? '<div class="small text-danger">' + num(r.mpesa_unexplained) + ' unexplained</div>' : ''}</td>
+      <td class="text-end">${num(r.bank_total)} <span class="small text-muted">(${esc(r.bank_refs)})</span></td>
+      <td class="text-end ${r.bank_unverified_count ? 'text-warning-emphasis' : ''}">${esc(r.bank_unverified_count)}</td>`;
+  }
+
+  async function load() {
+    const r = await fetch('/reports/reconciliation?date=' + encodeURIComponent($('rcDate').value));
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { $('rcError').textContent = data.error || 'Could not load.'; $('rcError').classList.remove('d-none'); return; }
+    $('rcError').classList.add('d-none');
+    $('rcShift').classList.add('d-none');
+    $('rcThreshold').textContent = `Variances over ${kes(data.variance_alert)} are in red and texted to the admins when the shift closes.`;
+    if (!data.cashiers.length) {
+      $('rcRows').innerHTML = '<tr><td colspan="14" class="text-muted p-3">No shifts opened on this day.</td></tr>';
+      $('rcFoot').innerHTML = '';
+      return;
+    }
+    $('rcRows').innerHTML = data.cashiers.map(c => `
+      <tr class="${c.over_threshold ? 'table-danger' : ''}"><td>${esc(c.cashier_name || 'Unknown')}</td>
+        <td class="text-end">${c.shifts.map(s => `<a href="#" data-shift="${esc(s.shift_id)}">#${esc(s.shift_id)}</a>`).join(' ')}
+          ${c.open_shifts ? '<span class="badge text-bg-info ms-1">' + esc(c.open_shifts) + ' open</span>' : ''}</td>
+        ${cells(c)}</tr>`).join('');
+    $('rcFoot').innerHTML = `<tr><td>All cashiers</td><td></td>${cells(data.totals)}</tr>`;
+  }
+
+  async function showShift(id) {
+    const r = await fetch('/reports/reconciliation/shift/' + encodeURIComponent(id));
+    const s = await r.json().catch(() => ({}));
+    if (!r.ok) { alert(s.error || 'Could not load the shift.'); return; }
+    $('rcShiftTitle').textContent = `Shift #${s.shift_id}: ${s.cashier_name || 'Unknown'}, ${time(s.opened_at)} to ${s.closed_at ? time(s.closed_at) : 'still open'}`;
+    const line = (l, v, cls) => `<div class="d-flex justify-content-between ${cls || ''}"><span>${l}</span><span>${v}</span></div>`;
+    const codes = s.mpesa_unverified_codes.map(c => `<li class="font-monospace">${esc(c.receipt)} ${kes(c.amount)}</li>`).join('');
+    const refs = s.bank_unverified_refs.map(c => `<li><span class="font-monospace">${esc(c.reference)}</span> ${esc(c.bank)} ${kes(c.amount)}</li>`).join('');
+    $('rcShiftBody').innerHTML = `
+      <div class="col-md-4"><h6 class="small text-uppercase text-muted">Cash drawer</h6>
+        ${line('Opening float', kes(s.opening_float))}${line('Cash sales', '+ ' + kes(s.cash_sales))}
+        ${line('Cash in', '+ ' + kes(s.cash_in))}${line('Cash out', '- ' + kes(s.cash_out))}
+        ${line('Expected', kes(s.expected_cash), 'fw-semibold border-top')}
+        ${line('Counted', s.counted_cash == null ? 'not closed' : kes(s.counted_cash))}
+        ${line('Variance', variance(s), 'fw-semibold')}</div>
+      <div class="col-md-4"><h6 class="small text-uppercase text-muted">M-Pesa</h6>
+        ${line('Sales marked M-Pesa', kes(s.mpesa_system))}${line('Confirmed by Safaricom', kes(s.mpesa_confirmed))}
+        ${line('Typed codes to check', kes(s.mpesa_unverified))}
+        ${line('Unexplained', kes(s.mpesa_unexplained), Math.abs(s.mpesa_unexplained) > 0.004 ? 'text-danger fw-semibold' : '')}
+        ${codes ? '<ul class="small mt-2 mb-0">' + codes + '</ul>' : ''}</div>
+      <div class="col-md-4"><h6 class="small text-uppercase text-muted">Bank</h6>
+        ${line('Bank references', esc(s.bank_refs) + ' (' + kes(s.bank_total) + ')')}
+        ${line('Not yet on statement', esc(s.bank_unverified_count) + ' (' + kes(s.bank_unverified) + ')')}
+        ${refs ? '<ul class="small mt-2 mb-0">' + refs + '</ul>' : ''}
+        ${s.mpesa_unverified || s.bank_unverified_count ? '<a class="small" href="{{ url_for('verify_payments_page') }}">Check them in Payments to verify</a>' : ''}</div>`;
+    $('rcShift').classList.remove('d-none');
+    $('rcShift').scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+
+  $('rcForm').addEventListener('submit', e => { e.preventDefault(); load(); });
+  $('rcRows').addEventListener('click', e => {
+    const a = e.target.closest('a[data-shift]');
+    if (!a) return;
+    e.preventDefault();
+    showShift(a.dataset.shift);
+  });
+  $('rcShiftClose').addEventListener('click', () => $('rcShift').classList.add('d-none'));
+  $('rcDate').value = iso(new Date());
+  load();
+})();
+</script>
+{% endblock %}

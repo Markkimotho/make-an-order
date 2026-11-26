@@ -415,7 +415,19 @@ def close_shift():
     session.pop(SHIFT_SESSION_KEY, None)
 
     z['shift'] = shift.to_dict()
+    _alert_cash_variance(shift)
     return jsonify({'message': 'Shift closed', 'z_report': z}), 200
+
+
+def _alert_cash_variance(shift):
+    """SMS the admins when the drawer is off by more than the business's
+    alert level. After the commit; never fails the close."""
+    try:
+        from services.reports.reconciliation import alert_variance
+        alert_variance(shift)
+    except Exception:
+        db.session.rollback()
+        logger.warning('cash variance SMS failed', exc_info=True)
 
 
 @pos_bp.route('/shift/cash_movement', methods=['POST'])
@@ -463,7 +475,9 @@ def _build_z_report(shift: Shift) -> dict:
             .group_by(Transaction.payment_method)
             .all())
     by_method = {m or 'unspecified': float(t) for m, t in rows}
-    cash_sales  = Decimal(str(by_method.get(PAY_CASH, 0)))
+    # Cash sales plus the cash part of split sales (services/reports).
+    from services.reports.reconciliation import cash_sales as _drawer_cash_sales
+    cash_sales  = _drawer_cash_sales(shift)
     mpesa_sales = Decimal(str(by_method.get(PAY_MPESA, 0)))
     card_sales  = Decimal(str(by_method.get(PAY_CARD, 0)))
 

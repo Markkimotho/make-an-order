@@ -701,6 +701,8 @@ def _register_core_routes(app):
     def reports_dashboard_page():
         return _safe_render('reports_dashboard.html', **get_user_context())
 
+    __import__('pages.finance', fromlist=['register']).register(app)   # expenses, reconciliation
+
     @app.route('/orders/<int:order_id>/receipt')
     @admin_required
     @feature_required('orders')
