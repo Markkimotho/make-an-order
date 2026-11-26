@@ -105,6 +105,19 @@ class Tenant(db.Model):
                                      server_default=db.true())
     shop_delivery        = db.Column(db.Boolean, nullable=False, default=True,
                                      server_default=db.true())
+    # WhatsApp chatbot (migration 0015): the business's own number on Meta's
+    # WhatsApp Cloud API. The phone number id routes Meta's webhooks; the
+    # token and app secret are encrypted and write-only on the settings page.
+    wa_phone_number_id   = db.Column(db.String(40), nullable=True, unique=True)
+    wa_business_account_id = db.Column(db.String(40), nullable=True)
+    wa_access_token      = deferred(db.Column("wa_access_token_encrypted", EncryptedString(1024),
+                                              nullable=True))
+    wa_app_secret        = deferred(db.Column("wa_app_secret_encrypted", EncryptedString(512),
+                                              nullable=True))
+    wa_verify_token      = db.Column(db.String(64), nullable=True)
+    wa_display_phone     = db.Column(db.String(32), nullable=True)
+    wa_bot_enabled       = db.Column(db.Boolean, nullable=False, default=False,
+                                     server_default=db.false())
 
     created_at          = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
 
@@ -159,6 +172,9 @@ class Tenant(db.Model):
             "whatsapp_number": self.whatsapp_number,
             "shop_open": bool(self.shop_open),
             "shop_delivery": bool(self.shop_delivery),
+            "wa_phone_number_id": self.wa_phone_number_id,
+            "wa_display_phone": self.wa_display_phone,
+            "wa_bot_enabled": bool(self.wa_bot_enabled),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

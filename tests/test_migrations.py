@@ -24,8 +24,10 @@ PHARMACY_TABLES = {"controlled_drug_ledger"}
 DISTRIBUTOR_TABLES = {"price_tiers", "tier_prices", "customer_phones", "container_movements"}
 INSTITUTION_TABLES = {"members", "campaigns", "campaign_items"}
 FINANCE_TABLES = {"expenses"}
+WHATSAPP_TABLES = {"whatsapp_chats", "whatsapp_messages"}
 HEAD_TABLES = ((BASELINE_TABLES - {"system_config"}) | {"tenants"} | BILLING_TABLES | STOCK_TABLES | SMS_TABLES
-               | PHARMACY_TABLES | DISTRIBUTOR_TABLES | INSTITUTION_TABLES | FINANCE_TABLES)
+               | PHARMACY_TABLES | DISTRIBUTOR_TABLES | INSTITUTION_TABLES | FINANCE_TABLES
+               | WHATSAPP_TABLES)
 
 
 @pytest.fixture

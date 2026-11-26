@@ -11,6 +11,7 @@ import secrets
 from datetime import datetime
 
 from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
+from sqlalchemy.exc import IntegrityError
 
 from auth.auth_middleware import superuser_required
 from models import DARAJA_ENVS, SHORTCODE_TYPES, SecretsKeyMissing, Tenant, db
@@ -52,7 +53,25 @@ def _context(tenant, errors=None, form=None):
         "shortcode_types": SHORTCODE_TYPES,
         "daraja_envs": DARAJA_ENVS,
         **_shop_context(tenant),
+        "wa": _whatsapp_context(tenant),
     }
+
+
+def _whatsapp_context(tenant):
+    """The chatbot's connection, for businesses with the online shop."""
+    from services import online_shop
+    from verticals.features import features_for
+    if "online_shop" not in features_for(tenant.vertical):
+        return None
+    state = {}
+    for field in ("wa_access_token", "wa_app_secret"):
+        try:
+            state[field] = bool(getattr(tenant, field))
+        except SecretsKeyMissing:
+            state[field] = True
+    return {"webhook_url": online_shop.absolute(f"/webhooks/whatsapp/{tenant.slug}"),
+            "verify_token": tenant.wa_verify_token, "token_set": state["wa_access_token"],
+            "secret_set": state["wa_app_secret"]}
 
 
 def _shop_context(tenant):
@@ -206,3 +225,120 @@ def rotate_token():
     db.session.commit()
     flash("Callback token changed. The old one keeps working for 24 hours.", "success")
     return redirect(url_for("settings.page"))
+
+
+# --- WhatsApp chatbot ------------------------------------------------------------
+
+WA_ID = re.compile(r"^\d{6,40}$")
+
+
+def _wa_feature(tenant):
+    from verticals.features import features_for
+    return "online_shop" in features_for(tenant.vertical)
+
+
+@settings_bp.route("/whatsapp", methods=["POST"])
+@superuser_required
+def save_whatsapp():
+    """The business's own WhatsApp Cloud API number. The token and app secret
+    are write-only; a blank field keeps what is stored. The bot can only be
+    switched on once the number id, token and app secret are all set."""
+    tenant = _tenant()
+    if not _wa_feature(tenant):
+        return redirect(url_for("settings.page"))
+    form = request.form
+    errors = []
+    number_id = _clean(form, "wa_phone_number_id")
+    account_id = _clean(form, "wa_business_account_id")
+    token = (form.get("wa_access_token") or "").strip()
+    app_secret = (form.get("wa_app_secret") or "").strip()
+    enable = form.get("wa_bot_enabled") == "on"
+    if number_id and not WA_ID.match(number_id):
+        errors.append("Phone number ID is the long number from Meta's WhatsApp API setup page "
+                      "(digits only), not the phone number.")
+    if account_id and not WA_ID.match(account_id):
+        errors.append("WhatsApp Business account ID must be digits only.")
+    if (token or app_secret) and not secrets_key_configured():
+        errors.append("The server has no TENANT_SECRETS_KEY, so the WhatsApp token cannot be "
+                      "saved. Ask the platform administrator.")
+    if number_id and Tenant.query.filter(Tenant.wa_phone_number_id == number_id,
+                                         Tenant.id != tenant.id).first() is not None:
+        errors.append("That WhatsApp phone number ID is already connected to another business.")
+    if errors:
+        return render_template("settings.html", **_context(tenant, errors, form)), 400
+
+    changed_number = number_id != tenant.wa_phone_number_id
+    tenant.wa_phone_number_id = number_id
+    tenant.wa_business_account_id = account_id
+    if token:
+        tenant.wa_access_token = token
+    if app_secret:
+        tenant.wa_app_secret = app_secret
+    if changed_number:
+        tenant.wa_display_phone = None
+    if not tenant.wa_verify_token:
+        tenant.wa_verify_token = secrets.token_urlsafe(24)
+    ready = bool(tenant.wa_phone_number_id and tenant.wa_access_token and tenant.wa_app_secret)
+    if enable and not ready:
+        errors.append("Enter the phone number ID, access token and app secret before "
+                      "switching the bot on.")
+    tenant.wa_bot_enabled = enable and ready
+    audit_service.log(session.get("user_id"), "tenant.whatsapp", "Tenant", tenant.id, None,
+                      {"wa_phone_number_id": number_id, "token_changed": bool(token),
+                       "secret_changed": bool(app_secret), "bot": bool(tenant.wa_bot_enabled)})
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        errors = ["That WhatsApp phone number ID is already connected to another business."]
+        return render_template("settings.html", **_context(_tenant(), errors, form)), 400
+    if errors:
+        return render_template("settings.html", **_context(_tenant(), errors, form)), 400
+    flash("WhatsApp settings saved." + (" The bot is on." if tenant.wa_bot_enabled else ""),
+          "success")
+    return redirect(url_for("settings.page") + "#whatsapp")
+
+
+@settings_bp.route("/whatsapp/check", methods=["POST"])
+@superuser_required
+def check_whatsapp():
+    """Ask Meta for the number's details: proves the id and token match."""
+    from services.whatsapp.client import WhatsAppClient, WhatsAppError
+    tenant = _tenant()
+    try:
+        details = WhatsAppClient(tenant).number_details()
+    except (WhatsAppError, SecretsKeyMissing) as e:
+        flash(f"WhatsApp did not accept the connection: {e}", "danger")
+        return redirect(url_for("settings.page") + "#whatsapp")
+    tenant.wa_display_phone = str(details.get("display_phone_number") or "")[:32] or None
+    db.session.commit()
+    flash(f"Connected to {details.get('verified_name') or 'your business'} "
+          f"({tenant.wa_display_phone or 'number'}).", "success")
+    return redirect(url_for("settings.page") + "#whatsapp")
+
+
+@settings_bp.route("/whatsapp/verify-token", methods=["POST"])
+@superuser_required
+def rotate_whatsapp_verify_token():
+    tenant = _tenant()
+    tenant.wa_verify_token = secrets.token_urlsafe(24)
+    audit_service.log(session.get("user_id"), "tenant.whatsapp_verify_token", "Tenant", tenant.id)
+    db.session.commit()
+    flash("New verify token. Enter it in Meta's webhook settings and verify again.", "success")
+    return redirect(url_for("settings.page") + "#whatsapp")
+
+
+@settings_bp.route("/whatsapp/disconnect", methods=["POST"])
+@superuser_required
+def disconnect_whatsapp():
+    tenant = _tenant()
+    tenant.wa_bot_enabled = False
+    tenant.wa_phone_number_id = None
+    tenant.wa_business_account_id = None
+    tenant.wa_access_token = None
+    tenant.wa_app_secret = None
+    tenant.wa_display_phone = None
+    audit_service.log(session.get("user_id"), "tenant.whatsapp_disconnect", "Tenant", tenant.id)
+    db.session.commit()
+    flash("WhatsApp disconnected. The bot no longer answers.", "success")
+    return redirect(url_for("settings.page") + "#whatsapp")

@@ -43,6 +43,7 @@ NAV = (
         Link("Point of sale", "pos_page", "fa-cash-register", "pos", POS),
         Link("Shift & cash drawer", "shift_page", "fa-business-time", "shift", POS),
         Link("Online orders", "orders_page", "fa-receipt", "orders", POS),
+        Link("WhatsApp chats", "whatsapp_chats_page", "fa-comments", "online_shop", POS),
     )),
     Group("Patients", "fa-user-injured", (
         Link("Patients", "patients_page", "fa-user-injured", "patients", PHARMACY),

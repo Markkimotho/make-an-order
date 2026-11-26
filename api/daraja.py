@@ -57,6 +57,17 @@ def _tenant_for(slug, token):
     return None
 
 
+def _whatsapp_notices():
+    """Tell WhatsApp customers their payment came in. Never fails the
+    callback: Daraja must get its answer."""
+    from services.whatsapp import service as whatsapp
+    try:
+        whatsapp.payment_notices()
+    except Exception:
+        db.session.rollback()
+        logger.exception("WhatsApp payment notices failed")
+
+
 def _source_allowed():
     allowed = current_app.config.get("DARAJA_ALLOWED_IPS") or ""
     ips = {ip.strip() for ip in allowed.split(",") if ip.strip()}
@@ -76,6 +87,7 @@ def stk_result(slug, token):
     payload = request.get_json(silent=True) or {}
     with tenant_scope(tenant_id):
         stk.handle_stk_callback(payload)
+        _whatsapp_notices()
     return jsonify(STK_ACCEPTED), 200
 
 
@@ -91,6 +103,7 @@ def c2b_confirmation(slug, token):
         return jsonify(C2B_CONFIRMED), 200
     with tenant_scope(tenant_id):
         stk.handle_c2b(payload)
+        _whatsapp_notices()
     return jsonify(C2B_CONFIRMED), 200
 
 

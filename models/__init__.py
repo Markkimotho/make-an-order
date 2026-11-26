@@ -36,6 +36,9 @@ from models.institution import CAMPAIGN_STATUSES, Campaign, CampaignItem, Member
 from models.pharmacy import ENTRY_TYPES, ControlledDrugEntry, RegisterIsAppendOnly  # noqa: F401
 from models.sms import SMS_STATUSES, SmsMessage  # noqa: F401
 from models.stock import Batch, ItemVariant, LineBatch  # noqa: F401
+from models.whatsapp import (  # noqa: F401
+    CHAT_MODES, MESSAGE_DIRECTIONS, MESSAGE_STATUSES, WhatsAppChat, WhatsAppMessage,
+)
 from models.types import EncryptedString, SecretsKeyMissing  # noqa: F401
 
 import auth.tenancy  # noqa: E402,F401  installs the session hooks

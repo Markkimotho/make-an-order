@@ -548,6 +548,15 @@ def notify(order):
     if customer is None:
         return None
     body = f"Your order {order.order_number} {what}. -{tenant.name if tenant else ''}".rstrip(" -")
+    # A WhatsApp customer who wrote in the last 24 hours hears on WhatsApp;
+    # anyone else (or if WhatsApp fails) gets the SMS.
+    from services.whatsapp.service import notify_order
+    try:
+        if notify_order(order, body):
+            return None
+    except Exception:
+        db.session.rollback()
+        logger.exception("WhatsApp order update for %s failed", order.order_number)
     return sms_service.send(customer.phone_number, body, kind,
                             dedupe_key=f"{kind}:{order.id}")
 

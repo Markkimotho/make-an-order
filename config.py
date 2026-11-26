@@ -76,6 +76,9 @@ class Config:
                              or os.environ.get("REDIS_URL") or "memory://")
     # Absolute base for links sent by SMS (pay links), e.g. https://app.example.co.ke
     PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL")
+    # Meta Graph API version for the WhatsApp Cloud API (each version lasts
+    # about two years; bump it here when Meta retires it).
+    WHATSAPP_GRAPH_VERSION = os.environ.get("WHATSAPP_GRAPH_VERSION", "v23.0")
 
     # Backups (services/backup.py, `flask backup ...`, Settings > Backup)
     BACKUP_DIR = os.environ.get("BACKUP_DIR", "backups")

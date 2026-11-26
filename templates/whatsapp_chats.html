@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}WhatsApp chats{% endblock %}
+
+{% block content %}
+<style>
+  .wa-wrap { display: grid; grid-template-columns: minmax(0, 20rem) minmax(0, 1fr); gap: 1rem; min-height: 60vh; }
+  .wa-list, .wa-thread { border: 1px solid var(--bs-border-color); border-radius: .8rem; background: var(--bs-body-bg); min-width: 0; }
+  .wa-list { overflow-y: auto; max-height: 75vh; }
+  .wa-chat { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--bs-border-color);
+             background: transparent; padding: .7rem .9rem; color: inherit; }
+  .wa-chat:hover, .wa-chat.active { background: var(--bs-tertiary-bg); }
+  .wa-chat .preview { font-size: .8rem; color: var(--bs-secondary-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wa-thread { display: flex; flex-direction: column; max-height: 75vh; }
+  .wa-messages { flex: 1; overflow-y: auto; padding: 1rem; background: #efeae2; }
+  .wa-bubble { max-width: 85%; padding: .45rem .7rem; border-radius: .6rem; margin-bottom: .4rem;
+               white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9rem; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+  .wa-bubble.in { background: #fff; color: #111; }
+  .wa-bubble.out { background: #d9fdd3; color: #111; margin-left: auto; }
+  .wa-bubble .meta { display: block; font-size: .7rem; color: #667781; margin-top: .2rem; text-align: right; }
+  .wa-compose { border-top: 1px solid var(--bs-border-color); padding: .6rem; }
+  @media (max-width: 767.98px) {
+    .wa-wrap { grid-template-columns: minmax(0, 1fr); }
+    .wa-wrap.open .wa-list { display: none; }
+    .wa-wrap:not(.open) .wa-thread { display: none; }
+  }
+</style>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <h2 class="mb-0"><i class="fas fa-comments me-2"></i>WhatsApp chats</h2>
+  <select id="show" class="form-select form-select-sm" style="width: auto;" aria-label="Which chats">
+    <option value="all">All chats</option>
+    <option value="waiting">Waiting for a reply</option>
+  </select>
+</div>
+<p class="small text-muted">The bot answers customers by itself. When one taps <strong>Talk to us</strong>, the chat
+  waits here for a person. Replies go out on your WhatsApp number. WhatsApp only lets you reply within
+  24 hours of the customer's last message.</p>
+
+{% if tenant and not tenant.wa_bot_enabled %}
+<div class="alert alert-warning py-2 small">The WhatsApp bot is not switched on.
+  {% if user_role == 'superuser' %}<a href="{{ url_for('settings.page') }}#whatsapp">Connect your number in Settings</a>.
+  {% else %}Ask the owner to connect it in Settings.{% endif %}</div>
+{% endif %}
+<div id="wrap" class="wa-wrap">
+  <div class="wa-list" id="list"><p class="text-muted small p-3 mb-0">Loading...</p></div>
+  <div class="wa-thread">
+    <div class="d-flex align-items-center gap-2 p-2 border-bottom">
+      <button class="btn btn-sm btn-light d-md-none" id="back" type="button" aria-label="Back to chats">
+        <i class="fas fa-arrow-left"></i></button>
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-semibold text-truncate" id="title">Pick a chat</div>
+        <div class="small text-muted" id="subtitle"></div>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary d-none" id="handBack" type="button">Hand back to bot</button>
+    </div>
+    <div class="wa-messages" id="messages"></div>
+    <form class="wa-compose d-none" id="compose">
+      <div id="windowNote" class="small text-danger mb-1 d-none"></div>
+      <div class="input-group">
+        <textarea id="body" class="form-control" rows="2" maxlength="4000" placeholder="Type a reply" aria-label="Reply"></textarea>
+        <button class="btn btn-success" type="submit" id="sendBtn"><i class="fas fa-paper-plane"></i><span class="d-none d-sm-inline ms-1">Send</span></button>
+      </div>
+      <div id="sendError" class="small text-danger mt-1"></div>
+    </form>
+  </div>
+</div>
+
+<script>
+window.WHATSAPP_CHATS_PAGE = true;
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const when = iso => iso ? new Date(iso + 'Z').toLocaleString([], {dateStyle: 'short', timeStyle: 'short'}) : '';
+  const $ = id => document.getElementById(id);
+  let current = null;
+
+  async function getJSON(url, opts) {
+    const r = await fetch(url, Object.assign({headers: {'Accept': 'application/json',
+                                                        'Content-Type': 'application/json'}}, opts || {}));
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('Error ' + r.status));
+    return data;
+  }
+
+  function badge(count) {
+    const el = document.getElementById('navChatsBadge');
+    if (!el) return;
+    el.textContent = count; el.classList.toggle('d-none', !count);
+  }
+
+  async function loadList() {
+    try {
+      const data = await getJSON('/whatsapp/chats?show=' + encodeURIComponent($('show').value));
+      badge(data.waiting);
+      if (!data.chats.length) {
+        $('list').innerHTML = '<p class="text-muted small p-3 mb-0">No chats yet. When customers message your '
+          + 'WhatsApp number, they show up here.</p>';
+        return;
+      }
+      $('list').innerHTML = data.chats.map(c => `
+        <button type="button" class="wa-chat ${c.id === current ? 'active' : ''}" data-id="${c.id}">
+          <div class="d-flex justify-content-between gap-2">
+            <strong class="text-truncate">${esc(c.profile_name || c.phone)}</strong>
+            ${c.needs_reply ? '<span class="badge bg-danger">Waiting</span>' : (c.mode === 'person' ? '<span class="badge bg-secondary">With staff</span>' : '')}
+          </div>
+          <div class="small text-muted">${esc(c.phone)} · ${esc(when(c.last_inbound_at))}</div>
+          ${c.last ? `<div class="preview">${c.last.direction === 'out' ? 'You: ' : ''}${esc(c.last.body)}</div>` : ''}
+        </button>`).join('');
+      $('list').querySelectorAll('.wa-chat').forEach(b =>
+        b.addEventListener('click', () => openChat(Number(b.dataset.id))));
+    } catch (e) {
+      $('list').innerHTML = `<p class="text-danger small p-3 mb-0">${esc(e.message)}</p>`;
+    }
+  }
+
+  async function openChat(id) {
+    current = id;
+    $('wrap').classList.add('open');
+    try {
+      const data = await getJSON('/whatsapp/chats/' + id);
+      const c = data.chat;
+      $('title').textContent = c.profile_name || c.phone;
+      $('subtitle').innerHTML = `<a href="tel:${esc(c.phone.replace(/\s/g, ''))}">${esc(c.phone)}</a>`
+        + (c.mode === 'person' ? ' · talking to staff' : ' · bot is answering');
+      $('handBack').classList.toggle('d-none', c.mode !== 'person');
+      $('messages').innerHTML = data.messages.map(m => `
+        <div class="wa-bubble ${m.direction === 'in' ? 'in' : 'out'}">${esc(m.body)}<span class="meta">${
+          m.direction === 'out' ? (m.staff ? 'Staff' : 'Bot') + ' · ' : ''}${esc(when(m.created_at))}${
+          m.status === 'failed' ? ' · <span class="text-danger">not sent: ' + esc(m.error) + '</span>' : ''}</span></div>`).join('')
+        || '<p class="text-muted small">No messages.</p>';
+      $('messages').scrollTop = $('messages').scrollHeight;
+      $('compose').classList.remove('d-none');
+      $('windowNote').classList.toggle('d-none', c.can_reply);
+      $('windowNote').textContent = c.can_reply ? '' :
+        'The customer last wrote more than 24 hours ago. WhatsApp will not deliver a reply; call them instead.';
+      $('body').disabled = $('sendBtn').disabled = !c.can_reply;
+      loadList();
+    } catch (e) {
+      $('messages').innerHTML = `<p class="text-danger small">${esc(e.message)}</p>`;
+    }
+  }
+
+  $('compose').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const body = $('body').value.trim();
+    if (!body || !current) return;
+    $('sendBtn').disabled = true; $('sendError').textContent = '';
+    try {
+      await getJSON(`/whatsapp/chats/${current}/reply`, {method: 'POST', body: JSON.stringify({body})});
+      $('body').value = '';
+      await openChat(current);
+    } catch (e) {
+      $('sendError').textContent = e.message;
+    } finally {
+      $('sendBtn').disabled = false;
+    }
+  });
+  $('handBack').addEventListener('click', async () => {
+    if (!current) return;
+    try {
+      await getJSON(`/whatsapp/chats/${current}/hand-back`, {method: 'POST'});
+      await openChat(current);
+    } catch (e) { $('sendError').textContent = e.message; }
+  });
+  $('back').addEventListener('click', () => { $('wrap').classList.remove('open'); current = null; loadList(); });
+  $('show').addEventListener('change', loadList);
+  loadList();
+  setInterval(() => { loadList(); if (current && !$('body').value) openChat(current); }, 15000);
+})();
+</script>
+{% endblock %}

@@ -18,7 +18,8 @@ from models import (AuditLog, CashMovement, Category, Customer, InventoryItem, I
                     InvoiceAdjustment, Payment, PaymentAllocation, PaymentIntent,
                     LoyaltyTransaction, Order, OrderItem, Prescription,
                     PrescriptionItem, PurchaseOrder, PurchaseOrderItem, Shift,
-                    StockMovement, Supplier, Transaction, TransactionItem, User, db)
+                    StockMovement, Supplier, Transaction, TransactionItem, User,
+                    WhatsAppChat, WhatsAppMessage, db)
 from services import stock
 from tests.test_migrations import HEAD_TABLES
 
@@ -149,6 +150,12 @@ def seed_tenant(tenant_id, mark, tag, phone_base):
                           checkout_request_id=f"ws_CO_INV_{tag}", status="pending",
                           result_desc=mark),
         ])
+        chat = WhatsAppChat(wa_id=f"254{phone_base[1:]}02", profile_name=mark,
+                            state={"name": mark}, mode="person", needs_reply=True)
+        db.session.add(chat)
+        db.session.flush()
+        db.session.add(WhatsAppMessage(chat_id=chat.id, direction="in", kind="text", body=mark,
+                                       status="received", wa_message_id=f"wamid.{tag}"))
         db.session.commit()
 
 

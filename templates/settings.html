@@ -155,6 +155,90 @@
   </script>
   {% endif %}
 
+  {% if wa %}
+  <div class="card mt-4" id="whatsapp"><div class="card-body">
+    <h2 class="h6"><i class="fab fa-whatsapp me-1 text-success"></i>WhatsApp chatbot
+      {% if t.wa_bot_enabled %}<span class="badge bg-success ms-1">on</span>{% else %}<span class="badge bg-secondary ms-1">off</span>{% endif %}
+    </h2>
+    <p class="small text-muted mb-2">Customers message your own WhatsApp number, browse your stock, order and pay
+      by M-Pesa without anyone at the counter. Orders land in Online orders; "talk to us" chats land in
+      WhatsApp chats. You need a WhatsApp Business number on Meta's Cloud API.</p>
+    <details class="small mb-3">
+      <summary>How to connect your number (about 20 minutes, once)</summary>
+      <ol class="mt-2 ps-3">
+        <li>Go to <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a>,
+          create a <strong>Business</strong> app and add the <strong>WhatsApp</strong> product.</li>
+        <li>Under WhatsApp &gt; API Setup, add your business phone number and verify it by SMS.
+          A number used in the WhatsApp Business app must be moved to the API, or connected with Meta's coexistence option.</li>
+        <li>Copy the <strong>Phone number ID</strong> and <strong>WhatsApp Business account ID</strong> into the boxes below.</li>
+        <li>In Meta Business Settings &gt; System users, create a system user, give it the app and your WhatsApp
+          account with full control, and generate a token with <code>whatsapp_business_messaging</code> and
+          <code>whatsapp_business_management</code>. Paste it as the access token (it does not expire).</li>
+        <li>In the app's Settings &gt; Basic, copy the <strong>App secret</strong> and paste it below. Save.</li>
+        <li>Under WhatsApp &gt; Configuration, enter the webhook URL and verify token shown below, verify,
+          and subscribe to <strong>messages</strong>.</li>
+        <li>Press <strong>Check connection</strong>, switch the bot on, and send your number "Hi" from another phone.</li>
+      </ol>
+      <p class="mb-0">On a shop server, the webhook needs the internet tunnel from the install guide
+        (or a VPS), and M-Pesa must be set up above for the bot to take payments.</p>
+    </details>
+    {% if t.wa_display_phone %}<p class="small mb-2">Connected number: <strong>{{ t.wa_display_phone }}</strong></p>{% endif %}
+    <form method="POST" action="{{ url_for('settings.save_whatsapp') }}" autocomplete="off">
+      <div class="row g-2">
+        <div class="col-sm-6">
+          <label class="form-label small" for="waNumberId">Phone number ID</label>
+          <input id="waNumberId" name="wa_phone_number_id" inputmode="numeric" class="form-control form-control-sm"
+                 value="{{ form.wa_phone_number_id or t.wa_phone_number_id or '' }}">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small" for="waAccountId">WhatsApp Business account ID</label>
+          <input id="waAccountId" name="wa_business_account_id" inputmode="numeric" class="form-control form-control-sm"
+                 value="{{ form.wa_business_account_id or t.wa_business_account_id or '' }}">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small" for="waToken">Access token
+            {% if wa.token_set %}<span class="badge bg-success">set</span>{% else %}<span class="badge bg-secondary">not set</span>{% endif %}</label>
+          <input id="waToken" name="wa_access_token" type="password" class="form-control form-control-sm"
+                 placeholder="{% if wa.token_set %}leave blank to keep{% endif %}" autocomplete="new-password">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small" for="waSecret">App secret
+            {% if wa.secret_set %}<span class="badge bg-success">set</span>{% else %}<span class="badge bg-secondary">not set</span>{% endif %}</label>
+          <input id="waSecret" name="wa_app_secret" type="password" class="form-control form-control-sm"
+                 placeholder="{% if wa.secret_set %}leave blank to keep{% endif %}" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="form-check form-switch mt-2">
+        <input class="form-check-input" type="checkbox" role="switch" name="wa_bot_enabled" id="waBot"
+               {% if t.wa_bot_enabled %}checked{% endif %}>
+        <label class="form-check-label small" for="waBot">The bot answers customers</label>
+      </div>
+      <button class="btn btn-primary btn-sm mt-2" type="submit">Save WhatsApp</button>
+    </form>
+    {% if t.wa_verify_token %}
+    <p class="small text-muted mt-3 mb-1">In Meta's app, under WhatsApp &gt; Configuration, set the webhook to:</p>
+    <code class="d-block small text-break mb-1">{{ wa.webhook_url }}</code>
+    <p class="small text-muted mb-1">Verify token:</p>
+    <code class="d-block small text-break mb-2">{{ wa.verify_token }}</code>
+    <p class="small text-muted mb-2">Then subscribe the webhook to <strong>messages</strong>.</p>
+    <div class="d-flex flex-wrap gap-2">
+      {% if t.wa_phone_number_id and wa.token_set %}
+      <form method="POST" action="{{ url_for('settings.check_whatsapp') }}">
+        <button class="btn btn-outline-primary btn-sm" type="submit">Check connection</button>
+      </form>
+      {% endif %}
+      <form method="POST" action="{{ url_for('settings.rotate_whatsapp_verify_token') }}">
+        <button class="btn btn-outline-secondary btn-sm" type="submit">New verify token</button>
+      </form>
+      <form method="POST" action="{{ url_for('settings.disconnect_whatsapp') }}"
+            onsubmit="return confirm('Disconnect WhatsApp? The bot stops answering.');">
+        <button class="btn btn-outline-danger btn-sm" type="submit">Disconnect</button>
+      </form>
+    </div>
+    {% endif %}
+  </div></div>
+  {% endif %}
+
   <h2 class="h6 mt-5">Give these URLs to Safaricom</h2>
   <p class="small text-muted mb-1">STK push results (sent automatically with every prompt):</p>
   <code class="d-block small text-break mb-2">{{ stk_url }}</code>

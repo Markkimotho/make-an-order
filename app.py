@@ -23,6 +23,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from public import limiter, public_bp
 from api.customers import customers_bp
 from api.daraja import daraja_bp
+from api.whatsapp_webhook import whatsapp_webhook_bp
+from api.whatsapp_chats import whatsapp_chats_bp
 from api.distributor import distributor_bp
 from api.institution import institution_bp
 from api.inventory import inventory_bp
@@ -211,6 +213,8 @@ def create_app(config_override=None):
     app.register_blueprint(pharmacy_bp, url_prefix='/pharmacy')
     app.register_blueprint(platform_bp, url_prefix='/platform')
     app.register_blueprint(daraja_bp, url_prefix='/api/payments/daraja')
+    app.register_blueprint(whatsapp_webhook_bp, url_prefix='/webhooks/whatsapp')
+    app.register_blueprint(whatsapp_chats_bp, url_prefix='/whatsapp')
     app.register_blueprint(settings_bp, url_prefix='/settings')
     app.register_blueprint(staff_bp, url_prefix='/staff')
     app.register_blueprint(distributor_bp, url_prefix='/distributor')
@@ -231,7 +235,7 @@ _BLUEPRINT_FEATURES = ((customers_bp, ('customers',)), (orders_bp, ('orders',)),
                        (inventory_bp, ('inventory',)), (reports_bp, ('finance',)),
                        (pos_bp, ('pos',)), (pharmacy_bp, ('pharmacy',)),
                        (distributor_bp, ('dukas',)), (institution_bp, ('campaigns',)),
-                       (staff_bp, ('staff',)))
+                       (staff_bp, ('staff',)), (whatsapp_chats_bp, ('online_shop',)))
 
 
 def _gate_blueprints():
@@ -442,7 +446,9 @@ def _register_cli(app):
                    .filter(Order.fulfillment_status.in_(("pending", "ready", "released")))
                    .distinct()}
                 | {tid for (tid,) in db.session.query(Campaign.tenant_id)
-                   .filter(Campaign.status == "open").distinct()})
+                   .filter(Campaign.status == "open").distinct()}
+                | {tid for (tid,) in db.session.query(Tenant.id)
+                   .filter(Tenant.wa_bot_enabled.is_(True))})
         totals = {}
         for tenant_id in tenant_ids:
             try:
@@ -452,6 +458,8 @@ def _register_cli(app):
                     counts.update({f"campaigns_{k}": v
                                    for k, v in close_due_campaigns().items()})
                     counts["pickup_codes"] = issue_pickup_codes()
+                    from services.whatsapp.service import payment_notices
+                    counts["whatsapp_notices"] = payment_notices()
             except Exception as e:                      # one business never stops the rest
                 db.session.rollback()
                 app.logger.error(f"payments sweep failed for tenant {tenant_id}: {e}")
@@ -579,6 +587,7 @@ def _register_core_routes(app):
         return render_template('customers.html', **get_user_context())
 
     __import__('pages.online_orders', fromlist=['register']).register(app)  # orders_page
+    __import__('pages.whatsapp_chats', fromlist=['register']).register(app)
 
     @app.route('/inventory-ui')
     @login_required
