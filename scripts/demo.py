@@ -152,7 +152,7 @@ def _pharmacy(app, tid, users):
         it = InventoryItem(name=name, price=D(price), cost_price=D(cost), reorder_level=reorder,
                            category_id=cats[cat].id, supplier_id=sup.id, markup_pct=D(markup),
                            price_mode="manual", is_drug=True,
-                           requires_prescription=(cat == "Antibiotics"),
+                           requires_prescription=(cat in ("Antibiotics", "Chronic care")),
                            reorder_quantity=reorder * 3)
         db.session.add(it)
         db.session.flush()
@@ -177,38 +177,49 @@ def _pharmacy(app, tid, users):
     pids = [p.id for p in patients]
 
     pharm = _client(app, tid, users[("nuru", "pharmacist")], "pharmacist")
-    _ok(pharm.post("/pharmacy/prescriptions", json={
+    rx_id = _ok(pharm.post("/pharmacy/prescriptions", json={
         "customer_id": pids[0], "doctor_name": "Dr. Otieno (KNH)", "prescriber_reg_no": "A-4471",
         "is_chronic": True, "duration_days": 30, "refills_remaining": 5,
         "items": [{"inventory_item_id": items["Metformin 500mg x60"], "quantity_prescribed": 1,
                    "dosage_instructions": "1 tablet twice a day after meals"},
                   {"inventory_item_id": items["Amlodipine 5mg x30"], "quantity_prescribed": 1,
-                   "dosage_instructions": "1 tablet in the morning"}]}))
+                   "dosage_instructions": "1 tablet in the morning"}]}))["prescription"]["id"]
 
     cashier = _client(app, tid, users[("nuru", "cashier")], "cashier")
     plan = (  # days ago, patient index or None, [(item, qty)], method, extra
-        (13, 0, [("Metformin 500mg x60", 1), ("Amlodipine 5mg x30", 1)], "cash", {}),
+        # Prescription medicines are dispensed by the pharmacist against the
+        # patient's prescription; the cashier sells over-the-counter lines.
+        (13, 0, [("Metformin 500mg x60", 1), ("Amlodipine 5mg x30", 1)], "cash",
+         {"dispense": True}),
         (12, None, [("Panadol Extra x24", 2), ("ORS sachet", 4)], "cash", {}),
         (10, 1, [("Zinc + Vit C x20", 1)], "mpesa", {"code": "SKA1B2C3D4"}),
         (9, None, [("Brufen 400mg x30", 1)], "cash", {}),
-        (7, 2, [("Zinc + Vit C x20", 2), ("Amlodipine 5mg x30", 1)], "bank",
+        (7, 2, [("Zinc + Vit C x20", 2), ("Brufen 400mg x30", 1)], "bank",
          {"bank": "Equity", "ref": "FT26318XK2"}),
         (5, None, [("Panadol Extra x24", 3)], "cash", {"discount_pct": 5}),
         (3, 1, [("Zinc + Vit C x20", 2), ("ORS sachet", 2)], "mpesa", {"code": "SKB9Z8Y7X6"}),
-        (1, 0, [("Metformin 500mg x60", 1)], "cash", {}),
+        (1, 0, [("Panadol Extra x24", 1)], "cash", {}),
         (0, None, [("Panadol Extra x24", 1), ("Brufen 400mg x30", 1)], "cash", {}),
         (0, 2, [("Zinc + Vit C x20", 1)], "bank", {"bank": "KCB", "ref": "KCB55120098"}),
     )
     for days_ago, who, lines, method, extra in plan:
-        _ok(cashier.post("/pos/shift/open", json={"opening_float": 2000}), 200, 201, 400)
+        role = "pharmacist" if extra.get("dispense") else "cashier"
+        seller, seller_id = (pharm if extra.get("dispense") else cashier), users[("nuru", role)]
+        _ok(seller.post("/pos/shift/open", json={"opening_float": 2000}), 200, 201, 400)
         body = {"customer_id": pids[who]} if who is not None else {}
-        txn = _ok(cashier.post("/pos/transaction/new", json=body))["transaction"]["id"]
+        txn = _ok(seller.post("/pos/transaction/new", json=body))["transaction"]["id"]
         for name, qty in lines:
             payload = {"inventory_item_id": items[name], "quantity": qty}
             if extra.get("discount_pct"):
                 payload["discount_pct"] = extra["discount_pct"]
-            _ok(cashier.post(f"/pos/transaction/{txn}/add_item", json=payload))
-        total = cashier.get(f"/pos/transaction/{txn}").get_json()["total"]
+            _ok(seller.post(f"/pos/transaction/{txn}/add_item", json=payload))
+        if extra.get("dispense"):
+            rx = _ok(pharm.get(f"/pharmacy/prescriptions/{rx_id}"))
+            _ok(pharm.post(f"/pharmacy/prescriptions/{rx_id}/dispense", json={
+                "transaction_id": txn,
+                "items": [{"prescription_item_id": it["id"], "quantity_dispensed": 1}
+                          for it in rx["items"]]}))
+        total = seller.get(f"/pos/transaction/{txn}").get_json()["total"]
         if method == "mpesa":
             _ok(cashier.post("/payments/manual", json={"transaction_id": txn,
                                                        "receipt": extra["code"],
@@ -218,19 +229,19 @@ def _pharmacy(app, tid, users):
                                                      "bank_name": extra["bank"],
                                                      "reference": extra["ref"],
                                                      "amount": total}))
-        _ok(cashier.post(f"/pos/transaction/{txn}/complete", json={"payment_method": method}))
+        _ok(seller.post(f"/pos/transaction/{txn}/complete", json={"payment_method": method}))
         when = datetime.utcnow() - timedelta(days=days_ago, hours=2)
         db.session.get(Transaction, txn).created_at = when
         db.session.commit()
         if days_ago:
             # Close the day's shift with a small variance now and then.
-            shift = Shift.query.filter_by(status="open").first()
+            shift = Shift.query.filter_by(status="open", cashier_id=seller_id).first()
             counted = None
             if shift is not None:
                 from services.reports.reconciliation import shift_report
                 expected = D(str(shift_report(shift)["expected_cash"]))
                 counted = expected - (D("150") if days_ago == 5 else 0)
-                _ok(cashier.post("/pos/shift/close", json={"closing_cash": float(counted)}))
+                _ok(seller.post("/pos/shift/close", json={"closing_cash": float(counted)}))
                 s = db.session.get(Shift, shift.id)
                 s.opened_at = when - timedelta(hours=6)
                 s.closed_at = when + timedelta(hours=4)
