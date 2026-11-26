@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Roles & permissions{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-table-cells me-2"></i>Roles &amp; permissions</h2>
+    <p class="text-muted mb-0 small">What each role can do. Read from the same rules the app checks
+      on every page and request, so this table is always current. Change a person's role on
+      <a href="{{ url_for('users_page') }}">Users &amp; roles</a>.</p>
+  </div>
+</div>
+
+<div class="card mb-4"><div class="table-responsive">
+  <table class="table table-sm align-middle mb-0" id="permMatrix">
+    <thead><tr>
+      <th>Can</th>
+      {% for role in matrix.roles %}<th class="text-center" data-role="{{ role.key }}">{{ role.label }}</th>{% endfor %}
+    </tr></thead>
+    <tbody>
+      {% for row in matrix.rows %}
+      <tr>
+        <td>{{ row.capability }}</td>
+        {% for role in matrix.roles %}
+        <td class="text-center" data-role="{{ role.key }}" data-allowed="{{ 'yes' if row.allowed[role.key] else 'no' }}">
+          {% if row.allowed[role.key] %}<i class="fas fa-check text-success" aria-label="yes"></i>{% else %}<span class="text-muted" aria-label="no">&middot;</span>{% endif %}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h6 class="mb-2">The roles</h6>
+  <dl class="row mb-0 small">
+    {% for role in matrix.roles %}
+    <dt class="col-sm-3">{{ role.label }} <span class="text-muted fw-normal">({{ role.key }})</span></dt>
+    <dd class="col-sm-9">{{ role.description }}</dd>
+    {% endfor %}
+  </dl>
+</div></div>
+{% endblock %}

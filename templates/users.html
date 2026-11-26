@@ -1,348 +1,197 @@
 {% extends "base.html" %}
-{% block title %}{% if user_role == 'superuser' %}User Management{% else %}Pending Approvals{% endif %}{% endblock %}
+{% block title %}Users &amp; roles{% endblock %}
 {% block content %}
+{% set is_owner = user_role == 'superuser' %}
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0"><i class="fas fa-shield-halved me-2"></i>Users &amp; roles</h2>
+    <p class="text-muted mb-0 small">
+      {% if is_owner %}Add staff, give each a role, approve sign-ups and unlock accounts.
+      {% else %}Approve new sign-ups and unlock accounts locked by failed sign-ins.{% endif %}
+      Five wrong passwords in a row lock an account for 15 minutes.
+    </p>
+  </div>
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('permissions_page') }}"><i class="fas fa-table-cells me-1"></i>What each role can do</a>
+</div>
 
-<h2 class="mb-1">{% if user_role == 'superuser' %}User Management{% else %}Pending Approvals{% endif %}</h2>
-<p class="lead mb-4">
-    {% if user_role == 'superuser' %}
-        Manage user roles, linked customers, and approve new registrations.
-    {% else %}
-        Review and approve new user registrations.
-    {% endif %}
-</p>
-
-<!-- ── Pending Approvals ─────────────────────────────────────── -->
 <div class="card mb-4">
-    <div class="card-header bg-warning">
-        <i class="fas fa-user-clock me-2"></i>Pending Approvals
-    </div>
-    <div class="card-body" style="padding: 0 !important;">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Email</th>
-                        <th>Phone</th>
-                        <th>Registered</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="pendingTableBody">
-                    <tr>
-                        <td colspan="5" style="text-align:center; color: var(--mac-text-muted); padding: 20px !important; font-style: italic;">
-                            Loading&hellip;
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
+  <div class="card-header"><i class="fas fa-user-clock me-2"></i>Waiting for approval</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Registered</th><th></th></tr></thead>
+      <tbody id="pendingRows"><tr><td colspan="5" class="text-muted p-3">Loading…</td></tr></tbody>
+    </table>
+  </div>
 </div>
 
-{% if user_role == 'superuser' %}
-
-<!-- ── Create User ────────────────────────────────────────────── -->
+{% if not is_owner %}
 <div class="card mb-4">
-    <div class="card-header bg-primary">
-        <i class="fas fa-user-plus me-2"></i>Create User
-    </div>
-    <div class="card-body">
-        <form id="createUserForm">
-            <div class="row g-3">
-                <div class="col-md-3">
-                    <label class="form-label">Email</label>
-                    <input type="email" class="form-control" id="newEmail" placeholder="user@example.com" required>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">Name</label>
-                    <input type="text" class="form-control" id="newName" placeholder="Full name (optional)">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">Phone</label>
-                    <input type="tel" class="form-control" id="newPhone" placeholder="+254…">
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label">Role</label>
-                    <select class="form-select" id="newRole">
-                        <option value="user">User</option>
-                        <option value="admin">Admin</option>
-                    </select>
-                </div>
-                <div class="col-md-3 d-flex align-items-end">
-                    <button type="submit" class="btn btn-primary w-100">
-                        <i class="fas fa-plus me-2"></i>Create User
-                    </button>
-                </div>
-            </div>
-        </form>
-    </div>
+  <div class="card-header"><i class="fas fa-lock me-2"></i>Locked accounts</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Locked until</th><th></th></tr></thead>
+      <tbody id="lockedRows"><tr><td colspan="5" class="text-muted p-3">Loading…</td></tr></tbody>
+    </table>
+  </div>
 </div>
-
-<!-- ── All Users ──────────────────────────────────────────────── -->
-<div class="card">
-    <div class="card-header bg-info">
-        <i class="fas fa-shield-halved me-2"></i>All Users
-    </div>
-    <div class="card-body" style="padding: 0 !important;">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover mb-0">
-                <thead>
-                    <tr>
-                        <th>Email</th>
-                        <th>Name</th>
-                        <th>Phone</th>
-                        <th>Role</th>
-                        <th>Status</th>
-                        <th>Joined</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="usersTableBody">
-                    <tr>
-                        <td colspan="7" style="text-align:center; color: var(--mac-text-muted); padding: 20px !important; font-style: italic;">
-                            Loading users&hellip;
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
 {% endif %}
 
-<!-- Toast -->
-<div class="toast-container position-fixed top-0 end-0 p-3">
-    <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-        <div class="toast-header">
-            <strong class="me-auto" id="toastHeader">Notification</strong>
-            <small>Just now</small>
-            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-        </div>
-        <div class="toast-body" id="toastBody"></div>
-    </div>
+{% if is_owner %}
+<div class="card mb-4">
+  <div class="card-header"><i class="fas fa-user-plus me-2"></i>Add a staff member</div>
+  <div class="card-body">
+    <form id="createUserForm" class="row g-2 align-items-end">
+      <div class="col-md-3"><label class="form-label small mb-1" for="newEmail">Email</label>
+        <input type="email" class="form-control form-control-sm" id="newEmail" required></div>
+      <div class="col-md-2"><label class="form-label small mb-1" for="newName">Name</label>
+        <input type="text" class="form-control form-control-sm" id="newName"></div>
+      <div class="col-md-2"><label class="form-label small mb-1" for="newPhone">Phone</label>
+        <input type="tel" class="form-control form-control-sm" id="newPhone" placeholder="07…"></div>
+      <div class="col-md-2"><label class="form-label small mb-1" for="newRole">Role</label>
+        <select class="form-select form-select-sm" id="newRole"></select></div>
+      <div class="col-md-2"><label class="form-label small mb-1" for="newPassword">Password</label>
+        <input type="password" class="form-control form-control-sm" id="newPassword" minlength="8"
+               placeholder="8+ characters" autocomplete="new-password"></div>
+      <div class="col-md-1 d-grid"><button type="submit" class="btn btn-sm btn-primary">Add</button></div>
+      <div class="col-12 small text-muted" id="newRoleHelp"></div>
+    </form>
+  </div>
 </div>
 
+<div class="card mb-4">
+  <div class="card-header"><i class="fas fa-users me-2"></i>All staff</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Role</th><th>Status</th>
+        <th>Last sign-in</th><th>Sign-in</th><th></th></tr></thead>
+      <tbody id="usersRows"><tr><td colspan="8" class="text-muted p-3">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card"><div class="card-body">
+  <h6 class="mb-2">Roles</h6>
+  <dl class="row mb-0 small" id="roleLegend"></dl>
+</div></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    const isSuperuser     = {{ 'true' if user_role == 'superuser' else 'false' }};
-    const SUPERUSER_EMAIL = '{{ "kimothomark93@gmail.com" }}';
+(function () {
+  const isOwner = {{ 'true' if is_owner else 'false' }};
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const when = iso => iso ? new Date(iso + 'Z').toLocaleString('en-KE',
+    {timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'short'}) : '';
+  const day = iso => iso ? new Date(iso + 'Z').toLocaleDateString('en-KE', {timeZone: 'Africa/Nairobi'}) : '';
+  const dash = '<span class="text-muted">-</span>';
+  const statusClass = {approved: 'bg-success', pending: 'bg-warning text-dark', rejected: 'bg-danger'};
+  let roles = [];
+  const roleLabel = key => (roles.find(r => r.key === key) || {label: key}).label;
 
-    const pendingTbody = document.getElementById('pendingTableBody');
-    const usersTbody   = isSuperuser ? document.getElementById('usersTableBody') : null;
-    const toastEl      = document.getElementById('liveToast');
-    const toastBody    = document.getElementById('toastBody');
-    const toastHdr     = document.getElementById('toastHeader');
-    const liveToast    = new bootstrap.Toast(toastEl);
+  async function call(url, opts) {
+    const r = await fetch(url, opts);
+    let body = {};
+    try { body = await r.json(); } catch (e) {}
+    if (!r.ok) alert(body.error || 'Something went wrong');
+    return r.ok;
+  }
+  const post = url => call(url, {method: 'POST'});
 
-    function showToast(msg, ok = true) {
-        toastBody.textContent = msg;
-        toastHdr.textContent  = ok ? 'Success' : 'Error';
-        toastEl.classList.remove('text-bg-success', 'text-bg-danger');
-        toastEl.classList.add(ok ? 'text-bg-success' : 'text-bg-danger');
-        liveToast.show();
+  function pendingRow(u) {
+    return `<tr><td>${u.name ? esc(u.name) : dash}</td><td>${esc(u.email)}</td>
+      <td>${u.phone_number ? esc(u.phone_number) : dash}</td><td class="small">${esc(day(u.created_at))}</td>
+      <td class="text-nowrap text-end">
+        <button class="btn btn-sm btn-success" data-act="approve" data-id="${u.id}">Approve</button>
+        <button class="btn btn-sm btn-outline-danger" data-act="reject" data-id="${u.id}">Reject</button></td></tr>`;
+  }
+  function lockedRow(u) {
+    return `<tr><td>${u.name ? esc(u.name) : dash}</td><td>${esc(u.email)}</td><td>${esc(roleLabel(u.role))}</td>
+      <td class="small text-danger">${esc(when(u.locked_until))}</td>
+      <td class="text-end"><button class="btn btn-sm btn-warning" data-act="unlock" data-id="${u.id}">
+        <i class="fas fa-lock-open me-1"></i>Unlock</button></td></tr>`;
+  }
+  function userRow(u) {
+    const opts = roles.map(r => `<option value="${esc(r.key)}" ${u.role === r.key ? 'selected' : ''}>${esc(r.label)}</option>`).join('');
+    const signin = u.locked
+      ? `<span class="badge bg-danger">Locked</span> <button class="btn btn-sm btn-warning ms-1" data-act="unlock" data-id="${u.id}">Unlock</button>`
+      : (u.failed_logins ? `<span class="small text-warning-emphasis">${u.failed_logins} failed</span>` : '<span class="small text-muted">OK</span>');
+    return `<tr data-id="${u.id}"><td>${u.name ? esc(u.name) : dash}</td><td class="small">${esc(u.email)}</td>
+      <td class="small">${u.phone_number ? esc(u.phone_number) : dash}</td>
+      <td><select class="form-select form-select-sm role-select" style="min-width:9rem">${opts}</select></td>
+      <td><span class="badge ${statusClass[u.status] || 'bg-secondary'}">${esc(u.status)}</span></td>
+      <td class="small text-nowrap">${u.last_login_at ? esc(when(u.last_login_at)) : '<span class="text-muted">never</span>'}</td>
+      <td class="text-nowrap">${signin}</td>
+      <td class="text-nowrap text-end">
+        <button class="btn btn-sm btn-primary" data-act="save" data-id="${u.id}">Save</button>
+        <button class="btn btn-sm btn-outline-danger" data-act="delete" data-id="${u.id}" data-email="${esc(u.email)}" aria-label="Delete">
+          <i class="fas fa-trash"></i></button></td></tr>`;
+  }
+  function fill(id, rows, render, cols, empty) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = rows.length ? rows.map(render).join('')
+      : `<tr><td colspan="${cols}" class="text-muted p-3">${empty}</td></tr>`;
+  }
+
+  async function loadRoles() {
+    const r = await fetch('/users/roles');
+    roles = r.ok ? await r.json() : [];
+    document.getElementById('roleLegend').innerHTML = roles.map(x =>
+      `<dt class="col-sm-3">${esc(x.label)}</dt><dd class="col-sm-9">${esc(x.description)}</dd>`).join('');
+    const sel = document.getElementById('newRole');
+    if (sel) {
+      sel.innerHTML = roles.filter(x => x.key !== 'superuser').map(x =>
+        `<option value="${esc(x.key)}" ${x.key === 'cashier' ? 'selected' : ''}>${esc(x.label)}</option>`).join('');
+      const help = () => { document.getElementById('newRoleHelp').textContent =
+        (roles.find(x => x.key === sel.value) || {}).description || ''; };
+      sel.addEventListener('change', help); help();
     }
+  }
+  async function load() {
+    const r = await fetch('/users/');
+    if (!r.ok) { fill('pendingRows', [], null, 5, 'Could not load.'); return; }
+    const users = await r.json();
+    fill('pendingRows', users.filter(u => u.status === 'pending'), pendingRow, 5, 'Nobody is waiting.');
+    fill('lockedRows', users.filter(u => u.locked), lockedRow, 5, 'No account is locked.');
+    if (isOwner) fill('usersRows', users, userRow, 8, 'No staff yet.');
+  }
 
-    function formatDate(iso) {
-        if (!iso) return '—';
-        return new Date(iso).toLocaleDateString();
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const id = b.dataset.id;
+    let ok = false;
+    b.disabled = true;
+    if (b.dataset.act === 'approve' || b.dataset.act === 'reject' || b.dataset.act === 'unlock') {
+      ok = await post(`/users/${id}/${b.dataset.act}`);
+    } else if (b.dataset.act === 'save') {
+      const role = b.closest('tr').querySelector('.role-select').value;
+      ok = await call(`/users/${id}`, {method: 'PUT', headers: {'Content-Type': 'application/json'},
+                                       body: JSON.stringify({role})});
+    } else if (b.dataset.act === 'delete') {
+      if (confirm(`Delete ${b.dataset.email}? This cannot be undone.`)) {
+        ok = await call(`/users/${id}`, {method: 'DELETE'});
+      }
     }
+    b.disabled = false;
+    if (ok) load();
+  });
 
-    function statusBadge(status) {
-        const map = {
-            approved: ['#2a7a2e', '#e8f5e9', 'Approved'],
-            pending:  ['#c57c00', '#fff8e1', 'Pending'],
-            rejected: ['#c62828', '#fdecea', 'Rejected'],
-        };
-        const [color, bg, label] = map[status] || ['#909090', '#f5f5f5', status];
-        return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${bg};color:${color};">${label}</span>`;
-    }
+  const form = document.getElementById('createUserForm');
+  if (form) form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const val = id => document.getElementById(id).value.trim();
+    const body = {email: val('newEmail'), name: val('newName'), phone_number: val('newPhone') || null,
+                  role: val('newRole')};
+    const pw = document.getElementById('newPassword').value;
+    if (pw) body.password = pw;
+    if (await call('/users/', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                               body: JSON.stringify(body)})) { form.reset(); loadRoles(); load(); }
+  });
 
-    // ── Pending rows ──────────────────────────────────────────────────
-    function renderPendingRow(u) {
-        return `
-        <tr data-uid="${u.id}">
-            <td style="font-size:12px;">${u.name || '<span style="color:var(--mac-text-muted);font-style:italic;">—</span>'}</td>
-            <td style="font-size:12px;">${u.email}</td>
-            <td style="font-size:12px;">${u.phone_number || '<span style="color:var(--mac-text-muted);">—</span>'}</td>
-            <td style="font-size:12px;white-space:nowrap;">${formatDate(u.created_at)}</td>
-            <td>
-                <button class="btn btn-sm approve-btn" data-uid="${u.id}"
-                    style="font-size:11px;background:linear-gradient(to bottom,#c8e6c9,#a5d6a7);
-                           border:1px solid #81c784;color:#1b5e20;margin-right:4px;">
-                    <i class="fas fa-check me-1"></i>Approve
-                </button>
-                <button class="btn btn-sm reject-btn" data-uid="${u.id}"
-                    style="font-size:11px;background:linear-gradient(to bottom,#fdecea,#f5c6cb);
-                           border:1px solid #ef9a9a;color:#7f0000;">
-                    <i class="fas fa-xmark me-1"></i>Reject
-                </button>
-            </td>
-        </tr>`;
-    }
-
-    // ── All-user rows (superuser only) ────────────────────────────────
-    function renderUserRow(u) {
-        const isProtected = u.email === SUPERUSER_EMAIL;
-        const roleOpts = ['superuser', 'admin', 'user'].map(r =>
-            `<option value="${r}" ${u.role === r ? 'selected' : ''}>${r.charAt(0).toUpperCase() + r.slice(1)}</option>`
-        ).join('');
-        return `
-        <tr data-uid="${u.id}">
-            <td style="font-size:12px;">${u.email}</td>
-            <td style="font-size:12px;">${u.name || '<span style="color:var(--mac-text-muted);font-style:italic;">—</span>'}</td>
-            <td style="font-size:12px;">${u.phone_number || '<span style="color:var(--mac-text-muted);">—</span>'}</td>
-            <td>
-                ${isProtected
-                    ? '<span class="role-badge role-super"><i class="fas fa-crown me-1"></i>Super</span>'
-                    : `<select class="form-select form-select-sm role-select" style="font-size:12px;min-width:90px;">${roleOpts}</select>`}
-            </td>
-            <td>${statusBadge(u.status)}</td>
-            <td style="font-size:12px;white-space:nowrap;">${formatDate(u.created_at)}</td>
-            <td>
-                ${isProtected
-                    ? '<span style="font-size:11px;color:var(--mac-text-muted);font-style:italic;">Protected</span>'
-                    : `<div class="d-flex gap-1">
-                           <button class="btn btn-sm btn-primary save-btn" data-uid="${u.id}" style="font-size:11px;">
-                               <i class="fas fa-floppy-disk me-1"></i>Save
-                           </button>
-                           <button class="btn btn-sm btn-outline-danger delete-user-btn" data-uid="${u.id}"
-                               data-email="${u.email}" style="font-size:11px;">
-                               <i class="fas fa-trash"></i>
-                           </button>
-                       </div>`}
-            </td>
-        </tr>`;
-    }
-
-    // ── Fetch and render ──────────────────────────────────────────────
-    async function fetchUsers() {
-        try {
-            const r = await fetch('/users/');
-            if (!r.ok) {
-                pendingTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px !important;color:var(--mac-text-muted);font-style:italic;">Failed to load.</td></tr>`;
-                return;
-            }
-            const users = await r.json();
-            const pending  = users.filter(u => u.status === 'pending');
-            const nonPending = users.filter(u => u.status !== 'pending');
-
-            // Pending table
-            if (!pending.length) {
-                pendingTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px !important;color:var(--mac-text-muted);font-style:italic;">No pending registrations.</td></tr>`;
-            } else {
-                pendingTbody.innerHTML = pending.map(renderPendingRow).join('');
-                attachApprovalListeners();
-            }
-
-            // All users table (superuser only)
-            if (isSuperuser && usersTbody) {
-                if (!users.length) {
-                    usersTbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:20px !important;color:var(--mac-text-muted);font-style:italic;">No users found.</td></tr>`;
-                } else {
-                    usersTbody.innerHTML = users.map(renderUserRow).join('');
-                    attachSaveListeners();
-                }
-            }
-        } catch (e) {
-            pendingTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:20px !important;color:var(--mac-text-muted);font-style:italic;">Error loading.</td></tr>`;
-        }
-    }
-
-    function attachApprovalListeners() {
-        pendingTbody.querySelectorAll('.approve-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const uid = btn.dataset.uid;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-                try {
-                    const r = await fetch(`/users/${uid}/approve`, { method: 'POST' });
-                    const result = await r.json();
-                    showToast(r.ok ? (result.message || 'Approved') : (result.error || 'Error'), r.ok);
-                    if (r.ok) fetchUsers();
-                } catch (e) { showToast('An error occurred.', false); }
-            });
-        });
-        pendingTbody.querySelectorAll('.reject-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const uid = btn.dataset.uid;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-                try {
-                    const r = await fetch(`/users/${uid}/reject`, { method: 'POST' });
-                    const result = await r.json();
-                    showToast(r.ok ? (result.message || 'Rejected') : (result.error || 'Error'), r.ok);
-                    if (r.ok) fetchUsers();
-                } catch (e) { showToast('An error occurred.', false); }
-            });
-        });
-    }
-
-    function attachSaveListeners() {
-        usersTbody && usersTbody.querySelectorAll('.save-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const uid    = btn.dataset.uid;
-                const row    = usersTbody.querySelector(`tr[data-uid="${uid}"]`);
-                const roleEl = row.querySelector('.role-select');
-                const payload = {};
-                if (roleEl) payload.role = roleEl.value;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving';
-                try {
-                    const r = await fetch(`/users/${uid}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                    });
-                    const result = await r.json();
-                    showToast(r.ok ? (result.message || 'Saved') : (result.error || 'Error'), r.ok);
-                } catch (e) { showToast('An error occurred.', false); }
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-floppy-disk me-1"></i>Save';
-            });
-        });
-
-        usersTbody && usersTbody.querySelectorAll('.delete-user-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                if (!confirm(`Delete user "${btn.dataset.email}"? This cannot be undone.`)) return;
-                try {
-                    const r = await fetch(`/users/${btn.dataset.uid}`, { method: 'DELETE' });
-                    const result = await r.json();
-                    showToast(r.ok ? (result.message || 'Deleted') : (result.error || 'Error'), r.ok);
-                    if (r.ok) fetchUsers();
-                } catch (e) { showToast('An error occurred.', false); }
-            });
-        });
-    }
-
-    // ── Create user form (superuser only) ─────────────────────────────
-    const createForm = document.getElementById('createUserForm');
-    if (createForm) {
-        createForm.addEventListener('submit', async function (e) {
-            e.preventDefault();
-            const email = document.getElementById('newEmail').value.trim();
-            const name  = document.getElementById('newName').value.trim();
-            const phone = document.getElementById('newPhone').value.trim();
-            const role  = document.getElementById('newRole').value;
-            try {
-                const r = await fetch('/users/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, name, phone_number: phone || null, role }),
-                });
-                const result = await r.json();
-                showToast(r.ok ? (result.message || 'User created.') : (result.error || 'Failed.'), r.ok);
-                if (r.ok) { this.reset(); fetchUsers(); }
-            } catch (e) { showToast('An error occurred.', false); }
-        });
-    }
-
-    // ── Init ──────────────────────────────────────────────────────────
-    fetchUsers();
-});
+  loadRoles().then(load);
+})();
 </script>
 {% endblock %}
