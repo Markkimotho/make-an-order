@@ -20,6 +20,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Pharmacy requirements: pharmacy-requirements.md
   - Install in the shop: install-local.md
   - Install on a VPS: install-vps.md
 
