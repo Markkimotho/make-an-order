@@ -716,8 +716,10 @@ def _po_or_404(po_id):
     return po, None
 
 
-def _next_po_number():
-    today = datetime.utcnow().strftime('%Y%m%d')
+def _next_po_number(now=None):
+    # The Nairobi date: between midnight and 03:00 the UTC date is yesterday.
+    from services.clock import today_nairobi
+    today = today_nairobi(now).strftime('%Y%m%d')
     prefix = f'PO-{today}-'
     last = (PurchaseOrder.query
             .filter(PurchaseOrder.po_number.like(f'{prefix}%'))

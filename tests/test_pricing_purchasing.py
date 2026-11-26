@@ -603,3 +603,10 @@ def test_purchase_orders_page_has_draft_and_pdf(app):
     r = client_as(app, "stock_clerk").get("/purchase-orders-ui")
     assert r.status_code == 200
     assert b"draft_from_low_stock" in r.data and b".pdf" in r.data
+
+
+def test_po_number_uses_the_nairobi_date(app):
+    from datetime import datetime
+    from api.inventory import _next_po_number
+    # 22:30 UTC on 30 Nov is 01:30 on 1 Dec in Nairobi.
+    assert _next_po_number(datetime(2026, 11, 30, 22, 30)).startswith("PO-20261201-")
