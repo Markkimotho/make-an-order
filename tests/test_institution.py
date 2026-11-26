@@ -351,6 +351,11 @@ def test_failed_pickup_sms_gets_a_new_code(app, school, client, sms_outbox, logi
 def test_downgrade_refuses_before_dropping_member_data(app, school):
     from flask_migrate import downgrade
     from sqlalchemy import inspect
+    # End the test's transaction first: on MySQL an open transaction that has
+    # read a table holds its metadata lock, and the downgrade's ALTER TABLE
+    # would wait for it forever.
+    db.session.commit()
+    db.session.remove()
     with pytest.raises(SystemExit):              # flask_migrate reports the RuntimeError, exits 1
         downgrade(revision="0009_distributor")
     assert "members" in inspect(db.engine).get_table_names()
