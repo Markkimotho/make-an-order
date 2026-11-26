@@ -27,7 +27,13 @@ APIS = {  # an API URL per gated blueprint -> feature
 
 
 def test_matrix_is_complete_and_pharmacy_only_features_stay_pharmacy():
-    assert set(VERTICAL_FEATURES) == {"pharmacy", "distributor", "institution"}
+    from models import VERTICALS
+    assert set(VERTICAL_FEATURES) == set(VERTICALS)
+    for general in ("shop", "supermarket", "hardware", "salon", "restaurant", "agrovet",
+                    "electronics", "cosmetics"):
+        f = features_for(general)
+        assert {"pos", "online_shop", "finance", "staff"} <= f
+        assert not f & {"patients", "pharmacy", "recalls", "dukas", "campaigns"}
     for feature in ("patients", "pharmacy", "recalls"):
         assert [v for v, f in VERTICAL_FEATURES.items() if feature in f] == ["pharmacy"]
     shared = {"discounts", "purchasing", "pricing", "finance", "expenses", "staff", "activity",
@@ -123,7 +129,8 @@ def test_signup_and_landing_show_what_each_vertical_includes(client):
     for text in (register, landing):
         assert "Batch, expiry and recall tracking" in text
         assert "Dukas on credit with limits and deni aging" in text
-    assert "Salon" not in landing and "Restaurant" not in landing
+    # Any kind of shop, not only the three specialised types.
+    assert "Salon / Barber / Spa" in landing and "Any other shop" in landing
 
 
 def test_staff_stock_lookup_has_no_order_cart(app, login_as):

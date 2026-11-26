@@ -333,7 +333,8 @@ class Customer(TenantMixin, db.Model):
         }
 
 
-ORDER_CHANNELS = ('staff', 'public_link')
+# shop: the public online shop; whatsapp: the same, sent on from WhatsApp.
+ORDER_CHANNELS = ('staff', 'public_link', 'shop', 'whatsapp')
 FULFILLMENT_STATUSES = ('pending', 'ready', 'dispatched', 'collected', 'released',
                         'restock_needed', 'cancelled')
 

@@ -107,6 +107,33 @@ BUSINESS_CONFIGS = {
         'seed':        'general',
     },
 }
+_GENERAL_INCLUDES = ['Point of sale with M-Pesa, bank and cash',
+                     'Online shop and WhatsApp orders paid by M-Pesa',
+                     'Stock, low-stock alerts and purchase orders',
+                     'Markup pricing, daily sales and profit',
+                     'Cash reconciliation, staff roles and activity log']
+for _slug, _label, _icon, _color, _tagline, _seed in (
+        ('shop', 'Any other shop', 'fa-store', '#6c757d',
+         'Any retail business', 'general'),
+        ('supermarket', 'Supermarket / Minimart', 'fa-cart-shopping', '#0d6efd',
+         'Groceries · FMCG · Expiry', 'supermarket'),
+        ('hardware', 'Hardware', 'fa-screwdriver-wrench', '#fd7e14',
+         'Building · Tools · Trade accounts', 'hardware'),
+        ('salon', 'Salon / Barber / Spa', 'fa-scissors', '#d63384',
+         'Services · Products · Stylists', 'salon'),
+        ('restaurant', 'Restaurant / Café', 'fa-utensils', '#dc3545',
+         'Menu · Takeaway · Delivery', 'restaurant'),
+        ('agrovet', 'Agrovet', 'fa-seedling', '#2e7d32',
+         'Seeds · Feeds · Vet drugs · Expiry', 'general'),
+        ('electronics', 'Electronics / Phones', 'fa-mobile-screen', '#20c997',
+         'Phones · Accessories · Repairs', 'general'),
+        ('cosmetics', 'Cosmetics / Beauty shop', 'fa-spray-can-sparkles', '#e83e8c',
+         'Beauty · Skincare · Fragrance', 'general')):
+    BUSINESS_CONFIGS[_slug] = {'label': _label, 'icon': _icon, 'color': _color,
+                               'tagline': _tagline,
+                               'description': f'{_label}: sell at the counter and online, '
+                                              'with stock, pricing and money in one place.',
+                               'includes': list(_GENERAL_INCLUDES), 'seed': _seed}
 for _vertical, _config in BUSINESS_CONFIGS.items():
     _config['features'] = VERTICAL_FEATURES[_vertical]
 assert set(BUSINESS_CONFIGS) == set(VERTICALS)

@@ -42,7 +42,7 @@ def test_slug_is_unique(app):
 
 def test_vertical_is_validated(app):
     with pytest.raises(ValueError):
-        Tenant(name="X", slug="x", vertical="supermarket")
+        Tenant(name="X", slug="x", vertical="spaceship")
 
 
 @pytest.mark.parametrize("status,ends,expected", [

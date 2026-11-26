@@ -21,7 +21,11 @@ NAMING_CONVENTION = {
 
 db = SQLAlchemy(metadata=MetaData(naming_convention=NAMING_CONVENTION))
 
-VERTICALS = ("pharmacy", "distributor", "institution")
+# Business types. Three have their own extras (pharmacy, distributor,
+# institution); the rest run the general shop feature set
+# (verticals/features.py) with their own label, icon and starter catalogue.
+VERTICALS = ("pharmacy", "distributor", "institution", "shop", "supermarket", "hardware",
+             "salon", "restaurant", "agrovet", "electronics", "cosmetics")
 SUBSCRIPTION_STATUSES = ("trial", "active", "past_due", "cancelled")
 SHORTCODE_TYPES = ("till", "paybill")
 DARAJA_ENVS = ("sandbox", "production")
@@ -94,6 +98,13 @@ class Tenant(db.Model):
     cash_variance_alert  = db.Column(db.Numeric(12, 2), nullable=False, default=500,
                                      server_default="500")
     session_idle_minutes = db.Column(db.Integer, nullable=False, default=30, server_default="30")
+    # Online shop (migration 0014): the public /o/<slug>/shop page and the
+    # WhatsApp number customers order through (2547XXXXXXXX).
+    whatsapp_number      = db.Column(db.String(15), nullable=True)
+    shop_open            = db.Column(db.Boolean, nullable=False, default=True,
+                                     server_default=db.true())
+    shop_delivery        = db.Column(db.Boolean, nullable=False, default=True,
+                                     server_default=db.true())
 
     created_at          = db.Column(db.DateTime, server_default=db.func.now(), nullable=False)
 
@@ -145,6 +156,9 @@ class Tenant(db.Model):
             "price_rounding": self.price_rounding,
             "cash_variance_alert": float(self.cash_variance_alert or 0),
             "session_idle_minutes": self.session_idle_minutes,
+            "whatsapp_number": self.whatsapp_number,
+            "shop_open": bool(self.shop_open),
+            "shop_delivery": bool(self.shop_delivery),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

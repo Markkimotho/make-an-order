@@ -53,7 +53,7 @@ def test_signup_same_business_name_gets_next_slug(client, app):
 
 @pytest.mark.parametrize("field,value,message", [
     ("email", "", "All fields are required"),
-    ("vertical", "supermarket", "Choose a type of business"),
+    ("vertical", "spaceship", "Choose a type of business"),
     ("password", "short", "at least 8 characters"),
     ("phone_number", "+25756098389", "Kenyan mobile number"),
 ])

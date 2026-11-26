@@ -33,14 +33,21 @@ ALL_FEATURES = frozenset({
     "members",      # institution: students or houses
     "orders",       # remote orders from public links
     "backup",       # backup and restore
+    "online_shop",  # public shop page and WhatsApp ordering
 })
 
 _COUNTER = {"pos", "shift", "discounts", "inventory", "batches", "purchasing", "pricing",
-            "finance", "expenses", "staff", "activity", "customers", "orders", "backup"}
+            "finance", "expenses", "staff", "activity", "customers", "orders", "backup",
+            "online_shop"}
+
+# Every business type without its own extras runs the general shop set.
+GENERAL_TYPES = ("shop", "supermarket", "hardware", "salon", "restaurant", "agrovet",
+                 "electronics", "cosmetics")
 
 VERTICAL_FEATURES = {
     "pharmacy": frozenset(_COUNTER | {"recalls", "patients", "pharmacy"}),
     "distributor": frozenset(_COUNTER | {"dukas"}),
+    **{name: frozenset(_COUNTER) for name in GENERAL_TYPES},
     "institution": frozenset({"inventory", "purchasing", "pricing", "finance", "expenses",
                               "staff", "activity", "campaigns", "members", "orders", "backup"}),
 }
