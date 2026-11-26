@@ -42,7 +42,7 @@ NAV = (
     Group("Sell", "fa-cash-register", (
         Link("Point of sale", "pos_page", "fa-cash-register", "pos", POS),
         Link("Shift & cash drawer", "shift_page", "fa-business-time", "shift", POS),
-        Link("Online orders", "orders_page", "fa-receipt", "orders", ADMIN),
+        Link("Online orders", "orders_page", "fa-receipt", "orders", POS),
     )),
     Group("Patients", "fa-user-injured", (
         Link("Patients", "patients_page", "fa-user-injured", "patients", PHARMACY),

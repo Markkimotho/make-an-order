@@ -139,10 +139,13 @@ def pay_page(slug, pay_token):
     from verticals.institution import service as institution
     instalments, minimum = institution.instalment_terms(invoice)
     db.session.commit()
+    from services import online_shop
+    order, _ = online_shop.order_for_token(pay_token)
     return render_template("public/pay.html", business=g.public_business_name,
                            invoice=_public_invoice(invoice), lines=_lines(invoice),
                            slug=slug, pay_token=pay_token, instalments=instalments,
-                           min_instalment=minimum)
+                           min_instalment=minimum,
+                           order_url=online_shop.order_path(slug, invoice) if order else None)
 
 
 @public_bp.route("/<slug>/pay/<pay_token>/stk", methods=["POST"])

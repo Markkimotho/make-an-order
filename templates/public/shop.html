@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#0f5132">
+  <title>{{ business }} · Shop online</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <style>
+    :root { --brand: #0f5132; --brand-soft: #e8f3ee; --ink: #1d2327; --muted: #6b7378; --line: #e5e8eb; }
+    html, body { overflow-x: hidden; }
+    body { background: #f4f6f8; color: var(--ink); padding-bottom: 6rem; -webkit-tap-highlight-color: transparent; }
+    .wrap { max-width: 72rem; margin: 0 auto; padding: 0 .75rem; }
+    .shop-head { background: var(--brand); color: #fff; padding: .75rem 0 .6rem; position: sticky; top: 0; z-index: 1020;
+                 box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+    .shop-name { font-size: 1.05rem; font-weight: 700; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .shop-sub { font-size: .75rem; opacity: .85; }
+    .search { position: relative; margin-top: .55rem; }
+    .search i { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--muted); }
+    .search input { padding-left: 2.2rem; border-radius: 2rem; border: 0; height: 2.6rem; font-size: 1rem; }
+    .chips { display: flex; gap: .4rem; overflow-x: auto; padding: .7rem 0 .3rem; scrollbar-width: none; max-width: 100%; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { flex: 0 0 auto; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 2rem;
+            padding: .35rem .85rem; font-size: .85rem; white-space: nowrap; }
+    .chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; padding: .4rem 0 1rem; }
+    @media (min-width: 576px) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .9rem; } }
+    .card-p { background: #fff; border-radius: .9rem; border: 1px solid var(--line); padding: .7rem; display: flex;
+              flex-direction: column; min-width: 0; }
+    .tile { background: var(--brand-soft); color: var(--brand); border-radius: .7rem; aspect-ratio: 4 / 3; display: flex;
+            align-items: center; justify-content: center; font-size: 1.9rem; margin-bottom: .55rem; }
+    .p-name { font-size: .9rem; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2;
+              -webkit-box-orient: vertical; overflow: hidden; min-height: 2.25rem; overflow-wrap: anywhere; }
+    .p-unit { font-size: .75rem; color: var(--muted); }
+    .p-price { font-weight: 700; font-variant-numeric: tabular-nums; margin: .25rem 0 .1rem; }
+    .stock { font-size: .7rem; font-weight: 600; }
+    .stock.in { color: #198754; } .stock.few { color: #b35c00; }
+    .p-foot { margin-top: auto; padding-top: .5rem; }
+    .btn-add { width: 100%; border-radius: 2rem; font-weight: 600; background: var(--brand); border-color: var(--brand); }
+    .btn-add:hover, .btn-add:focus { background: #0b3d26; border-color: #0b3d26; }
+    .stepper { display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--brand);
+               border-radius: 2rem; overflow: hidden; }
+    .stepper button { border: 0; background: var(--brand-soft); color: var(--brand); width: 2.3rem; height: 2.1rem; font-size: 1rem; }
+    .stepper span { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .cart-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1030; padding: .6rem .75rem calc(.6rem + env(safe-area-inset-bottom));
+                background: #fff; box-shadow: 0 -2px 12px rgba(0,0,0,.12); }
+    .cart-bar .btn { border-radius: 2rem; font-weight: 700; background: var(--brand); border-color: var(--brand); }
+    .wa-float { position: fixed; right: .9rem; bottom: 5.2rem; z-index: 1031; width: 3.3rem; height: 3.3rem; border-radius: 50%;
+                background: #25d366; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.7rem;
+                box-shadow: 0 4px 12px rgba(0,0,0,.25); text-decoration: none; }
+    .wa-float:hover { color: #fff; background: #1ebe5b; }
+    .offcanvas.offcanvas-bottom.cart-sheet { height: 92vh; border-top-left-radius: 1rem; border-top-right-radius: 1rem; }
+    .line { display: flex; align-items: center; gap: .6rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }
+    .line-name { flex: 1 1 auto; min-width: 0; font-size: .9rem; overflow-wrap: anywhere; }
+    .line .stepper { flex: 0 0 auto; }
+    .amount { font-variant-numeric: tabular-nums; }
+    .fulfil .btn { border-radius: 2rem; }
+    .btn-wa { background: #25d366; border-color: #25d366; color: #fff; font-weight: 700; border-radius: 2rem; }
+    .btn-wa:hover { background: #1ebe5b; color: #fff; }
+    .btn-pay { border-radius: 2rem; font-weight: 700; }
+    .size-btn { display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left; }
+    .empty { text-align: center; color: var(--muted); padding: 2.5rem 1rem; }
+  </style>
+</head>
+<body>
+<header class="shop-head">
+  <div class="wrap">
+    <div class="d-flex align-items-center gap-2">
+      <div class="flex-grow-1" style="min-width: 0;">
+        <p class="shop-name">{{ business }}</p>
+        <div class="shop-sub">Order online. Pay with M-Pesa.{% if delivery %} Pickup or delivery.{% else %} Pickup at the shop.{% endif %}</div>
+      </div>
+    </div>
+    <div class="search">
+      <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+      <input id="q" type="search" class="form-control" placeholder="Search products" aria-label="Search products" autocomplete="off">
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="chips" class="chips" role="tablist" aria-label="Categories"></div>
+  <div id="lastOrder" class="alert alert-light border small py-2 d-none" role="status"></div>
+  {% if rx_note %}
+  <div class="alert alert-info small py-2 mb-2"><i class="fas fa-prescription-bottle-medical me-1"></i>
+    Prescription medicines are not sold online. Ask the pharmacist{% if whatsapp %} on WhatsApp{% endif %} or visit us.</div>
+  {% endif %}
+  <div id="grid" class="grid" aria-live="polite"></div>
+  <div id="empty" class="empty d-none"></div>
+</main>
+
+{% if chat_url %}
+<a class="wa-float" href="{{ chat_url }}" target="_blank" rel="noopener" aria-label="Chat on WhatsApp" title="Chat on WhatsApp">
+  <i class="fab fa-whatsapp"></i></a>
+{% endif %}
+
+<div id="cartBar" class="cart-bar d-none">
+  <div class="wrap px-0">
+    <button id="openCart" class="btn btn-primary btn-lg w-100 d-flex justify-content-between align-items-center" type="button">
+      <span><i class="fas fa-basket-shopping me-2"></i><span id="barCount">0 items</span></span>
+      <span class="amount" id="barTotal">KES 0.00</span>
+    </button>
+  </div>
+</div>
+
+<div class="offcanvas offcanvas-bottom cart-sheet" tabindex="-1" id="cart" aria-labelledby="cartTitle">
+  <div class="offcanvas-header border-bottom">
+    <h2 class="offcanvas-title h5" id="cartTitle">Your order</h2>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <div class="wrap px-0" style="max-width: 36rem;">
+      <div id="lines"></div>
+      <div class="d-flex justify-content-between fw-bold fs-5 my-3"><span>Total</span><span class="amount" id="total">KES 0.00</span></div>
+      <div id="quoteMsg" class="small text-danger mb-2" role="alert"></div>
+
+      <form id="checkout" novalidate
+            data-order-url="{{ url_for('public.shop_order', slug=slug) }}"
+            data-quote-url="{{ url_for('public.shop_quote', slug=slug) }}">
+        <div class="mb-2">
+          <label for="name" class="form-label small mb-1">Your name</label>
+          <input id="name" name="name" class="form-control form-control-lg" autocomplete="name" maxlength="80" required>
+        </div>
+        <div class="mb-2">
+          <label for="phone" class="form-label small mb-1">Phone (M-Pesa)</label>
+          <input id="phone" name="phone" type="tel" inputmode="tel" class="form-control form-control-lg"
+                 autocomplete="tel" placeholder="0712 345 678" required>
+        </div>
+        <div class="fulfil btn-group w-100 my-2" role="group" aria-label="Pickup or delivery">
+          <input type="radio" class="btn-check" name="fulfilment" id="fPickup" value="pickup" checked>
+          <label class="btn btn-outline-success" for="fPickup"><i class="fas fa-store me-1"></i>Pickup</label>
+          {% if delivery %}
+          <input type="radio" class="btn-check" name="fulfilment" id="fDelivery" value="delivery">
+          <label class="btn btn-outline-success" for="fDelivery"><i class="fas fa-motorcycle me-1"></i>Delivery</label>
+          {% endif %}
+        </div>
+        {% if delivery %}
+        <div id="addressBox" class="mb-2 d-none">
+          <label for="address" class="form-label small mb-1">Delivery address or landmark</label>
+          <textarea id="address" name="address" class="form-control" rows="2" maxlength="255"
+                    placeholder="Estate, street, house number or a landmark"></textarea>
+        </div>
+        {% endif %}
+        <div class="mb-3">
+          <label for="note" class="form-label small mb-1">Note for the shop (optional)</label>
+          <input id="note" name="note" class="form-control" maxlength="300">
+        </div>
+        <button id="payBtn" type="submit" class="btn btn-success btn-lg w-100 btn-pay mb-2">
+          <i class="fas fa-mobile-screen-button me-2"></i>Place order and pay with M-Pesa</button>
+        {% if whatsapp %}
+        <button id="waBtn" type="button" class="btn btn-lg w-100 btn-wa mb-2">
+          <i class="fab fa-whatsapp me-2"></i>Order on WhatsApp</button>
+        <p class="small text-muted mb-0">WhatsApp opens a chat with the shop with your order and its pay link.</p>
+        {% endif %}
+      </form>
+      <div id="msg" class="small mt-2" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="sizeModal" tabindex="-1" aria-labelledby="sizeTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h2 class="modal-title h6" id="sizeTitle">Choose a size</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+      <div class="modal-body"><div id="sizes" class="d-grid gap-2"></div></div>
+    </div>
+  </div>
+</div>
+
+<script id="catalogue" type="application/json">{{ catalogue|tojson }}</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  const SLUG = {{ slug|tojson }};
+  const KEY = 'shop-cart:' + SLUG, ME = 'shop-me', LAST = 'shop-last:' + SLUG;
+  const CATALOGUE = JSON.parse(document.getElementById('catalogue').textContent);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+  const money = n => 'KES ' + Number(n).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const store = {
+    get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+  };
+  const byId = {};
+  CATALOGUE.forEach(p => { byId[p.id] = p; });
+
+  // The cart: {"<item id>" or "<item id>:<size id>": quantity}. Prices are
+  // never kept here; they come from the catalogue and the server quote.
+  let cart = store.get(KEY, {});
+  function lineOf(key) {
+    const [id, sizeId] = String(key).split(':');
+    const p = byId[id];
+    if (!p) return null;
+    if (p.sizes) {
+      const s = p.sizes.find(x => String(x.id) === sizeId);
+      return s ? {key, product: p, size: s, name: p.name + ' (' + s.label + ')', price: s.price} : null;
+    }
+    return sizeId ? null : {key, product: p, size: null, name: p.name, price: p.price};
+  }
+  Object.keys(cart).forEach(k => { if (!lineOf(k) || !(cart[k] > 0)) delete cart[k]; });
+  const save = () => store.set(KEY, cart);
+  save();
+
+  let category = 'All', query = '';
+  const grid = document.getElementById('grid'), empty = document.getElementById('empty');
+  const chips = document.getElementById('chips');
+  const cats = ['All', ...new Set(CATALOGUE.map(p => p.category))];
+
+  function renderChips() {
+    chips.innerHTML = cats.map(c => `<button type="button" class="chip${c === category ? ' active' : ''}" data-cat="${esc(c)}"
+      role="tab" aria-selected="${c === category}">${esc(c)}</button>`).join('');
+  }
+  chips.addEventListener('click', e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    category = b.dataset.cat; renderChips(); renderGrid();
+  });
+  document.getElementById('q').addEventListener('input', e => { query = e.target.value.trim().toLowerCase(); renderGrid(); });
+
+  function qtyOf(id) { return Object.keys(cart).filter(k => k.split(':')[0] === String(id)).reduce((t, k) => t + cart[k], 0); }
+  function stepper(key, qty) {
+    return `<div class="stepper"><button type="button" data-step="-1" data-key="${esc(key)}" aria-label="One less">&minus;</button>
+      <span>${qty}</span><button type="button" data-step="1" data-key="${esc(key)}" aria-label="One more">+</button></div>`;
+  }
+  function renderGrid() {
+    const shown = CATALOGUE.filter(p => (category === 'All' || p.category === category)
+      && (!query || (p.name + ' ' + p.description + ' ' + p.category).toLowerCase().includes(query)));
+    grid.innerHTML = shown.map(p => {
+      let foot;
+      if (p.sizes) {
+        const n = qtyOf(p.id);
+        foot = `<button type="button" class="btn btn-primary btn-sm btn-add" data-sizes="${p.id}">
+          ${n ? 'In cart: ' + n + ' &middot; add size' : 'Choose size'}</button>`;
+      } else {
+        const n = cart[String(p.id)] || 0;
+        foot = n ? stepper(String(p.id), n)
+                 : `<button type="button" class="btn btn-primary btn-sm btn-add" data-add="${p.id}"><i class="fas fa-plus me-1"></i>Add</button>`;
+      }
+      return `<div class="card-p">
+        <div class="tile" aria-hidden="true"><i class="fas ${esc(p.icon)}"></i></div>
+        <div class="p-name">${esc(p.name)}</div>
+        <div class="p-unit">${p.unit ? 'per ' + esc(p.unit) : '&nbsp;'}</div>
+        <div class="p-price">${p.sizes && p.sizes.length > 1 ? 'from ' : ''}${money(p.price)}</div>
+        <div class="stock ${p.stock === 'few' ? 'few' : 'in'}">${p.stock === 'few' ? 'Few left' : 'In stock'}</div>
+        <div class="p-foot">${foot}</div></div>`;
+    }).join('');
+    empty.classList.toggle('d-none', shown.length > 0);
+    empty.textContent = CATALOGUE.length ? 'Nothing matches your search.' : 'Nothing is available online right now. Please check again later.';
+    renderBar();
+  }
+
+  function cartLines() { return Object.keys(cart).map(k => ({...lineOf(k), qty: cart[k]})).filter(l => l.product); }
+  function estimate() { return cartLines().reduce((t, l) => t + l.price * l.qty, 0); }
+  function renderBar() {
+    const n = Object.values(cart).reduce((t, q) => t + q, 0);
+    document.getElementById('cartBar').classList.toggle('d-none', n === 0);
+    document.getElementById('barCount').textContent = n + (n === 1 ? ' item' : ' items') + ' · View order';
+    document.getElementById('barTotal').textContent = money(estimate());
+  }
+  function change(key, delta) {
+    const q = (cart[key] || 0) + delta;
+    if (q <= 0) delete cart[key]; else cart[key] = Math.min(q, 999);
+    save(); renderGrid();
+    if (sheet && document.getElementById('cart').classList.contains('show')) renderLines();
+  }
+  grid.addEventListener('click', e => {
+    const add = e.target.closest('[data-add]'), step = e.target.closest('[data-step]'), sizes = e.target.closest('[data-sizes]');
+    if (add) change(String(add.dataset.add), 1);
+    else if (step) change(step.dataset.key, +step.dataset.step);
+    else if (sizes) openSizes(byId[sizes.dataset.sizes]);
+  });
+
+  // Sizes
+  const sizeModal = new bootstrap.Modal(document.getElementById('sizeModal'));
+  function openSizes(p) {
+    document.getElementById('sizeTitle').textContent = p.name + ': choose a size';
+    document.getElementById('sizes').innerHTML = p.sizes.map(s => `<button type="button" class="btn btn-outline-success size-btn"
+      data-key="${p.id}:${s.id}"><span>${esc(s.label)}${s.stock === 'few' ? ' <small class="text-warning-emphasis">few left</small>' : ''}</span>
+      <span class="amount">${money(s.price)}</span></button>`).join('');
+    sizeModal.show();
+  }
+  document.getElementById('sizes').addEventListener('click', e => {
+    const b = e.target.closest('[data-key]'); if (!b) return;
+    change(b.dataset.key, 1); sizeModal.hide();
+  });
+
+  // Cart sheet
+  const sheetEl = document.getElementById('cart');
+  const sheet = new bootstrap.Offcanvas(sheetEl);
+  const form = document.getElementById('checkout'), msg = document.getElementById('msg');
+  const quoteMsg = document.getElementById('quoteMsg');
+  document.getElementById('openCart').addEventListener('click', () => { renderLines(); sheet.show(); });
+  document.getElementById('lines').addEventListener('click', e => {
+    const step = e.target.closest('[data-step]');
+    if (step) change(step.dataset.key, +step.dataset.step);
+  });
+  const payload = () => Object.keys(cart).map(k => {
+    const [id, sizeId] = k.split(':');
+    return {id: +id, variant_id: sizeId ? +sizeId : null, quantity: cart[k]};
+  });
+  let quoteSeq = 0;
+  function renderLines() {
+    const lines = cartLines();
+    document.getElementById('lines').innerHTML = lines.length ? lines.map(l => `<div class="line">
+      <div class="line-name">${esc(l.name)}<div class="small text-muted amount">${money(l.price)} each</div></div>
+      ${stepper(l.key, l.qty)}
+      <div class="amount fw-semibold text-end" style="min-width: 5.2rem;">${money(l.price * l.qty)}</div></div>`).join('')
+      : '<p class="text-muted my-3">Your cart is empty.</p>';
+    document.getElementById('total').textContent = money(estimate());
+    if (!lines.length) { sheet.hide(); return; }
+    const seq = ++quoteSeq;
+    quoteMsg.textContent = '';
+    fetch(form.dataset.quoteUrl, {method: 'POST', headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                                  body: JSON.stringify({items: payload()})})
+      .then(r => r.json().then(b => ({ok: r.ok, status: r.status, body: b})))
+      .then(({ok, status, body}) => {
+        if (seq !== quoteSeq) return;
+        if (ok) document.getElementById('total').textContent = money(body.total);
+        else quoteMsg.textContent = status === 429 ? 'Slow down a little and try again.' : (body.error || '');
+      }).catch(() => {});
+  }
+
+  // Checkout
+  const me = store.get(ME, {});
+  if (me.name) form.name.value = me.name;
+  if (me.phone) form.phone.value = me.phone;
+  const addressBox = document.getElementById('addressBox');
+  form.addEventListener('change', () => {
+    if (addressBox) addressBox.classList.toggle('d-none', form.fulfilment.value !== 'delivery');
+  });
+  function say(text, ok) { msg.className = 'small mt-2 ' + (ok ? 'text-success' : 'text-danger'); msg.textContent = text; }
+  function place(channel) {
+    if (!Object.keys(cart).length) { say('Your cart is empty.'); return; }
+    const body = {items: payload(), name: form.name.value, phone: form.phone.value,
+                  fulfilment: form.fulfilment.value, address: form.address ? form.address.value : '',
+                  note: form.note.value, channel};
+    if (body.name.trim().length < 2) { say('Enter your name.'); form.name.focus(); return; }
+    if (!body.phone.trim()) { say('Enter your phone number.'); form.phone.focus(); return; }
+    if (body.fulfilment === 'delivery' && !body.address.trim()) { say('Enter where to deliver.'); form.address.focus(); return; }
+    const buttons = form.querySelectorAll('button');
+    buttons.forEach(b => { b.disabled = true; });
+    say('Placing your order...', true);
+    store.set(ME, {name: body.name.trim(), phone: body.phone.trim()});
+    fetch(form.dataset.orderUrl, {method: 'POST', headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                                  body: JSON.stringify(body)})
+      .then(r => r.json().then(b => ({status: r.status, body: b})))
+      .then(({status, body: res}) => {
+        if (status === 201) {
+          cart = {}; save();
+          store.set(LAST, {order: res.order, url: res.status_url});
+          say('Order ' + res.order + ' placed.', true);
+          window.location.href = channel === 'whatsapp' && res.whatsapp_url ? res.whatsapp_url : res.pay_url;
+          return;
+        }
+        buttons.forEach(b => { b.disabled = false; });
+        say(status === 429 ? 'Too many tries. Wait a minute and try again.' : (res.error || 'Something went wrong. Try again.'));
+      })
+      .catch(() => { buttons.forEach(b => { b.disabled = false; }); say('No connection. Check your internet and try again.'); });
+  }
+  form.addEventListener('submit', e => { e.preventDefault(); place('shop'); });
+  const wa = document.getElementById('waBtn');
+  if (wa) wa.addEventListener('click', () => place('whatsapp'));
+
+  const last = store.get(LAST, null);
+  if (last && last.url && /^\/o\/[^/]+\/shop\/order\/[A-Za-z0-9_-]+$/.test(last.url)) {
+    const box = document.getElementById('lastOrder');
+    box.innerHTML = `<i class="fas fa-receipt me-1"></i>Your last order ${esc(last.order)}: <a href="${esc(last.url)}">see its status</a>`;
+    box.classList.remove('d-none');
+  }
+
+  renderChips();
+  renderGrid();
+})();
+</script>
+</body>
+</html>

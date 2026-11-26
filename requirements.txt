@@ -38,6 +38,7 @@ redis==5.1.1
 reportlab==5.1.1
 requests==2.32.3
 schema==0.7.7
+segno==1.6.6
 SQLAlchemy==2.0.58
 typing_extensions==4.12.2
 tzdata==2026.6

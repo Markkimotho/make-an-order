@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  {% if not status.final %}<meta http-equiv="refresh" content="30">{% endif %}
+  <title>Order {{ order_number }} · {{ business }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <style>
+    html, body { overflow-x: hidden; }
+    body { background: #f4f6f8; }
+    .wrap { max-width: 30rem; margin: 0 auto; }
+    .amount { font-variant-numeric: tabular-nums; }
+    .state { border-radius: .8rem; padding: .9rem 1rem; font-weight: 600; }
+  </style>
+</head>
+<body>
+<main class="container py-4 px-3 wrap">
+  <p class="text-muted small mb-1">{{ business }}</p>
+  <h1 class="h5 mb-3">Order {{ order_number }}</h1>
+
+  {% set tone = {'pending': 'warning', 'paid_pending': 'info', 'ready': 'success', 'ready_delivery': 'success',
+                 'dispatched': 'primary', 'collected': 'success', 'delivered': 'success',
+                 'released': 'secondary', 'restock_needed': 'warning', 'cancelled': 'secondary'}.get(status.key, 'light') %}
+  <div class="state alert alert-{{ tone }} mb-3" role="status">
+    <i class="fas fa-circle-info me-1"></i>{{ status.text }}
+  </div>
+
+  <div class="card shadow-sm mb-3"><div class="card-body">
+    <table class="table table-sm mb-2">
+      <tbody>
+      {% for line in lines %}
+        <tr><td>{{ line.name }}{% if line.quantity != 1 %} <span class="text-muted">&times;{{ line.quantity }}</span>{% endif %}</td>
+            <td class="text-end amount">{{ '{:,.2f}'.format(line.amount) }}</td></tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr><th>Total (KES)</th><th class="text-end amount">{{ '{:,.2f}'.format(total) }}</th></tr></tfoot>
+    </table>
+    <div class="small"><strong>Payment:</strong> {% if paid %}<span class="text-success">Paid</span>{% else %}Not paid{% endif %}</div>
+    <div class="small"><strong>{% if delivery_address %}Delivery to:{% else %}Pickup at the shop{% endif %}</strong>
+      {% if delivery_address %}{{ delivery_address }}{% endif %}</div>
+  </div></div>
+
+  {% if can_pay %}
+  <a class="btn btn-success btn-lg w-100" href="{{ pay_url }}"><i class="fas fa-mobile-screen-button me-2"></i>Pay with M-Pesa</a>
+  {% endif %}
+  <a class="btn btn-link w-100 mt-2" href="{{ url_for('public.shop_page', slug=slug) }}">Back to the shop</a>
+</main>
+</body>
+</html>

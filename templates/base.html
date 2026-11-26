@@ -46,6 +46,7 @@
                    {% if request.endpoint == link.endpoint %}aria-current="page"{% endif %}>
                     <i class="fas {{ link.icon }}"></i><span>{{ link.label }}</span>
                     {% if link.endpoint == 'users_page' %}<span id="navPendingBadge" class="badge rounded-pill bg-danger ms-auto d-none"></span>{% endif %}
+                    {% if link.endpoint == 'orders_page' %}<span id="navOrdersBadge" class="badge rounded-pill bg-success ms-auto d-none" title="Paid orders waiting"></span>{% endif %}
                 </a>
                 {% endfor %}
             </div>
@@ -54,6 +55,7 @@
                {% if request.endpoint == entry.endpoint %}aria-current="page"{% endif %}>
                 <i class="fas {{ entry.icon }}"></i><span>{{ entry.label }}</span>
                 {% if entry.endpoint == 'users_page' %}<span id="navPendingBadge" class="badge rounded-pill bg-danger ms-auto d-none"></span>{% endif %}
+                    {% if entry.endpoint == 'orders_page' %}<span id="navOrdersBadge" class="badge rounded-pill bg-success ms-auto d-none" title="Paid orders waiting"></span>{% endif %}
             </a>
             {% endif %}
             {% endfor %}
@@ -101,6 +103,20 @@
                 const el = document.getElementById('navPendingBadge');
                 if (el) { el.textContent = count; el.classList.remove('d-none'); }
             }
+        } catch (e) {}
+    })();
+    </script>
+    {% endif %}
+    {% if user_role in ('cashier', 'pharmacist', 'admin', 'superuser') and 'orders' in features %}
+    <script>
+    (async function () {
+        const el = document.getElementById('navOrdersBadge');
+        if (!el || window.ONLINE_ORDERS_PAGE) return;   // the orders page keeps it fresh itself
+        try {
+            const r = await fetch('/orders/online/waiting', {headers: {'Accept': 'application/json'}});
+            if (!r.ok) return;
+            const { count } = await r.json();
+            if (count > 0) { el.textContent = count; el.classList.remove('d-none'); }
         } catch (e) {}
     })();
     </script>

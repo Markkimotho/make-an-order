@@ -323,7 +323,7 @@ class RedactCallbackTokens(logging.Filter):
     invoice's pay token; keep both out of request logs (werkzeug, gunicorn
     access log, app logs)."""
 
-    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/|/o/[^/\s]+/(?:pay|r|d)/)"
+    _pattern = re.compile(r"(/api/payments/daraja/(?:stk|c2b)/[^/\s]+/|/o/[^/\s]+/(?:pay|r|d|shop/order)/)"
                           r"[^/\s?\"]+")
 
     def filter(self, record):
@@ -653,11 +653,7 @@ def _register_core_routes(app):
     def customers_page():
         return render_template('customers.html', **get_user_context())
 
-    @app.route('/orders-ui')
-    @admin_required
-    @feature_required('orders')
-    def orders_page():
-        return render_template('orders.html', **get_user_context())
+    __import__('pages.online_orders', fromlist=['register']).register(app)  # orders_page
 
     @app.route('/inventory-ui')
     @login_required
