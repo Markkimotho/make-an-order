@@ -129,3 +129,19 @@ def test_signup_and_landing_show_what_each_vertical_includes(client):
 def test_staff_stock_lookup_has_no_order_cart(app, login_as):
     html = login_as("cashier").get("/inventory-ui").get_data(as_text=True)
     assert "Stock lookup" in html and 'id="placeOrderBtn"' not in html
+
+
+def test_app_shell_is_a_sidebar_that_becomes_a_drawer(app, login_as):
+    """One menu: a fixed sidebar on wide screens, an offcanvas drawer opened
+    from a slim top bar on narrow ones. Labels never wrap (CSS nowrap)."""
+    html = login_as("superuser").get("/dashboard").get_data(as_text=True)
+    assert 'class="app-sidebar offcanvas-lg offcanvas-start"' in html
+    assert 'data-bs-target="#appSidebar"' in html            # the menu button
+    assert "navbar-expand" not in html                        # the old top bar is gone
+    assert 'aria-current="page"' in html and "Sign out" in html
+    assert "Acme Pharmacy" in html and "Owner" in html        # business and role shown
+
+
+def test_pages_without_a_business_get_the_plain_top_bar(client):
+    html = client.get("/does-not-exist").get_data(as_text=True)
+    assert "app-sidebar" not in html

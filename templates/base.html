@@ -8,97 +8,85 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <nav class="navbar navbar-expand-lg">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="{% if user_role == 'guest' %}{{ url_for('index') }}{% else %}{{ url_for('dashboard') }}{% endif %}">
-                <i class="fas fa-cube"></i>Make-An-Order
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
-                    aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-                    {% for entry in nav or [] %}
-                    {% if entry.links %}
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle {% if request.endpoint in entry.endpoints %}active{% endif %}"
-                           href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                            <i class="fas {{ entry.icon }} me-1"></i> {{ entry.label }}
-                        </a>
-                        <ul class="dropdown-menu">
-                            {% for link in entry.links %}
-                            <li><a class="dropdown-item {% if request.endpoint == link.endpoint %}active{% endif %}"
-                                   href="{{ link.url }}"><i class="fas {{ link.icon }} me-2"></i>{{ link.label }}{% if link.endpoint == 'users_page' %} <span id="navPendingBadge" class="badge bg-danger d-none"></span>{% endif %}</a></li>
-                            {% endfor %}
-                        </ul>
-                    </li>
-                    {% else %}
-                    <li class="nav-item">
-                        <a class="nav-link {% if request.endpoint == entry.endpoint %}active{% endif %}"
-                           href="{{ entry.url }}">
-                            <i class="fas {{ entry.icon }} me-1"></i> {{ entry.label }}
-                            {% if entry.endpoint == 'users_page' %}<span id="navPendingBadge" class="badge bg-danger d-none" style="font-size:9px;vertical-align:middle;"></span>{% endif %}
-                        </a>
-                    </li>
-                    {% endif %}
-                    {% endfor %}
-                </ul>
-                <ul class="navbar-nav align-items-center">
-                    {% if user_role == 'superuser' %}
-                    <li class="nav-item">
-                        <span class="role-badge role-super me-1"><i class="fas fa-crown me-1"></i>Super</span>
-                    </li>
-                    {% elif user_role == 'admin' %}
-                    <li class="nav-item">
-                        <span class="role-badge role-admin me-1"><i class="fas fa-shield me-1"></i>Admin</span>
-                    </li>
-                    {% elif user_role == 'cashier' %}
-                    <li class="nav-item">
-                        <span class="badge bg-info me-1"><i class="fas fa-cash-register me-1"></i>Cashier</span>
-                    </li>
-                    {% elif user_role == 'pharmacist' %}
-                    <li class="nav-item">
-                        <span class="badge bg-success me-1"><i class="fas fa-prescription-bottle-medical me-1"></i>Pharmacist</span>
-                    </li>
-                    {% elif user_role == 'accountant' %}
-                    <li class="nav-item">
-                        <span class="badge bg-secondary me-1"><i class="fas fa-calculator me-1"></i>Accountant</span>
-                    </li>
-                    {% elif user_role == 'stock_clerk' %}
-                    <li class="nav-item">
-                        <span class="badge bg-warning text-dark me-1"><i class="fas fa-boxes-stacked me-1"></i>Stock</span>
-                    </li>
-                    {% endif %}
-                    {% if user_email and user_role != 'guest' %}
-                    <li class="nav-item">
-                        <span class="nav-link nav-user-email">
-                            <i class="fas fa-circle-user me-1"></i>{{ user_email }}
-                        </span>
-                    </li>
-                    {% endif %}
-                    {% if user_role and user_role != 'guest' %}
-                    <li class="nav-item">
-                        <a class="btn-mac-logout" href="{{ url_for('logout') }}">
-                            <i class="fas fa-arrow-right-from-bracket me-1"></i>Sign Out
-                        </a>
-                    </li>
-                    {% else %}
-                    <li class="nav-item">
-                        <a class="btn-mac-logout" href="{{ url_for('login_page') }}">
-                            <i class="fas fa-arrow-right-to-bracket me-1"></i>Sign In
-                        </a>
-                    </li>
-                    {% endif %}
-                </ul>
-            </div>
-        </div>
-    </nav>
+<body class="{{ 'has-sidebar' if nav else 'no-sidebar' }}">
+{% set role_labels = {'superuser': ('Owner', 'fa-crown'), 'admin': ('Admin', 'fa-shield'),
+                      'pharmacist': ('Pharmacist', 'fa-prescription-bottle-medical'),
+                      'cashier': ('Cashier', 'fa-cash-register'),
+                      'stock_clerk': ('Stock clerk', 'fa-boxes-stacked'),
+                      'accountant': ('Accountant', 'fa-calculator')} %}
+{% if nav %}
+    {# Narrow screens: a slim bar with the menu button; the sidebar slides in. #}
+    <header class="app-topbar d-lg-none">
+        <button class="app-menu-btn" type="button" data-bs-toggle="offcanvas" data-bs-target="#appSidebar"
+                aria-controls="appSidebar" aria-label="Open menu">
+            <i class="fas fa-bars"></i>
+        </button>
+        <a class="app-brand" href="{{ url_for('dashboard') }}"><i class="fas fa-cube"></i><span>{{ biz_name or 'Make-An-Order' }}</span></a>
+    </header>
 
-    <div class="container content-wrapper">
-        {% block content %}{% endblock %}
-    </div>
+    {# Wide screens: a fixed sidebar. Below lg it is an offcanvas drawer. #}
+    <aside class="app-sidebar offcanvas-lg offcanvas-start" tabindex="-1" id="appSidebar" aria-label="Main menu">
+        <div class="app-sidebar-head">
+            <a class="app-brand" href="{{ url_for('dashboard') }}">
+                <i class="fas fa-cube"></i>
+                <span class="app-brand-text">
+                    <span class="app-brand-name">{{ biz_name or 'Make-An-Order' }}</span>
+                    {% if business_type in BUSINESS_CONFIGS %}<span class="app-brand-sub">{{ BUSINESS_CONFIGS[business_type].label }}</span>{% endif %}
+                </span>
+            </a>
+            <button type="button" class="btn-close d-lg-none" data-bs-dismiss="offcanvas" data-bs-target="#appSidebar" aria-label="Close menu"></button>
+        </div>
+        <nav class="app-nav">
+            {% for entry in nav %}
+            {% if entry.links %}
+            <div class="app-nav-section">
+                <div class="app-nav-heading"><i class="fas {{ entry.icon }}"></i>{{ entry.label }}</div>
+                {% for link in entry.links %}
+                <a class="app-nav-link {% if request.endpoint == link.endpoint %}active{% endif %}" href="{{ link.url }}"
+                   {% if request.endpoint == link.endpoint %}aria-current="page"{% endif %}>
+                    <i class="fas {{ link.icon }}"></i><span>{{ link.label }}</span>
+                    {% if link.endpoint == 'users_page' %}<span id="navPendingBadge" class="badge rounded-pill bg-danger ms-auto d-none"></span>{% endif %}
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <a class="app-nav-link app-nav-top {% if request.endpoint == entry.endpoint %}active{% endif %}" href="{{ entry.url }}"
+               {% if request.endpoint == entry.endpoint %}aria-current="page"{% endif %}>
+                <i class="fas {{ entry.icon }}"></i><span>{{ entry.label }}</span>
+                {% if entry.endpoint == 'users_page' %}<span id="navPendingBadge" class="badge rounded-pill bg-danger ms-auto d-none"></span>{% endif %}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </nav>
+        <div class="app-user">
+            <div class="app-user-avatar">{{ (user_name or user_email or '?')[:1]|upper }}</div>
+            <div class="app-user-text">
+                <div class="app-user-name" title="{{ user_email }}">{{ user_name or user_email }}</div>
+                {% set rl = role_labels.get(user_role) %}
+                {% if rl %}<div class="app-user-role"><i class="fas {{ rl[1] }}"></i>{{ rl[0] }}</div>{% endif %}
+            </div>
+            <a class="app-signout" href="{{ url_for('logout') }}" title="Sign out" aria-label="Sign out">
+                <i class="fas fa-arrow-right-from-bracket"></i>
+            </a>
+        </div>
+    </aside>
+{% else %}
+    <header class="app-topbar">
+        <a class="app-brand" href="{{ url_for('index') }}"><i class="fas fa-cube"></i><span>Make-An-Order</span></a>
+        <span class="ms-auto"></span>
+        {% if user_role and user_role != 'guest' %}
+        <a class="app-topbar-link" href="{{ url_for('logout') }}"><i class="fas fa-arrow-right-from-bracket me-1"></i>Sign out</a>
+        {% else %}
+        <a class="app-topbar-link" href="{{ url_for('login_page') }}"><i class="fas fa-arrow-right-to-bracket me-1"></i>Sign in</a>
+        {% endif %}
+    </header>
+{% endif %}
+
+    <main class="app-main">
+        <div class="container content-wrapper">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     {% block scripts %}{% endblock %}
