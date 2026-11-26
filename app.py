@@ -37,6 +37,7 @@ from api.settings import settings_bp
 from api.staff import staff_bp
 from api.users import users_bp
 from auth.auth_middleware import (admin_required, cashier_required, finance_required,
+                                  tenant_api_required,
                                   login_required, pharmacist_required,
                                   stock_clerk_required, superuser_required)
 from auth.auth_routes import create_auth_blueprint, record_logout
@@ -628,6 +629,17 @@ def _register_core_routes(app):
     @login_required
     def dashboard():
         return render_template('dashboard.html', **get_user_context())
+
+    @app.route('/dashboard/summary')
+    @tenant_api_required
+    def dashboard_summary():
+        """Today's money and what needs attention, for this role and vertical."""
+        from services.owner_dashboard import summary
+        data = summary(g.current_tenant.vertical, session.get('role'))
+        for item in data['attention']:
+            endpoint = item.pop('endpoint')
+            item['url'] = url_for(endpoint) if endpoint in app.view_functions else None
+        return jsonify(data)
 
     @app.route('/customers-ui')
     @admin_required

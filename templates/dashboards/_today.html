@@ -1,0 +1,68 @@
+{# Today at a glance: money tiles, stock tiles and a "needs attention" list,
+   from GET /dashboard/summary (shaped by role and vertical on the server). #}
+<div id="todayPanel" class="mb-4">
+  <div class="d-flex align-items-baseline justify-content-between mb-2">
+    <h4 class="mb-0">Today</h4><span class="small text-muted" id="todayDate"></span>
+  </div>
+  <div class="row g-2" id="todayTiles"></div>
+  <div id="todayAttention" class="mt-3"></div>
+  <div class="card mt-3 d-none" id="todayChartCard"><div class="card-body">
+    <div class="small text-muted mb-1">Last 7 days: revenue and gross profit</div>
+    <canvas id="todayChart" height="70"></canvas>
+  </div></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+(function () {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const kes = n => 'KES ' + Number(n || 0).toLocaleString('en-KE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function tile(label, value, sub, cls, url) {
+    const inner = `<div class="card h-100 ${cls || ''}"><div class="card-body py-2">
+      <div class="small text-muted">${esc(label)}</div>
+      <div class="fs-5 fw-bold">${esc(value)}</div>
+      ${sub ? `<div class="small text-muted">${esc(sub)}</div>` : ''}</div></div>`;
+    return `<div class="col-6 col-md-3">${url ? `<a class="text-decoration-none text-reset" href="${esc(url)}">${inner}</a>` : inner}</div>`;
+  }
+  fetch('/dashboard/summary').then(r => r.ok ? r.json() : null).then(s => {
+    if (!s) return;
+    document.getElementById('todayDate').textContent = s.date;
+    const t = [];
+    if (s.money) {
+      const m = s.money;
+      t.push(tile('Sales today', kes(m.revenue), `${m.sales_count} sale(s), net of VAT`, '', '{{ url_for("reports_dashboard_page") }}'));
+      t.push(tile('Gross profit', kes(m.gross_profit), m.gross_margin_pct != null ? `${m.gross_margin_pct}% margin` : '', '', '{{ url_for("reports_dashboard_page") }}'));
+      t.push(tile('Net profit', kes(m.net_profit), `after ${kes(m.expenses)} expenses`, m.net_profit < 0 ? 'border-danger' : ''));
+      t.push(tile('Cash variance', m.cash_variance == null ? 'Not counted' : kes(m.cash_variance),
+                  m.open_shifts ? `${m.open_shifts} shift(s) still open` : 'All shifts closed',
+                  m.variance_over_threshold ? 'border-danger' : '', '{{ url_for("reconciliation_page") }}'));
+    }
+    if (s.stock) {
+      const k = s.stock;
+      t.push(tile('Low stock', k.low_stock, 'at or below reorder level', k.low_stock ? 'border-warning' : ''));
+      if ('expiring_30' in k) t.push(tile('Expiring in 30 days', k.expiring_30, `${k.expired} already expired`, k.expired ? 'border-danger' : ''));
+      if ('recalled_on_hand' in k) t.push(tile('Recalled on shelf', k.recalled_on_hand, 'batches to remove', k.recalled_on_hand ? 'border-danger' : ''));
+    }
+    if (s.unverified_payments) {
+      const u = s.unverified_payments;
+      t.push(tile('Payments to verify', u.count, kes(u.total), u.count ? 'border-warning' : ''));
+    }
+    if (s.backup) {
+      t.push(tile('Last backup', s.backup.has_backup ? `${s.backup.age_hours} h ago` : 'Never', s.backup.message, s.backup.stale ? 'border-danger' : ''));
+    }
+    document.getElementById('todayTiles').innerHTML = t.join('');
+    document.getElementById('todayAttention').innerHTML = (s.attention || []).map(a =>
+      `<div class="alert alert-${esc(a.level)} py-2 mb-2 d-flex justify-content-between align-items-center">
+         <span>${esc(a.text)}</span>${a.url ? `<a class="btn btn-sm btn-outline-dark" href="${esc(a.url)}">Open</a>` : ''}</div>`).join('');
+    if (s.money && window.Chart) {
+      document.getElementById('todayChartCard').classList.remove('d-none');
+      const days = s.money.last_7_days;
+      new Chart(document.getElementById('todayChart'), {type: 'bar', data: {
+        labels: days.map(d => d.date.slice(5)),
+        datasets: [{label: 'Revenue', data: days.map(d => d.revenue)},
+                   {label: 'Gross profit', data: days.map(d => d.gross_profit)}]},
+        options: {plugins: {legend: {position: 'bottom'}}, scales: {y: {beginAtZero: true}}}});
+    }
+  });
+})();
+</script>
