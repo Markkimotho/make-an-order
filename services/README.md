@@ -28,6 +28,7 @@ call into `services/*` and translate domain errors to HTTP responses.
 | [`otp_service`](otp_service.py)               | Redis (with in-memory fallback) | `ValueError`        | Yes |
 | [`database_service`](database_service.py)     | MySQL admin                     | logs                | Yes (existing) |
 | [`seed_service`](seed_service.py)             | DB                              | logs                | Yes (existing) |
+| [`backup`](backup.py)                         | mysqldump/mysql, sqlite3, rclone, files in `BACKUP_DIR` | `BackupError`, `BackupBusy` | Yes for SQLite; MySQL needs the client tools |
 
 ---
 

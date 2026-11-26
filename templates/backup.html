@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Backup{% endblock %}
+{% block content %}
+<div class="container py-4" style="max-width: 760px;">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h4 mb-0"><i class="fas fa-database me-2"></i>Backup</h1>
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('settings.page') }}">Back to settings</a>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="alert alert-{{ category }} py-2 small">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  {% if status.stale %}
+  <div class="alert alert-warning py-2 small" id="backupStale">
+    <strong>Back up now.</strong> {{ status.message }}
+    Backups should run every night; check that the server's backup job is running.
+  </div>
+  {% endif %}
+
+  <div class="card mb-3">
+    <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <div class="small text-muted">Last backup</div>
+        {% if status.has_backup %}
+        <div class="fw-semibold">{{ backups[0].created_at.strftime('%Y-%m-%d %H:%M') }} UTC
+          ({{ age_text(backups[0].created_at) }}), {{ human_size(status.size) }}</div>
+        {% else %}
+        <div class="fw-semibold">None yet</div>
+        {% endif %}
+        <div class="small text-muted">Offsite copy: {{ 'on' if offsite else 'off (set BACKUP_RCLONE_REMOTE on the server)' }}</div>
+      </div>
+      <form method="POST" action="{{ url_for('backup_run') }}">
+        <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-download me-1"></i>Back up now</button>
+      </form>
+    </div>
+  </div>
+
+  <h2 class="h6">Recent backups</h2>
+  {% if backups %}
+  <div class="table-responsive">
+    <table class="table table-sm small align-middle">
+      <thead><tr><th>File</th><th>Made</th><th class="text-end">Size</th><th class="text-end">Rows</th><th></th></tr></thead>
+      <tbody>
+      {% for b in backups %}
+        <tr>
+          <td><code>{{ b.name }}</code>{% if b.label %} <span class="badge bg-secondary">{{ b.label }}</span>{% endif %}</td>
+          <td>{{ age_text(b.created_at) }}</td>
+          <td class="text-end">{{ human_size(b.size) }}</td>
+          <td class="text-end">{{ b.manifest.total_rows if b.manifest else '?' }}</td>
+          <td class="text-end">
+            {% if can_download %}<a href="{{ url_for('backup_download', name=b.name) }}">Download</a>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="small text-muted">No backups yet.</p>
+  {% endif %}
+
+  <div class="small text-muted mt-3">
+    <p class="mb-1">The server keeps the newest backup of each of the last 14 days and of each of
+      the last 8 weeks. Copy backups off the server too (a USB disk or an rclone remote): a
+      backup on the same disk does not survive the disk dying.</p>
+    {% if not can_download %}
+    <p class="mb-1">Downloads are off here. On a shared server one backup holds every business
+      in the database, so only a platform admin may download it. A one-shop install sets
+      <code>SINGLE_BUSINESS_INSTALL=true</code> so the owner can.</p>
+    {% endif %}
+    <p class="mb-0">Restoring replaces all data and needs the app stopped, so it is done on the
+      server: <code>deploy/scripts/restore.sh &lt;file&gt;</code> (see the install guide).</p>
+  </div>
+</div>
+{% endblock %}

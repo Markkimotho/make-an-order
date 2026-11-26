@@ -53,3 +53,7 @@ _site/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+# Database backups (BACKUP_DIR default)
+backups/
+# rclone.conf holds offsite storage credentials
+deploy/rclone/

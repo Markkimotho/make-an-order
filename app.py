@@ -462,6 +462,9 @@ def _register_cli(app):
 
     app.cli.add_command(tenants_cli)
 
+    from services.backup_cli import backup_cli   # flask backup create|list|verify|restore|rotate
+    app.cli.add_command(backup_cli)
+
     @app.cli.command('run-daily-triggers')
     @click.option('--date', 'day', default=None, help='Run as if today were YYYY-MM-DD (Nairobi).')
     def run_daily_triggers_command(day):
@@ -555,6 +558,7 @@ def _register_core_routes(app):
     Endpoint names are the function names, unchanged from the pre-factory
     module, because templates resolve them with ``url_for``.
     """
+    from pages import backup as backup_pages; backup_pages.register(app)  # noqa: E702
 
     @app.route('/onboarding', methods=['GET', 'POST'])
     @superuser_required
